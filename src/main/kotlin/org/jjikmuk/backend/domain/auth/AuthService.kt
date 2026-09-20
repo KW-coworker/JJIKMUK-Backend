@@ -1,5 +1,6 @@
 package org.jjikmuk.backend.domain.auth
 
+import org.jjikmuk.backend.domain.allergy.AllergyCatalog
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
 import org.jjikmuk.backend.global.config.JwtProvider
@@ -31,7 +32,7 @@ class AuthService(
             email = request.email,
             password = encodedPassword!!,
             nickname = request.nickname,
-            allergies = request.allergies,
+            allergies = normalizeAllergies(request.allergies),
             diseases = request.diseases
         )
         return userRepository.save(user)
@@ -125,5 +126,11 @@ class AuthService(
             throw CustomException(HttpStatus.BAD_REQUEST, "인증번호가 일치하지 않습니다.")
         }
         emailVerificationRepository.delete(verification)
+    }
+
+    private fun normalizeAllergies(value: String?): String? = try {
+        AllergyCatalog.normalizeForStorage(value)
+    } catch (error: IllegalArgumentException) {
+        throw CustomException(HttpStatus.BAD_REQUEST, error.message ?: "알레르기 ID가 올바르지 않습니다.")
     }
 }

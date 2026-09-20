@@ -54,6 +54,8 @@ class ProductCsvReaderTest {
             this[ProductCsvColumn.NUTRITION_MATCH_METHOD] = "report_exact"
             this[ProductCsvColumn.NUTRITION_MATCH_SCORE] = "100"
             this[ProductCsvColumn.RAW_MATERIAL_MATCH_SCORE] = "95"
+            this[ProductCsvColumn.FOOD_CATEGORIES] = "과자·스낵|디저트·빙과"
+            this[ProductCsvColumn.ALLERGY_CLASSIFICATION] = "우유|밀"
         }
         val csv = buildString {
             append('\uFEFF')
@@ -78,12 +80,26 @@ class ProductCsvReaderTest {
             assertEquals(64, product.productGroupKey?.length)
             assertEquals(AllergyEvidenceLevel.INGREDIENT_DERIVED, product.allergyEvidenceLevel)
             assertEquals("스낵과자", product.foodType)
+            assertEquals("과자·스낵|디저트·빙과", product.foodCategories)
+            assertEquals(listOf("snack", "dessert"), product.foodCategoryIds)
+            assertEquals("우유|밀", product.allergyClassification)
+            assertEquals(listOf("milk", "wheat"), product.allergyClassificationIds)
+            assertEquals("detected", product.allergyClassificationState)
             assertEquals(0.9, product.allergyDataConfidence)
             assertEquals(ProductDataOrigin.SOURCE, product.nutritionDataOrigin)
             assertEquals(1.0, product.nutritionDataConfidence)
             assertEquals(0.7, product.dietaryDataConfidence)
             assertNull(reader.readRecord())
         }
+    }
+
+    @Test
+    fun `generated classification sentinels do not make an otherwise empty row non-empty`() {
+        val values = arrayOfNulls<String>(ProductCsvColumn.entries.size)
+        values[ProductCsvColumn.FOOD_CATEGORIES.ordinal] = "미분류"
+        values[ProductCsvColumn.ALLERGY_CLASSIFICATION.ordinal] = "정보없음"
+
+        assertTrue(ProductCsvRecord(values, ProductCsvColumn.entries.size).isEmpty())
     }
 
     @Test

@@ -1,5 +1,6 @@
 package org.jjikmuk.backend.domain.user
 
+import org.jjikmuk.backend.domain.allergy.AllergyCatalog
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.http.HttpStatus
@@ -45,7 +46,7 @@ class UserService(
         val user = userRepository.findById(id).orElse(null) ?: return null
         user.updateProfile(
             nickname = request.nickname,
-            allergies = request.allergies,
+            allergies = normalizeAllergies(request.allergies),
             diseases = request.diseases,
             specialDiet = request.specialDiet,
             dislikedIngredients = request.dislikedIngredients
@@ -61,5 +62,11 @@ class UserService(
         historyRepository.deleteByUserId(id)
         recommendationFeedbackService.deleteByUserId(id)
         userRepository.delete(user)
+    }
+
+    private fun normalizeAllergies(value: String?): String? = try {
+        AllergyCatalog.normalizeForStorage(value)
+    } catch (error: IllegalArgumentException) {
+        throw CustomException(HttpStatus.BAD_REQUEST, error.message ?: "알레르기 ID가 올바르지 않습니다.")
     }
 }

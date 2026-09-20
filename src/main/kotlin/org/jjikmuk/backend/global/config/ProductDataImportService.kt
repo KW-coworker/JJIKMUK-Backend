@@ -3,6 +3,7 @@ package org.jjikmuk.backend.global.config
 import org.jjikmuk.backend.domain.config.SystemConfig
 import org.jjikmuk.backend.domain.config.SystemConfigRepository
 import org.jjikmuk.backend.domain.product.Product
+import org.jjikmuk.backend.domain.product.ProductClassificationCatalog
 import org.jjikmuk.backend.domain.product.search.ProductSearchKeywordBuilder
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -35,7 +36,7 @@ class ProductDataImportService(
     private val rollbackEnabled: Boolean,
     @Value("\${product.import.resource:file:src/main/resources/data/Product.csv}")
     private val resourceLocation: String,
-    @Value("\${product.import.version:V4.0-PRODUCTCSV-RECOMMENDATION-METADATA}")
+    @Value("\${product.import.version:V5.1-PRODUCTCSV-CLASSIFICATION-INDEX}")
     private val dataVersion: String,
     @Value("\${product.import.batch-size:500}")
     private val batchSize: Int,
@@ -112,11 +113,8 @@ class ProductDataImportService(
                 )
 
                 updateRunStatus(runId, "SWAPPING")
-                dropTableIfExists(ROLLBACK_TABLE)
-                jdbcTemplate.execute(
-                    "RENAME TABLE `$MAIN_TABLE` TO `$ROLLBACK_TABLE`, " +
-                        "`$STAGING_TABLE` TO `$MAIN_TABLE`"
-                )
+                dropRollbackTables()
+                activateStagingTables()
                 swapped = true
 
                 val rollbackMarker = readTableMarker(ROLLBACK_TABLE)
@@ -134,7 +132,7 @@ class ProductDataImportService(
                 val tableRestored = if (swapped) {
                     restoreLiveTableAfterFailedActivation(exception)
                 } else {
-                    dropTableIfExists(STAGING_TABLE)
+                    dropStagingTables()
                     true
                 }
                 if (tableRestored) {
@@ -161,6 +159,9 @@ class ProductDataImportService(
             require(tableExists(ROLLBACK_TABLE)) {
                 "Rollback table '$ROLLBACK_TABLE' does not exist"
             }
+            require(tableExists(FOOD_CATEGORY_ROLLBACK_TABLE) && tableExists(ALLERGY_CLASSIFICATION_ROLLBACK_TABLE)) {
+                "Classification rollback tables do not exist"
+            }
             assertSwapCompatibleSchema()
 
             val currentVersion = readTableMarker(MAIN_TABLE)?.version ?: configValue(VERSION_KEY)
@@ -172,7 +173,7 @@ class ProductDataImportService(
             var swapped = false
 
             try {
-                dropTableIfExists(SWAP_TABLE)
+                dropSwapTables()
                 updateRunStatus(runId, "SWAPPING")
                 swapMainAndRollbackTables()
                 swapped = true
@@ -252,8 +253,14 @@ class ProductDataImportService(
     }
 
     private fun prepareStagingTable() {
-        dropTableIfExists(STAGING_TABLE)
+        dropStagingTables()
         jdbcTemplate.execute("CREATE TABLE `$STAGING_TABLE` LIKE `$MAIN_TABLE`")
+        jdbcTemplate.execute(
+            "CREATE TABLE `$FOOD_CATEGORY_STAGING_TABLE` LIKE `$FOOD_CATEGORY_TABLE`"
+        )
+        jdbcTemplate.execute(
+            "CREATE TABLE `$ALLERGY_CLASSIFICATION_STAGING_TABLE` LIKE `$ALLERGY_CLASSIFICATION_TABLE`"
+        )
         if (columnExists(MAIN_TABLE, PRODUCT_ID_COLUMN)) {
             val currentMaxId = jdbcTemplate.queryForObject(
                 "SELECT COALESCE(MAX(`$PRODUCT_ID_COLUMN`), 0) FROM `$MAIN_TABLE`",
@@ -270,6 +277,7 @@ class ProductDataImportService(
         val digest = MessageDigest.getInstance("SHA-256")
         var recordCount = 0L
         var attemptedCount = 0L
+        val seenSourceBarcodes = HashSet<String>(300_000)
         resource.inputStream.use { rawInput ->
             DigestInputStream(rawInput, digest).use { digestInput ->
                 ProductCsvReader(digestInput).use { reader ->
@@ -281,26 +289,26 @@ class ProductDataImportService(
                             "CSV column count changed during staging at record $recordCount"
                         }
                         if (record.isEmpty()) continue
+                        attemptedCount++
 
                         val sourceBarcode = record.text(ProductCsvColumn.BARCODE)
                         require(sourceBarcode?.startsWith(SYNTHETIC_BARCODE_PREFIX) != true) {
                             "Source barcode uses reserved prefix at record $recordCount: $sourceBarcode"
                         }
                         val barcode = sourceBarcode ?: "$SYNTHETIC_BARCODE_PREFIX$recordCount"
+                        if (attemptedCount % PROGRESS_INTERVAL == 0L) {
+                            logger.info("제품 스테이징 적재 중: records={}", attemptedCount)
+                        }
+                        if (sourceBarcode != null && !seenSourceBarcodes.add(sourceBarcode)) continue
                         batch.add(record.toProduct(barcode))
 
                         if (batch.size >= batchSize) {
                             insertBatch(batch)
-                            attemptedCount += batch.size
                             batch.clear()
-                        }
-                        if ((attemptedCount + batch.size) % PROGRESS_INTERVAL == 0L) {
-                            logger.info("제품 스테이징 적재 중: records={}", attemptedCount + batch.size)
                         }
                     }
                     if (batch.isNotEmpty()) {
                         insertBatch(batch)
-                        attemptedCount += batch.size
                     }
                 }
             }
@@ -323,7 +331,36 @@ class ProductDataImportService(
                     override fun getBatchSize(): Int = products.size
                 }
             )
+            val categoryMemberships = products.flatMap { product ->
+                ProductClassificationCatalog.parseFoodCategories(product.foodCategories).map { category ->
+                    ClassificationMembership(product.barcode, category.id)
+                }
+            }
+            insertMembershipBatch(INSERT_FOOD_CATEGORY_MEMBERSHIP_SQL, categoryMemberships)
+
+            val allergyMemberships = products.flatMap { product ->
+                ProductClassificationCatalog.parseAllergyClassification(product.allergyClassification)
+                    .allergens
+                    .map { allergy -> ClassificationMembership(product.barcode, allergy.id) }
+            }
+            insertMembershipBatch(INSERT_ALLERGY_CLASSIFICATION_MEMBERSHIP_SQL, allergyMemberships)
         }
+    }
+
+    private fun insertMembershipBatch(sql: String, memberships: List<ClassificationMembership>) {
+        if (memberships.isEmpty()) return
+        jdbcTemplate.batchUpdate(
+            sql,
+            object : BatchPreparedStatementSetter {
+                override fun setValues(statement: PreparedStatement, index: Int) {
+                    val membership = memberships[index]
+                    statement.setString(1, membership.barcode)
+                    statement.setString(2, membership.classificationId)
+                }
+
+                override fun getBatchSize(): Int = memberships.size
+            }
+        )
     }
 
     private fun preserveExistingProductIdsIfPresent() {
@@ -420,6 +457,42 @@ class ProductDataImportService(
         require(missingNameCount <= report.missingProductNameCount) {
             "Staging lost product names: sourceMissing=${report.missingProductNameCount}, stagedMissing=$missingNameCount"
         }
+        val missingClassificationCount = jdbcTemplate.queryForObject(
+            """
+            SELECT COUNT(*) FROM `$STAGING_TABLE`
+            WHERE NULLIF(TRIM(food_categories), '') IS NULL
+               OR NULLIF(TRIM(allergy_classification), '') IS NULL
+            """.trimIndent(),
+            Long::class.java
+        ) ?: 0L
+        require(missingClassificationCount == 0L) {
+            "Staging contains $missingClassificationCount rows without category/allergy classification"
+        }
+        val categoryMembershipCount = tableRowCount(FOOD_CATEGORY_STAGING_TABLE)
+        require(categoryMembershipCount >= stagedCount) {
+            "Food-category membership coverage is incomplete: products=$stagedCount, memberships=$categoryMembershipCount"
+        }
+        val allergyMembershipCount = tableRowCount(ALLERGY_CLASSIFICATION_STAGING_TABLE)
+        require(allergyMembershipCount > 0L) {
+            "Allergy-classification membership table is empty"
+        }
+        val orphanMembershipCount = jdbcTemplate.queryForObject(
+            """
+            SELECT
+                (SELECT COUNT(*)
+                   FROM `$FOOD_CATEGORY_STAGING_TABLE` membership
+                   LEFT JOIN `$STAGING_TABLE` product ON product.barcode = membership.barcode
+                  WHERE product.barcode IS NULL)
+              + (SELECT COUNT(*)
+                   FROM `$ALLERGY_CLASSIFICATION_STAGING_TABLE` membership
+                   LEFT JOIN `$STAGING_TABLE` product ON product.barcode = membership.barcode
+                  WHERE product.barcode IS NULL)
+            """.trimIndent(),
+            Long::class.java
+        ) ?: 0L
+        require(orphanMembershipCount == 0L) {
+            "Classification staging contains $orphanMembershipCount orphan memberships"
+        }
         if (columnExists(STAGING_TABLE, PRODUCT_ID_COLUMN)) {
             val distinctIds = jdbcTemplate.queryForObject(
                 "SELECT COUNT(DISTINCT `$PRODUCT_ID_COLUMN`) FROM `$STAGING_TABLE`",
@@ -434,6 +507,12 @@ class ProductDataImportService(
 
     private fun assertSwapCompatibleSchema() {
         require(tableExists(MAIN_TABLE)) { "The products table does not exist" }
+        require(tableExists(FOOD_CATEGORY_TABLE)) {
+            "The indexed food-category membership table does not exist"
+        }
+        require(tableExists(ALLERGY_CLASSIFICATION_TABLE)) {
+            "The indexed allergy-classification membership table does not exist"
+        }
         val actualColumns = jdbcTemplate.queryForList(
             """
             SELECT column_name
@@ -530,17 +609,40 @@ class ProductDataImportService(
     private fun restoreLiveTableAfterFailedActivation(originalFailure: Exception): Boolean =
         runCatching {
             require(tableExists(ROLLBACK_TABLE)) { "Rollback table disappeared after activation" }
-            dropTableIfExists(STAGING_TABLE)
+            dropStagingTables()
             jdbcTemplate.execute(
-                "RENAME TABLE `$MAIN_TABLE` TO `$STAGING_TABLE`, `$ROLLBACK_TABLE` TO `$MAIN_TABLE`"
+                "RENAME TABLE " +
+                    "`$MAIN_TABLE` TO `$STAGING_TABLE`, `$ROLLBACK_TABLE` TO `$MAIN_TABLE`, " +
+                    "`$FOOD_CATEGORY_TABLE` TO `$FOOD_CATEGORY_STAGING_TABLE`, " +
+                    "`$FOOD_CATEGORY_ROLLBACK_TABLE` TO `$FOOD_CATEGORY_TABLE`, " +
+                    "`$ALLERGY_CLASSIFICATION_TABLE` TO `$ALLERGY_CLASSIFICATION_STAGING_TABLE`, " +
+                    "`$ALLERGY_CLASSIFICATION_ROLLBACK_TABLE` TO `$ALLERGY_CLASSIFICATION_TABLE`"
             )
-            dropTableIfExists(STAGING_TABLE)
+            dropStagingTables()
         }.onFailure(originalFailure::addSuppressed).isSuccess
+
+    private fun activateStagingTables() {
+        jdbcTemplate.execute(
+            "RENAME TABLE " +
+                "`$MAIN_TABLE` TO `$ROLLBACK_TABLE`, `$STAGING_TABLE` TO `$MAIN_TABLE`, " +
+                "`$FOOD_CATEGORY_TABLE` TO `$FOOD_CATEGORY_ROLLBACK_TABLE`, " +
+                "`$FOOD_CATEGORY_STAGING_TABLE` TO `$FOOD_CATEGORY_TABLE`, " +
+                "`$ALLERGY_CLASSIFICATION_TABLE` TO `$ALLERGY_CLASSIFICATION_ROLLBACK_TABLE`, " +
+                "`$ALLERGY_CLASSIFICATION_STAGING_TABLE` TO `$ALLERGY_CLASSIFICATION_TABLE`"
+        )
+    }
 
     private fun swapMainAndRollbackTables() {
         jdbcTemplate.execute(
-            "RENAME TABLE `$MAIN_TABLE` TO `$SWAP_TABLE`, " +
-                "`$ROLLBACK_TABLE` TO `$MAIN_TABLE`, `$SWAP_TABLE` TO `$ROLLBACK_TABLE`"
+            "RENAME TABLE " +
+                "`$MAIN_TABLE` TO `$SWAP_TABLE`, `$ROLLBACK_TABLE` TO `$MAIN_TABLE`, " +
+                "`$SWAP_TABLE` TO `$ROLLBACK_TABLE`, " +
+                "`$FOOD_CATEGORY_TABLE` TO `$FOOD_CATEGORY_SWAP_TABLE`, " +
+                "`$FOOD_CATEGORY_ROLLBACK_TABLE` TO `$FOOD_CATEGORY_TABLE`, " +
+                "`$FOOD_CATEGORY_SWAP_TABLE` TO `$FOOD_CATEGORY_ROLLBACK_TABLE`, " +
+                "`$ALLERGY_CLASSIFICATION_TABLE` TO `$ALLERGY_CLASSIFICATION_SWAP_TABLE`, " +
+                "`$ALLERGY_CLASSIFICATION_ROLLBACK_TABLE` TO `$ALLERGY_CLASSIFICATION_TABLE`, " +
+                "`$ALLERGY_CLASSIFICATION_SWAP_TABLE` TO `$ALLERGY_CLASSIFICATION_ROLLBACK_TABLE`"
         )
     }
 
@@ -716,6 +818,24 @@ class ProductDataImportService(
         jdbcTemplate.execute("DROP TABLE IF EXISTS `$tableName`")
     }
 
+    private fun dropStagingTables() {
+        dropTableIfExists(ALLERGY_CLASSIFICATION_STAGING_TABLE)
+        dropTableIfExists(FOOD_CATEGORY_STAGING_TABLE)
+        dropTableIfExists(STAGING_TABLE)
+    }
+
+    private fun dropRollbackTables() {
+        dropTableIfExists(ALLERGY_CLASSIFICATION_ROLLBACK_TABLE)
+        dropTableIfExists(FOOD_CATEGORY_ROLLBACK_TABLE)
+        dropTableIfExists(ROLLBACK_TABLE)
+    }
+
+    private fun dropSwapTables() {
+        dropTableIfExists(ALLERGY_CLASSIFICATION_SWAP_TABLE)
+        dropTableIfExists(FOOD_CATEGORY_SWAP_TABLE)
+        dropTableIfExists(SWAP_TABLE)
+    }
+
     private fun requireMySql() {
         require(databaseProductName().contains("mysql", ignoreCase = true)) {
             "Safe product table replacement currently requires MySQL; database=${databaseProductName()}"
@@ -778,6 +898,8 @@ class ProductDataImportService(
         statement.setString(index++, product.cleanProductName)
         statement.setString(index++, product.totalWeight)
         statement.setString(index++, product.foodType)
+        statement.setString(index++, product.foodCategories)
+        statement.setString(index++, product.allergyClassification)
         statement.setNullableDouble(index++, product.carbsPercent)
         statement.setNullableDouble(index++, product.proteinPercent)
         statement.setNullableDouble(index++, product.fatPercent)
@@ -823,6 +945,17 @@ class ProductDataImportService(
         private const val STAGING_TABLE = "products_staging"
         private const val ROLLBACK_TABLE = "products_rollback"
         private const val SWAP_TABLE = "products_swap"
+        private const val FOOD_CATEGORY_TABLE = "product_food_category_memberships"
+        private const val FOOD_CATEGORY_STAGING_TABLE = "product_food_category_memberships_staging"
+        private const val FOOD_CATEGORY_ROLLBACK_TABLE = "product_food_category_memberships_rollback"
+        private const val FOOD_CATEGORY_SWAP_TABLE = "product_food_category_memberships_swap"
+        private const val ALLERGY_CLASSIFICATION_TABLE = "product_allergy_classification_memberships"
+        private const val ALLERGY_CLASSIFICATION_STAGING_TABLE =
+            "product_allergy_classification_memberships_staging"
+        private const val ALLERGY_CLASSIFICATION_ROLLBACK_TABLE =
+            "product_allergy_classification_memberships_rollback"
+        private const val ALLERGY_CLASSIFICATION_SWAP_TABLE =
+            "product_allergy_classification_memberships_swap"
         private const val PRODUCT_ID_MAP_TABLE = "products_id_preservation_map"
         private const val PRODUCT_ID_COLUMN = "product_id"
         private const val SYNTHETIC_BARCODE_PREFIX = "NO_BARCODE_ROW_"
@@ -861,6 +994,7 @@ class ProductDataImportService(
             "nutrient_text", "image_url", "source", "raw_materials", "energy_kcal",
             "carbs_g", "protein_g", "fat_g", "sugar_g", "sodium_mg",
             "cholesterol_mg", "allergy_warning", "clean_product_name", "total_weight", "food_type",
+            "food_categories", "allergy_classification",
             "carbs_percent", "protein_percent", "fat_percent", "sodium_g", "cholesterol_g",
             "is_vegan", "is_lacto_vegetarian", "is_ovo_vegetarian",
             "is_lacto_ovo_vegetarian", "is_pescatarian", "is_pollotarian",
@@ -875,10 +1009,23 @@ class ProductDataImportService(
             VALUES (${DATABASE_COLUMNS.joinToString { "?" }})
             ON DUPLICATE KEY UPDATE barcode = barcode
         """.trimIndent()
+        private val INSERT_FOOD_CATEGORY_MEMBERSHIP_SQL = """
+            INSERT INTO `$FOOD_CATEGORY_STAGING_TABLE` (`barcode`, `category_id`)
+            VALUES (?, ?)
+        """.trimIndent()
+        private val INSERT_ALLERGY_CLASSIFICATION_MEMBERSHIP_SQL = """
+            INSERT INTO `$ALLERGY_CLASSIFICATION_STAGING_TABLE` (`barcode`, `allergy_id`)
+            VALUES (?, ?)
+        """.trimIndent()
     }
 
     private data class StagingLoadReport(
         val attemptedRows: Long,
         val sha256: String
+    )
+
+    private data class ClassificationMembership(
+        val barcode: String,
+        val classificationId: String
     )
 }

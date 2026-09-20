@@ -63,6 +63,36 @@ class ProductCsvValidatorTest {
     }
 
     @Test
+    fun `rejects unsupported duplicate and mixed classification values`() {
+        val unsupported = csvWithRows(
+            row("1", "상품", energy = "100", vegan = "true", foodCategories = "없는분류")
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                ProductCsvValidator.validate(ByteArrayResource(unsupported.toByteArray()), 0)
+            }.message.orEmpty().contains("Unsupported classification")
+        )
+
+        val duplicate = csvWithRows(
+            row("1", "상품", energy = "100", vegan = "true", allergyClassification = "우유|우유")
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                ProductCsvValidator.validate(ByteArrayResource(duplicate.toByteArray()), 0)
+            }.message.orEmpty().contains("Duplicate classification")
+        )
+
+        val mixedSentinel = csvWithRows(
+            row("1", "상품", energy = "100", vegan = "true", allergyClassification = "미검출|우유")
+        )
+        assertTrue(
+            assertFailsWith<IllegalArgumentException> {
+                ProductCsvValidator.validate(ByteArrayResource(mixedSentinel.toByteArray()), 0)
+            }.message.orEmpty().contains("sentinel")
+        )
+    }
+
+    @Test
     fun `rejects a source barcode that collides with generated identifiers`() {
         val csv = csvWithRows(
             row(
@@ -85,7 +115,9 @@ class ProductCsvValidatorTest {
         productName: String,
         cleanProductName: String = productName,
         energy: String,
-        vegan: String
+        vegan: String,
+        foodCategories: String = "미분류",
+        allergyClassification: String = "정보없음"
     ): Map<ProductCsvColumn, String> = ProductCsvColumn.entries.associateWith { "" }
         .toMutableMap()
         .apply {
@@ -94,6 +126,8 @@ class ProductCsvValidatorTest {
             this[ProductCsvColumn.CLEAN_PRODUCT_NAME] = cleanProductName
             this[ProductCsvColumn.ENERGY_KCAL] = energy
             this[ProductCsvColumn.VEGAN] = vegan
+            this[ProductCsvColumn.FOOD_CATEGORIES] = foodCategories
+            this[ProductCsvColumn.ALLERGY_CLASSIFICATION] = allergyClassification
         }
 
     private fun csvWithRows(vararg rows: Map<ProductCsvColumn, String>): String = buildString {

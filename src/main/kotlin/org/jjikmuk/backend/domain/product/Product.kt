@@ -72,6 +72,12 @@ class Product(
     @Column(name = "food_type", length = 500)
     val foodType: String? = null,
 
+    @Column(name = "food_categories", length = 500)
+    val foodCategories: String? = null,
+
+    @Column(name = "allergy_classification", length = 500)
+    val allergyClassification: String? = null,
+
     @Column(name = "carbs_percent")
     val carbsPercent: Double? = null,
 
@@ -171,4 +177,14 @@ class Product(
             }
         }
     }
+
+    /** Stable IDs are exposed alongside the source labels kept in the DB. */
+    val foodCategoryIds: List<String>
+        get() = ProductClassificationCatalog.foodCategoryIds(foodCategories)
+
+    val allergyClassificationIds: List<String>
+        get() = ProductClassificationCatalog.allergyIds(allergyClassification)
+
+    val allergyClassificationState: String
+        get() = ProductClassificationCatalog.parseAllergyClassification(allergyClassification).state.id
 }

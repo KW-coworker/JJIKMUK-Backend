@@ -57,7 +57,9 @@ internal enum class ProductCsvColumn(val header: String) {
     GLUTEN_FREE("is_gluten_free"),
     LOW_CALORIE("is_low_calorie"),
     LOW_FAT("is_low_fat"),
-    HIGH_PROTEIN("is_high_protein")
+    HIGH_PROTEIN("is_high_protein"),
+    FOOD_CATEGORIES("food_categories"),
+    ALLERGY_CLASSIFICATION("알레르기 분류")
 }
 
 internal data class ProductCsvRecord(
@@ -83,7 +85,10 @@ internal data class ProductCsvRecord(
             else -> false
         }
 
-    fun isEmpty(): Boolean = values.all { it.isNullOrBlank() }
+    fun isEmpty(): Boolean = ProductCsvColumn.entries
+        .asSequence()
+        .filterNot { it in DERIVED_SENTINEL_COLUMNS }
+        .all { text(it) == null }
 
     fun toProduct(barcode: String): Product {
         val productName = text(ProductCsvColumn.PRODUCT_NAME)
@@ -143,6 +148,8 @@ internal data class ProductCsvRecord(
             cleanProductName = cleanProductName,
             totalWeight = text(ProductCsvColumn.TOTAL_WEIGHT),
             foodType = foodType,
+            foodCategories = text(ProductCsvColumn.FOOD_CATEGORIES),
+            allergyClassification = text(ProductCsvColumn.ALLERGY_CLASSIFICATION),
             carbsPercent = number(ProductCsvColumn.CARBS_PERCENT),
             proteinPercent = number(ProductCsvColumn.PROTEIN_PERCENT),
             fatPercent = number(ProductCsvColumn.FAT_PERCENT),
@@ -184,11 +191,19 @@ internal data class ProductCsvRecord(
             )
         )
     }
+
+    private companion object {
+        /** These generated sentinel values must not turn a physically empty source row into data. */
+        val DERIVED_SENTINEL_COLUMNS = setOf(
+            ProductCsvColumn.FOOD_CATEGORIES,
+            ProductCsvColumn.ALLERGY_CLASSIFICATION
+        )
+    }
 }
 
 /**
  * RFC 4180 CSV reader that retains only columns used by the application.
- * This matters for Product.csv: it has 199 columns and more than 1.3 million records.
+ * This matters for Product.csv: it has 201 columns and more than 1.3 million records.
  */
 internal class ProductCsvReader(inputStream: InputStream) : Closeable {
     private val csvReader = SelectiveRfc4180Reader(

@@ -1,13 +1,20 @@
 package org.jjikmuk.backend
 
+import org.jjikmuk.backend.domain.auth.AuthService
+import org.jjikmuk.backend.domain.auth.SignupRequest
 import org.jjikmuk.backend.domain.product.Product
+import org.jjikmuk.backend.domain.product.AllergyEvidenceLevel
 import org.jjikmuk.backend.domain.product.ProductController
 import org.jjikmuk.backend.domain.product.ProductGroupKeyBuilder
 import org.jjikmuk.backend.domain.product.ProductRepository
 import org.jjikmuk.backend.domain.product.DistinctProductSearchRepository
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
+import org.jjikmuk.backend.domain.user.UserService
+import org.jjikmuk.backend.domain.user.UserProfileRequest
+import org.jjikmuk.backend.global.exception.CustomException
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -21,10 +28,50 @@ class BackendApplicationTests @Autowired constructor(
     private val productController: ProductController,
     private val productRepository: ProductRepository,
     private val userRepository: UserRepository,
-    private val jdbcTemplate: JdbcTemplate
+    private val jdbcTemplate: JdbcTemplate,
+    private val authService: AuthService,
+    private val userService: UserService
 ) {
     @Test
     fun contextLoads() {
+    }
+
+    @Test
+    fun `signup and profile updates persist canonical allergy IDs and reject unknown entries`() {
+        val user = authService.signup(
+            SignupRequest(
+                email = "allergy-contract-signup@example.com",
+                password = "test-password",
+                nickname = "계약 테스트",
+                allergies = "우유, 밀가루",
+                diseases = null
+            )
+        )
+        assertEquals("milk,wheat", user.allergies)
+
+        val updated = userService.updateUserProfile(
+            requireNotNull(user.id),
+            UserProfileRequest(
+                nickname = user.nickname,
+                allergies = "egg, 견과류",
+                diseases = null,
+                specialDiet = null,
+                dislikedIngredients = null
+            )
+        )
+        assertEquals("egg,walnut,pine_nut,almond", updated?.allergies)
+        assertThrows(CustomException::class.java) {
+            userService.updateUserProfile(
+                requireNotNull(user.id),
+                UserProfileRequest(
+                    nickname = user.nickname,
+                    allergies = "unsupported-allergen",
+                    diseases = null,
+                    specialDiet = null,
+                    dislikedIngredients = null
+                )
+            )
+        }
     }
 
     @Test
@@ -86,6 +133,56 @@ class BackendApplicationTests @Autowired constructor(
         val data = body["data"] as Map<*, *>
         val analysis = data["analysis"] as Map<*, *>
         assertEquals(true, analysis["isDangerous"])
+        assertEquals("DANGER", analysis["status"])
+        assertEquals(listOf("milk"), analysis["conflictingAllergenIds"])
+    }
+
+    @Test
+    fun `product lookup search and filter share one warning based safety verdict`() {
+        val barcode = "ALLERGY-API-0001"
+        val user = userRepository.save(
+            User(
+                email = "allergy-api-test@example.com",
+                nickname = "알레르기 API 테스트",
+                allergies = "milk",
+                password = "test-password"
+            )
+        )
+        productRepository.save(
+            Product(
+                barcode = barcode,
+                productName = "공통판정 두유바",
+                rawMaterials = null,
+                allergyWarning = "우유 함유",
+                allergyEvidenceLevel = AllergyEvidenceLevel.DECLARED_LABEL,
+                vegan = true
+            )
+        )
+        val authentication = UsernamePasswordAuthenticationToken(user.id.toString(), null, emptyList())
+        val scan = productController.getProductByBarcode(barcode, null, authentication)
+        val searched = productController.searchProducts("공통판정", null, authentication)
+        val filtered = productController.filterProducts(
+            filters = listOf("vegan"),
+            match = "all",
+            keyword = "공통판정",
+            page = 0,
+            size = 20,
+            userId = null,
+            authentication = authentication
+        )
+        val scanAnalysis = ((scan.body as Map<*, *>)["data"] as Map<*, *>)["analysis"] as Map<*, *>
+        val searchItem = ((searched.body as Map<*, *>)["data"] as List<*>)
+            .map { it as Map<*, *> }
+            .first { (it["product"] as Product).barcode == barcode }
+        val searchAnalysis = searchItem["analysis"] as Map<*, *>
+        val filterItems = (((filtered.body as Map<*, *>)["data"] as Map<*, *>)["items"] as List<*>)
+        val filterAnalysis = (filterItems.first() as Map<*, *>)["analysis"] as Map<*, *>
+        listOf(scanAnalysis, searchAnalysis, filterAnalysis).forEach { analysis ->
+            assertEquals("DANGER", analysis["status"])
+            assertEquals(true, analysis["isDangerous"])
+            assertEquals(listOf("milk"), analysis["conflictingAllergenIds"])
+            assertEquals(listOf("우유"), analysis["dangerousIngredients"])
+        }
     }
 
     @Test
@@ -162,6 +259,96 @@ class BackendApplicationTests @Autowired constructor(
             authentication = null
         )
         assertEquals(400, response.statusCode.value())
+    }
+
+    @Test
+    fun `classification api exposes stable IDs and filters exact multi-value memberships`() {
+        productRepository.saveAll(
+            listOf(
+                Product(
+                    barcode = "CLASS-FILTER-0001",
+                    productName = "분류필터 대상 하나",
+                    foodCategories = "음료|유제품",
+                    allergyClassification = "우유|밀"
+                ),
+                Product(
+                    barcode = "CLASS-FILTER-0002",
+                    productName = "분류필터 대상 둘",
+                    foodCategories = "음료",
+                    allergyClassification = "우유"
+                ),
+                Product(
+                    barcode = "CLASS-FILTER-0003",
+                    productName = "분류필터 대상 셋",
+                    foodCategories = "유제품",
+                    allergyClassification = "밀"
+                )
+            )
+        )
+        listOf(
+            "CLASS-FILTER-0001" to "beverage",
+            "CLASS-FILTER-0001" to "dairy",
+            "CLASS-FILTER-0002" to "beverage",
+            "CLASS-FILTER-0003" to "dairy"
+        ).forEach { (barcode, categoryId) ->
+            jdbcTemplate.update(
+                "INSERT INTO product_food_category_memberships (barcode, category_id) VALUES (?, ?)",
+                barcode,
+                categoryId
+            )
+        }
+        listOf(
+            "CLASS-FILTER-0001" to "milk",
+            "CLASS-FILTER-0001" to "wheat",
+            "CLASS-FILTER-0002" to "milk",
+            "CLASS-FILTER-0003" to "wheat"
+        ).forEach { (barcode, allergyId) ->
+            jdbcTemplate.update(
+                "INSERT INTO product_allergy_classification_memberships (barcode, allergy_id) VALUES (?, ?)",
+                barcode,
+                allergyId
+            )
+        }
+
+        val metadata = (productController.getAvailableClassifications().body as Map<*, *>)["data"] as Map<*, *>
+        assertEquals(14, (metadata["foodCategories"] as List<*>).size)
+        assertEquals(26, (metadata["allergens"] as List<*>).size)
+
+        val allResponse = productController.filterProducts(
+            filters = null,
+            match = "all",
+            categories = listOf("beverage,dairy"),
+            categoryMatch = "all",
+            containsAllergens = listOf("milk,wheat"),
+            allergenMatch = "all",
+            keyword = "분류필터",
+            page = 0,
+            size = 20,
+            userId = null,
+            authentication = null
+        )
+        val allData = (allResponse.body as Map<*, *>)["data"] as Map<*, *>
+        assertEquals(1L, allData["totalElements"])
+        val allProduct = (((allData["items"] as List<*>).single() as Map<*, *>)["product"] as Product)
+        assertEquals("CLASS-FILTER-0001", allProduct.barcode)
+        assertEquals(listOf("beverage", "dairy"), allProduct.foodCategoryIds)
+        assertEquals(listOf("milk", "wheat"), allProduct.allergyClassificationIds)
+
+        val axisAndResponse = productController.filterProducts(
+            filters = null,
+            match = "all",
+            categories = listOf("beverage,dairy"),
+            categoryMatch = "any",
+            containsAllergens = listOf("milk"),
+            allergenMatch = "any",
+            keyword = "분류필터",
+            page = 0,
+            size = 20,
+            userId = null,
+            authentication = null
+        )
+        val axisAndData = (axisAndResponse.body as Map<*, *>)["data"] as Map<*, *>
+        assertEquals(2L, axisAndData["totalElements"])
     }
 
     @Test

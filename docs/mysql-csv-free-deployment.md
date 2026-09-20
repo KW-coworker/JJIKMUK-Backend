@@ -4,7 +4,7 @@
 `PRODUCT_IMPORT_ENABLED=false`, `RECOMMENDATION_IMPORT_ENABLED=false`가 기본값입니다.
 대신 새 서버의 MySQL에 **기존 DB 전체를 복원**해야 합니다. 상품 데이터만 복사하면
 추천 후보, 사용자 정보, 적재 버전, Flyway 기록이 빠져 정상 기동을 보장할 수 없습니다.
-또한 `backend/src/main/resources/db/migration`의 V1~V6 SQL 파일을 애플리케이션 코드와
+또한 `backend/src/main/resources/db/migration`의 V1~V8 SQL 파일을 애플리케이션 코드와
 함께 Git에 포함해야 복원된 Flyway 기록과 실행 코드가 일치합니다.
 
 ## 1. 준비
@@ -43,12 +43,13 @@ PowerShell에서 `backend/scripts`를 실행합니다. 아래 경로는 실제 �
 $mysql = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
 $mysqldump = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
 ./backend/scripts/Verify-JjikmukDatabase.ps1 -DefaultsFile 'C:\secure\source.cnf' -MySqlExecutable $mysql
-./backend/scripts/Export-JjikmukDatabase.ps1 -DefaultsFile 'C:\secure\source.cnf' -OutputFile 'D:\backups\jjikmuk.sql' -MySqlDumpExecutable $mysqldump
+./backend/scripts/Export-JjikmukDatabase.ps1 -DefaultsFile 'C:\secure\source.cnf' -OutputFile 'D:\backups\jjikmuk-dump-YYYYMMDD.sql' -MySqlDumpExecutable $mysqldump
 ```
 
 출력된 `products`·`product_neighbor_sets` 건수, `PRODUCT_DB_%`·
 `PRODUCT_NEIGHBOR_DB_VERSION` 값, Flyway 성공 기록과 덤프의 SHA-256을 기록합니다.
-설정 파일의 예상 건수는 각각 1,348,436건과 233,658건이지만, 비교 기준은 **실제 원본 DB**입니다.
+CSV 원본의 행 수와 DB 건수는 중복 바코드 처리 등에 따라 다를 수 있으므로 비교 기준은
+**덤프 직전에 원본 DB에서 Verify 스크립트가 출력한 실제 건수**입니다.
 백업 실패 시 `.partial` 파일이 남습니다. 원인을 확인하기 전에는 복원에 사용하지 마세요.
 
 ## 3. 새 서버에 복원
@@ -62,7 +63,7 @@ $mysqldump = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysqldump.exe'
 $mysql = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
 ./backend/scripts/Restore-JjikmukDatabase.ps1 `
   -DefaultsFile 'C:\secure\target.cnf' `
-  -DumpFile 'D:\backups\jjikmuk.sql' `
+  -DumpFile 'D:\backups\jjikmuk-dump-YYYYMMDD.sql' `
   -DatabaseName 'jjikmuk' `
   -ExpectedSha256 'BACKUP_COMMAND_OUTPUT_SHA256' `
   -MySqlExecutable $mysql
@@ -81,8 +82,8 @@ $mysql = 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql.exe'
 ./backend/scripts/Verify-JjikmukDatabase.ps1 `
   -DefaultsFile 'C:\secure\target.cnf' `
   -DatabaseName 'jjikmuk' `
-  -ExpectedProductCount 1348436 `
-  -ExpectedNeighborCount 233658 `
+  -ExpectedProductCount <원본 Verify의 products 값> `
+  -ExpectedNeighborCount <원본 Verify의 product_neighbor_sets 값> `
   -MySqlExecutable $mysql
 ```
 

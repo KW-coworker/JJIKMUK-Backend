@@ -1,5 +1,8 @@
 package org.jjikmuk.backend.global.config
 
+import org.jjikmuk.backend.domain.allergy.FoodAllergy
+import org.jjikmuk.backend.domain.product.AllergyClassificationState
+import org.jjikmuk.backend.domain.product.ProductFoodCategory
 import org.slf4j.LoggerFactory
 import org.springframework.core.io.Resource
 import java.security.DigestInputStream
@@ -123,5 +126,54 @@ internal object ProductCsvValidator {
                 "Invalid flag value at record $recordNumber, column ${column.header}: $rawValue"
             }
         }
+        validateClassification(
+            record = record,
+            recordNumber = recordNumber,
+            column = ProductCsvColumn.FOOD_CATEGORIES,
+            allowed = FOOD_CATEGORY_LABELS,
+            sentinels = setOf(ProductFoodCategory.UNCLASSIFIED.displayName)
+        )
+        validateClassification(
+            record = record,
+            recordNumber = recordNumber,
+            column = ProductCsvColumn.ALLERGY_CLASSIFICATION,
+            allowed = ALLERGY_CLASSIFICATION_LABELS,
+            sentinels = ALLERGY_SENTINELS
+        )
     }
+
+    private fun validateClassification(
+        record: ProductCsvRecord,
+        recordNumber: Long,
+        column: ProductCsvColumn,
+        allowed: Set<String>,
+        sentinels: Set<String>
+    ) {
+        val rawValue = record.text(column)
+        require(rawValue != null) {
+            "Missing classification value at record $recordNumber, column ${column.header}"
+        }
+        val tokens = rawValue.split('|').map(String::trim)
+        require(tokens.none(String::isBlank)) {
+            "Empty classification token at record $recordNumber, column ${column.header}: $rawValue"
+        }
+        require(tokens.size == tokens.distinct().size) {
+            "Duplicate classification token at record $recordNumber, column ${column.header}: $rawValue"
+        }
+        val unsupported = tokens.filterNot(allowed::contains)
+        require(unsupported.isEmpty()) {
+            "Unsupported classification at record $recordNumber, column ${column.header}: ${unsupported.joinToString()}"
+        }
+        require(tokens.size == 1 || tokens.none(sentinels::contains)) {
+            "Classification sentinel cannot be combined at record $recordNumber, column ${column.header}: $rawValue"
+        }
+    }
+
+    private val FOOD_CATEGORY_LABELS = ProductFoodCategory.entries.map(ProductFoodCategory::displayName).toSet()
+    private val ALLERGY_SENTINELS = setOf(
+        AllergyClassificationState.NOT_DETECTED.displayName,
+        AllergyClassificationState.NO_INFORMATION.displayName
+    )
+    private val ALLERGY_CLASSIFICATION_LABELS =
+        FoodAllergy.entries.map(FoodAllergy::displayName).toSet() + ALLERGY_SENTINELS
 }

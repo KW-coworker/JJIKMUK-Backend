@@ -5,6 +5,7 @@ import org.jjikmuk.backend.domain.history.HistoryRepository
 import org.jjikmuk.backend.domain.history.UserActionType
 import org.jjikmuk.backend.domain.product.AllergyEvidenceLevel
 import org.jjikmuk.backend.domain.product.Product
+import org.jjikmuk.backend.domain.product.ProductDataOrigin
 import org.jjikmuk.backend.domain.product.ProductRepository
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
@@ -63,8 +64,10 @@ class RecommendationServiceTests @Autowired constructor(
             productName = "식단 근거 없는 스낵",
             manufacturer = "미상 제조사",
             allergyWarning = "밀 함유",
+            rawMaterials = "쌀, 정제소금",
             vegan = true,
-            allergyEvidenceLevel = AllergyEvidenceLevel.DECLARED_LABEL
+            allergyEvidenceLevel = AllergyEvidenceLevel.DECLARED_LABEL,
+            dietaryDataOrigin = ProductDataOrigin.UNKNOWN
         )
         val disliked = Product(
             barcode = "8800000100004",
@@ -102,7 +105,7 @@ class RecommendationServiceTests @Autowired constructor(
             User(
                 email = "recommendation-test@example.com",
                 nickname = "추천 테스트",
-                allergies = "우유",
+                allergies = "milk",
                 specialDiet = "비건",
                 dislikedIngredients = "땅콩",
                 password = "test-password"
@@ -140,6 +143,7 @@ class RecommendationServiceTests @Autowired constructor(
         )
 
         assertEquals(SafetyStatus.DANGER, result.referenceSafety.status)
+        assertEquals(listOf("milk"), result.userContext.allergies)
         assertEquals(listOf("vegan"), result.userContext.requiredDietFilters)
         assertEquals(1, result.excluded.danger)
         assertEquals(1, result.excluded.unknownSafety)

@@ -1,5 +1,6 @@
 package org.jjikmuk.backend.domain.product
 
+import org.jjikmuk.backend.domain.allergy.FoodAllergy
 import org.jjikmuk.backend.domain.product.search.ProductSearchKeywordBuilder
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.domain.Page
@@ -49,6 +50,10 @@ class DistinctProductSearchRepository(
     fun searchByFilters(
         filters: Set<ProductFilter>,
         matchMode: ProductFilterMatchMode,
+        categories: Set<ProductFoodCategory>,
+        categoryMatchMode: ProductFilterMatchMode,
+        allergens: Set<FoodAllergy>,
+        allergenMatchMode: ProductFilterMatchMode,
         keyword: String?,
         pageable: Pageable
     ): Page<Product> {
@@ -63,6 +68,22 @@ class DistinctProductSearchRepository(
             }
             conditions.add("(${filterConditions.joinToString(filterJoiner)})")
         }
+        addStoredTokenConditions(
+            conditions = conditions,
+            parameters = parameters,
+            membershipTable = "product_food_category_memberships",
+            membershipColumn = "category_id",
+            values = categories.map(ProductFoodCategory::id),
+            matchMode = categoryMatchMode
+        )
+        addStoredTokenConditions(
+            conditions = conditions,
+            parameters = parameters,
+            membershipTable = "product_allergy_classification_memberships",
+            membershipColumn = "allergy_id",
+            values = allergens.map(FoodAllergy::id),
+            matchMode = allergenMatchMode
+        )
 
         val keywordSearch = keyword?.let(::createKeywordSearch)
         if (keyword != null && keywordSearch == null) return Page.empty(pageable)
@@ -88,6 +109,30 @@ class DistinctProductSearchRepository(
         )
         val products = findProductsInOrder(barcodes)
         return PageImpl(products, pageable, totalElements)
+    }
+
+    private fun addStoredTokenConditions(
+        conditions: MutableList<String>,
+        parameters: MutableList<Any>,
+        membershipTable: String,
+        membershipColumn: String,
+        values: List<String>,
+        matchMode: ProductFilterMatchMode
+    ) {
+        if (values.isEmpty()) return
+        require(CLASSIFICATION_MEMBERSHIPS[membershipTable] == membershipColumn) {
+            "Unsupported classification membership: $membershipTable.$membershipColumn"
+        }
+        val tokenConditions = values.map {
+            "EXISTS (SELECT 1 FROM $membershipTable membership " +
+                "WHERE membership.barcode = products.barcode AND membership.$membershipColumn = ?)"
+        }
+        val joiner = when (matchMode) {
+            ProductFilterMatchMode.ALL -> " AND "
+            ProductFilterMatchMode.ANY -> " OR "
+        }
+        conditions.add("(${tokenConditions.joinToString(joiner)})")
+        parameters.addAll(values)
     }
 
     private fun createKeywordSearch(keyword: String): KeywordSearch? {
@@ -257,5 +302,9 @@ class DistinctProductSearchRepository(
         const val GROUP_KEY_DISPLAY_ORDER_EXPRESSIONS =
             "MIN($NORMALIZED_PRODUCT_NAME), MIN($NORMALIZED_MANUFACTURER), " +
                 "MIN($NORMALIZED_RAW_MATERIALS), MIN($NORMALIZED_IMAGE_URL)"
+        val CLASSIFICATION_MEMBERSHIPS = mapOf(
+            "product_food_category_memberships" to "category_id",
+            "product_allergy_classification_memberships" to "allergy_id"
+        )
     }
 }

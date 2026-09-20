@@ -1,5 +1,9 @@
 package org.jjikmuk.backend.domain.product
 
+import org.jjikmuk.backend.domain.allergy.AllergyCatalog
+import org.jjikmuk.backend.domain.allergy.AllergySafetyService
+import org.jjikmuk.backend.domain.allergy.FoodAllergy
+import org.jjikmuk.backend.domain.recommendation.SafetyStatus
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
 import org.springframework.stereotype.Service
@@ -21,7 +25,8 @@ class ProductService(
     private val distinctProductSearchRepository: DistinctProductSearchRepository,
     private val userRepository: UserRepository,
     private val historyRepository: HistoryRepository,
-    private val eventPublisher: ApplicationEventPublisher
+    private val eventPublisher: ApplicationEventPublisher,
+    private val allergySafetyService: AllergySafetyService
 ) {
     @Transactional
     // 1. 단건 조회 비즈니스 로직
@@ -67,17 +72,34 @@ class ProductService(
     fun filterProductsAnalysis(
         filters: Set<ProductFilter>,
         matchMode: ProductFilterMatchMode,
+        categories: Set<ProductFoodCategory>,
+        categoryMatchMode: ProductFilterMatchMode,
+        allergens: Set<FoodAllergy>,
+        allergenMatchMode: ProductFilterMatchMode,
         keyword: String?,
         pageable: Pageable,
         userId: Long?
     ): Page<Map<String, Any>> {
         val user = userId?.let { userRepository.findById(it).orElse(null) }
         val startedAt = System.nanoTime()
-        val products = distinctProductSearchRepository.searchByFilters(filters, matchMode, keyword, pageable)
+        val products = distinctProductSearchRepository.searchByFilters(
+            filters = filters,
+            matchMode = matchMode,
+            categories = categories,
+            categoryMatchMode = categoryMatchMode,
+            allergens = allergens,
+            allergenMatchMode = allergenMatchMode,
+            keyword = keyword,
+            pageable = pageable
+        )
         publishSearchEvent(
             endpoint = "FILTER",
             keyword = keyword,
-            filters = filters.map(ProductFilter::key).toSet(),
+            filters = buildSet {
+                addAll(filters.map(ProductFilter::key))
+                addAll(categories.map { "category:${it.id}" })
+                addAll(allergens.map { "containsAllergen:${it.id}" })
+            },
             matchMode = matchMode.responseValue,
             userId = userId,
             resultCount = products.totalElements,
@@ -111,19 +133,15 @@ class ProductService(
     }
 
     private fun analyzeProductAllergy(product: Product, user: User?): Map<String, Any> {
-        var isDangerous = false
-        val dangerousIngredients = mutableListOf<String>()
-
-        if (user != null && !user.allergies.isNullOrBlank()) {
-            val userAllergies = user.allergies!!.split(",").map { it.trim() }
-            val productAllergyInfo = (product.allergy ?: "") + (product.rawMaterials ?: "")
-
-            for (allergy in userAllergies) {
-                if (productAllergyInfo.contains(allergy)) {
-                    isDangerous = true
-                    dangerousIngredients.add(allergy)
-                }
-            }
+        val safety = allergySafetyService.evaluate(
+            product = product,
+            allergies = user?.allergies?.let { AllergyCatalog.parse(it) }
+                ?.let { profile -> profile.ids.map { it.id } + profile.unknownTerms }
+                .orEmpty(),
+            profileKnown = user != null
+        )
+        val dangerousIngredients = safety.conflictingAllergens.mapNotNull { id ->
+            AllergyCatalog.resolve(id)?.displayName
         }
 
         // 💡 1일 영양성분 기준치 대비 퍼센트 계산 (식약처 고시 2,000kcal 기준)
@@ -145,9 +163,14 @@ class ProductService(
             "product" to product,
             "nutrientPercents" to nutrientPercents, // 🚀 프론트엔드 원그래프용 데이터 추가!
             "analysis" to mapOf(
-                "isDangerous" to isDangerous,
+                "status" to safety.status.name,
+                "isDangerous" to (safety.status == SafetyStatus.DANGER),
                 "dangerousIngredients" to dangerousIngredients,
-                "message" to if (isDangerous) "위험! 알레르기 유발 성분(${dangerousIngredients.joinToString(", ")})이 포함되어 있습니다." else "안전하게 섭취할 수 있습니다."
+                "conflictingAllergenIds" to safety.conflictingAllergens,
+                "evidenceSources" to safety.evidenceSources,
+                "evidenceLevel" to safety.evidenceLevel.name,
+                "verificationRequired" to (safety.status == SafetyStatus.UNKNOWN),
+                "message" to safety.message
             )
         )
     }

@@ -2,7 +2,9 @@ package org.jjikmuk.backend.domain.recommendation
 
 import org.jjikmuk.backend.domain.history.HistoryRepository
 import org.jjikmuk.backend.domain.product.Product
+import org.jjikmuk.backend.domain.product.ProductClassificationCatalog
 import org.jjikmuk.backend.domain.product.ProductFilter
+import org.jjikmuk.backend.domain.product.ProductFoodCategory
 import org.jjikmuk.backend.domain.product.ProductRepository
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
@@ -70,7 +72,7 @@ class RecommendationService(
             .associateBy(Product::barcode)
         val productFetchMicros = elapsedMicros(productFetchStartedAt)
 
-        val allergies = policy.profileTerms(user.allergies)
+        val allergies = policy.allergyProfileTerms(user.allergies)
         val dislikedIngredients = policy.profileTerms(user.dislikedIngredients)
         val requiredFilters = policy.requiredFilters(user)
         val historyStartedAt = System.nanoTime()
@@ -363,7 +365,12 @@ class RecommendationService(
         safety: SafetyDecision
     ): List<String> = buildList {
         add("기준 상품과 콘텐츠 유사도 ${round(baseSimilarity * 100).toInt()}%")
-        if (!reference.foodType.isNullOrBlank() && reference.foodType == product.foodType) {
+        val sharedCategories = ProductClassificationCatalog.foodCategoryIds(reference.foodCategories)
+            .intersect(ProductClassificationCatalog.foodCategoryIds(product.foodCategories).toSet())
+        if (sharedCategories.isNotEmpty()) {
+            val labels = sharedCategories.mapNotNull { id -> ProductFoodCategory.resolve(id)?.displayName }
+            add("같은 식품 카테고리: ${labels.joinToString()}")
+        } else if (!reference.foodType.isNullOrBlank() && reference.foodType == product.foodType) {
             add("같은 식품 유형: ${product.foodType}")
         }
         add("알레르기 판정 ${safety.status}: ${safety.evidenceSources.joinToString().ifBlank { "근거 없음" }}")
@@ -499,12 +506,19 @@ class RecommendationService(
             charBigrams(normalize(right.cleanProductName ?: right.productName))
         )
         val ingredientSimilarity = dice(wordTokens(left.rawMaterials), wordTokens(right.rawMaterials))
-        val typeSimilarity = if (
+        val leftCategories = ProductClassificationCatalog.foodCategoryIds(left.foodCategories).toSet()
+        val rightCategories = ProductClassificationCatalog.foodCategoryIds(right.foodCategories).toSet()
+        val categorySimilarity = if (leftCategories.isNotEmpty() && rightCategories.isNotEmpty()) {
+            jaccard(leftCategories, rightCategories)
+        } else {
+            null
+        }
+        val typeSimilarity = categorySimilarity ?: if (
             !left.foodType.isNullOrBlank() && normalize(left.foodType) == normalize(right.foodType)
         ) 1.0 else 0.0
         val available = mutableListOf(0.70 to nameSimilarity)
         if (ingredientSimilarity > 0.0) available += 0.20 to ingredientSimilarity
-        if (typeSimilarity > 0.0) available += 0.10 to typeSimilarity
+        if (categorySimilarity != null || typeSimilarity > 0.0) available += 0.10 to typeSimilarity
         val denominator = available.sumOf { it.first }
         return available.sumOf { (weight, score) -> weight * score } / denominator
     }
@@ -524,6 +538,11 @@ class RecommendationService(
     private fun dice(left: Set<String>, right: Set<String>): Double {
         if (left.isEmpty() || right.isEmpty()) return 0.0
         return 2.0 * left.count(right::contains) / (left.size + right.size)
+    }
+
+    private fun jaccard(left: Set<String>, right: Set<String>): Double {
+        if (left.isEmpty() || right.isEmpty()) return 0.0
+        return left.intersect(right).size.toDouble() / left.union(right).size.toDouble()
     }
 
     private fun normalize(value: String?): String = Normalizer
@@ -560,7 +579,7 @@ class RecommendationService(
     private data class SelectedCandidate(val candidate: ScoredCandidate, val mmrScore: Double)
 
     companion object {
-        const val POLICY_VERSION = "hard-constraints-personalized-fallback-v3"
+        const val POLICY_VERSION = "hard-constraints-personalized-category-v4"
         private const val MAX_LIMIT = 20
         private const val HISTORY_DECAY_DAYS = 30.0
         private const val MAX_PRODUCT_HISTORY_WEIGHT = 6.0

@@ -1,5 +1,7 @@
 package org.jjikmuk.backend.domain.product
 
+import org.jjikmuk.backend.domain.allergy.AllergyCatalog
+import org.jjikmuk.backend.domain.allergy.FoodAllergy
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import org.springframework.security.core.Authentication
@@ -21,26 +23,47 @@ class ProductController(
         )
     )
 
+    @GetMapping("/classifications")
+    fun getAvailableClassifications(): ResponseEntity<*> = ResponseEntity.ok(
+        mapOf(
+            "message" to "상품 분류 목록 조회 성공",
+            "data" to mapOf(
+                "foodCategories" to ProductFoodCategory.entries.map(ProductFoodCategory::toMetadata),
+                "allergens" to FoodAllergy.entries.map { allergy ->
+                    mapOf("id" to allergy.id, "label" to allergy.displayName)
+                },
+                "allergyStates" to AllergyClassificationState.entries.map { state ->
+                    mapOf("id" to state.id, "label" to state.displayName)
+                }
+            )
+        )
+    )
+
     @GetMapping("/filter")
     fun filterProducts(
         @RequestParam(required = false) filters: List<String>?,
         @RequestParam(defaultValue = "all") match: String,
+        @RequestParam(required = false) categories: List<String>? = null,
+        @RequestParam(defaultValue = "any") categoryMatch: String = "any",
+        @RequestParam(required = false) containsAllergens: List<String>? = null,
+        @RequestParam(defaultValue = "any") allergenMatch: String = "any",
         @RequestParam(required = false) keyword: String?,
         @RequestParam(defaultValue = "0") page: Int,
         @RequestParam(defaultValue = "20") size: Int,
         @RequestParam(required = false) userId: Long?,
         authentication: Authentication?
     ): ResponseEntity<*> {
-        val requestedFilters = filters.orEmpty()
-            .flatMap { value -> value.split(",") }
-            .map(String::trim)
-            .filter(String::isNotEmpty)
+        val requestedFilters = splitRequestValues(filters)
+        val requestedCategories = splitRequestValues(categories)
+        val requestedAllergens = splitRequestValues(containsAllergens)
 
-        if (requestedFilters.isEmpty()) {
+        if (requestedFilters.isEmpty() && requestedCategories.isEmpty() && requestedAllergens.isEmpty()) {
             return ResponseEntity.badRequest().body(
                 mapOf(
-                    "message" to "필터를 하나 이상 선택해주세요.",
-                    "supportedFilters" to ProductFilter.supportedKeys()
+                    "message" to "식단 필터, 식품 카테고리, 알레르기 분류 중 하나 이상 선택해주세요.",
+                    "supportedFilters" to ProductFilter.supportedKeys(),
+                    "supportedCategories" to ProductFoodCategory.entries.map(ProductFoodCategory::id),
+                    "supportedAllergens" to FoodAllergy.entries.map(FoodAllergy::id)
                 )
             )
         }
@@ -55,9 +78,37 @@ class ProductController(
             )
         }
 
+        val unknownCategories = requestedCategories.filter { ProductFoodCategory.resolve(it) == null }
+        if (unknownCategories.isNotEmpty()) {
+            return ResponseEntity.badRequest().body(
+                mapOf(
+                    "message" to "지원하지 않는 식품 카테고리가 있습니다: ${unknownCategories.joinToString()}",
+                    "supportedCategories" to ProductFoodCategory.entries.map(ProductFoodCategory::id)
+                )
+            )
+        }
+
+        val unknownAllergens = requestedAllergens.filter { AllergyCatalog.resolve(it) == null }
+        if (unknownAllergens.isNotEmpty()) {
+            return ResponseEntity.badRequest().body(
+                mapOf(
+                    "message" to "지원하지 않는 알레르기 분류가 있습니다: ${unknownAllergens.joinToString()}",
+                    "supportedAllergens" to FoodAllergy.entries.map(FoodAllergy::id)
+                )
+            )
+        }
+
         val matchMode = ProductFilterMatchMode.fromRequest(match)
             ?: return ResponseEntity.badRequest().body(
                 mapOf("message" to "match는 all 또는 any만 사용할 수 있습니다.")
+            )
+        val categoryMatchMode = ProductFilterMatchMode.fromRequest(categoryMatch)
+            ?: return ResponseEntity.badRequest().body(
+                mapOf("message" to "categoryMatch는 all 또는 any만 사용할 수 있습니다.")
+            )
+        val allergenMatchMode = ProductFilterMatchMode.fromRequest(allergenMatch)
+            ?: return ResponseEntity.badRequest().body(
+                mapOf("message" to "allergenMatch는 all 또는 any만 사용할 수 있습니다.")
             )
 
         if (page < 0 || size !in MIN_PAGE_SIZE..MAX_PAGE_SIZE) {
@@ -79,6 +130,8 @@ class ProductController(
         }
 
         val parsedFilters = requestedFilters.mapNotNull(ProductFilter::fromRequest).toSet()
+        val parsedCategories = requestedCategories.mapNotNull(ProductFoodCategory::resolve).toSet()
+        val parsedAllergens = requestedAllergens.mapNotNull(AllergyCatalog::resolve).toSet()
         val targetUserId = getValidatedUserId(userId, authentication)
         val pageable = PageRequest.of(
             page,
@@ -88,6 +141,10 @@ class ProductController(
         val result = productService.filterProductsAnalysis(
             filters = parsedFilters,
             matchMode = matchMode,
+            categories = parsedCategories,
+            categoryMatchMode = categoryMatchMode,
+            allergens = parsedAllergens,
+            allergenMatchMode = allergenMatchMode,
             keyword = normalizedKeyword,
             pageable = pageable,
             userId = targetUserId
@@ -101,7 +158,11 @@ class ProductController(
             "totalPages" to result.totalPages,
             "hasNext" to result.hasNext(),
             "appliedFilters" to parsedFilters.map { it.key },
+            "appliedCategories" to parsedCategories.map { it.id },
+            "containedAllergens" to parsedAllergens.map { it.id },
             "match" to matchMode.responseValue,
+            "categoryMatch" to categoryMatchMode.responseValue,
+            "allergenMatch" to allergenMatchMode.responseValue,
             "keyword" to normalizedKeyword
         )
 
@@ -191,4 +252,9 @@ class ProductController(
         const val MIN_KEYWORD_LENGTH = 2
         const val MAX_KEYWORD_LENGTH = 100
     }
+
+    private fun splitRequestValues(values: List<String>?): List<String> = values.orEmpty()
+        .flatMap { value -> value.split(",") }
+        .map(String::trim)
+        .filter(String::isNotEmpty)
 }

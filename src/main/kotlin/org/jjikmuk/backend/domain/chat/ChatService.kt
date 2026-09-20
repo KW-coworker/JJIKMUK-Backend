@@ -1,5 +1,6 @@
 package org.jjikmuk.backend.domain.chat
 
+import org.jjikmuk.backend.domain.allergy.AllergyCatalog
 import org.jjikmuk.backend.domain.product.ProductRepository
 import org.jjikmuk.backend.domain.user.UserRepository
 import org.springframework.stereotype.Service
@@ -31,7 +32,15 @@ class ChatService(
         val product = request.barcode?.let { productRepository.findFirstByBarcode(it) }
 
         // 2. AI 서버에 보낼 JSON 모양으로 조립
-        val profileDto = user?.let { ProfileDto(it.id, it.nickname, it.allergies, it.diseases, it.specialDiet, it.dislikedIngredients) }
+        val profileDto = user?.let {
+            // The current AI service still consumes Korean allergy names. Keep its wire
+            // format compatible while users are stored under stable English IDs.
+            val profile = AllergyCatalog.parse(it.allergies)
+            val allergiesForAi = (profile.ids.map { allergy -> allergy.displayName } + profile.unknownTerms)
+                .takeIf(List<String>::isNotEmpty)
+                ?.joinToString(", ")
+            ProfileDto(it.id, it.nickname, allergiesForAi, it.diseases, it.specialDiet, it.dislikedIngredients)
+        }
         val productDto = product?.let {
             ProductDto(
                 reportNo = it.reportNo,
@@ -42,6 +51,11 @@ class ChatService(
                 rawMaterialName = it.rawMaterials,
                 nutrientText = it.nutrientText,
                 allergyWarning = it.allergyWarning,
+                foodCategories = it.foodCategories,
+                foodCategoryIds = it.foodCategoryIds,
+                allergyClassification = it.allergyClassification,
+                allergyClassificationIds = it.allergyClassificationIds,
+                allergyClassificationState = it.allergyClassificationState,
                 source = it.source,
                 weight = it.totalWeight,
                 energyKcal = it.energyKcal,
