@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS product_data_import_runs (
+    import_id BIGINT NOT NULL AUTO_INCREMENT,
+    import_action VARCHAR(20) NOT NULL,
+    dataset_version VARCHAR(100) NOT NULL,
+    previous_dataset_version VARCHAR(100) NULL,
+    resource_description VARCHAR(1000) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    source_sha256 CHAR(64) NULL,
+    source_record_count BIGINT NULL,
+    non_empty_record_count BIGINT NULL,
+    empty_record_count BIGINT NULL,
+    missing_barcode_count BIGINT NULL,
+    missing_product_name_count BIGINT NULL,
+    duplicate_barcode_count BIGINT NULL,
+    staged_row_count BIGINT NULL,
+    active_row_count BIGINT NULL,
+    error_message TEXT NULL,
+    started_at DATETIME(6) NOT NULL,
+    finished_at DATETIME(6) NULL,
+    PRIMARY KEY (import_id),
+    INDEX idx_product_data_import_runs_status_started (status, started_at),
+    INDEX idx_product_data_import_runs_version (dataset_version)
+);
