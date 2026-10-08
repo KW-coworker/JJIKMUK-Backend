@@ -6,6 +6,7 @@ import org.jjikmuk.backend.domain.product.Product
 import org.jjikmuk.backend.domain.product.ProductFilter
 import org.jjikmuk.backend.domain.product.ProductDataOrigin
 import org.jjikmuk.backend.domain.user.User
+import org.jjikmuk.backend.domain.user.DietPreferenceCatalog
 import org.springframework.stereotype.Component
 import java.text.Normalizer
 
@@ -26,7 +27,16 @@ class RecommendationPolicy(
         .orEmpty()
 
     fun requiredFilters(user: User): Set<ProductFilter> {
-        val filters = ProductFilter.detectInText(user.specialDiet).toMutableSet()
+        return preferredFilters(user) + healthConstraintFilters(user)
+    }
+
+    /** Preferences may be relaxed only after safe matching products run short. */
+    fun preferredFilters(user: User): Set<ProductFilter> =
+        DietPreferenceCatalog.knownFilters(user.specialDiet)
+
+    /** Disease-derived constraints remain hard constraints in every recommendation tier. */
+    fun healthConstraintFilters(user: User): Set<ProductFilter> {
+        val filters = linkedSetOf<ProductFilter>()
         val diseases = normalize(user.diseases)
         if ("당뇨" in diseases || "혈당" in diseases) filters += ProductFilter.LOW_SUGAR
         if ("고혈압" in diseases || "혈압" in diseases) filters += ProductFilter.LOW_SODIUM

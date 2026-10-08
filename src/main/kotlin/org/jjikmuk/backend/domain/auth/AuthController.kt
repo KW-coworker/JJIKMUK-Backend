@@ -1,6 +1,8 @@
 package org.jjikmuk.backend.domain.auth
 
 import org.springframework.http.ResponseEntity
+import org.springframework.http.HttpStatus
+import org.springframework.security.core.Authentication
 import org.springframework.web.bind.annotation.*
 
 @RestController
@@ -12,30 +14,60 @@ class AuthController(
     @PostMapping("/signup")
     fun signup(@RequestBody request: SignupRequest): ResponseEntity<*> {
         val savedUser = authService.signup(request)
-        return ResponseEntity.ok(mapOf("message" to "회원가입 성공", "data" to savedUser.id))
+        return ResponseEntity.status(HttpStatus.CREATED).body(
+            mapOf("message" to "회원가입 성공", "data" to mapOf("userId" to savedUser.id))
+        )
     }
 
     @PostMapping("/login")
     fun login(@RequestBody request: LoginRequest): ResponseEntity<*> {
-        val token = authService.login(request)
-        return ResponseEntity.ok(mapOf("message" to "로그인 성공", "token" to token))
+        return ResponseEntity.ok(authService.login(request))
     }
 
     @PostMapping("/google")
     fun googleLogin(@RequestBody request: GoogleLoginRequest): ResponseEntity<*> {
-        val token = authService.googleLogin(request)
-        return ResponseEntity.ok(mapOf("message" to "구글 로그인 성공", "token" to token))
+        return ResponseEntity.ok(authService.googleLogin(request))
     }
+
+    @GetMapping("/nicknames/availability")
+    fun nicknameAvailability(@RequestParam nickname: String): ResponseEntity<*> =
+        ResponseEntity.ok(
+            mapOf(
+                "message" to "닉네임 사용 가능 여부 조회 성공",
+                "data" to authService.nicknameAvailability(nickname)
+            )
+        )
+
+    @PostMapping("/logout")
+    fun logout(authentication: Authentication): ResponseEntity<*> = ResponseEntity.ok(
+        mapOf(
+            "message" to "로그아웃 처리되었습니다. 기기에 저장된 토큰을 삭제해주세요.",
+            "data" to mapOf(
+                "userId" to authentication.principal.toString().toLong(),
+                "serverTokenRevoked" to false
+            )
+        )
+    )
     @PostMapping("/email/send")
     fun sendEmailCode(@RequestBody request: EmailSendRequest): ResponseEntity<*> {
-        emailService.sendVerificationCode(request.email)
-        return ResponseEntity.ok(mapOf("message" to "인증번호가 이메일로 발송되었습니다."))
+        val result = emailService.sendVerificationCode(request)
+        return ResponseEntity.ok(
+            mapOf(
+                "message" to "인증번호가 이메일로 발송되었습니다.",
+                "data" to result
+            )
+        )
     }
 
     @PostMapping("/email/verify")
     fun verifyEmailCode(@RequestBody request: EmailVerifyRequest): ResponseEntity<*> {
-        authService.verifyEmailCode(request)
-        return ResponseEntity.ok(mapOf("message" to "이메일 인증이 완료되었습니다."))
+        val result = emailService.verifyVerificationCode(request)
+        return ResponseEntity.ok(
+            mapOf(
+                "message" to "이메일 인증이 완료되었습니다.",
+                "data" to result
+            )
+        )
     }
 
     @PostMapping("/password/reset")

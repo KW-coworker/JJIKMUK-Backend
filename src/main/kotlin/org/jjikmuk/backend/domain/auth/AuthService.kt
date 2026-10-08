@@ -1,17 +1,22 @@
 package org.jjikmuk.backend.domain.auth
 
 import org.jjikmuk.backend.domain.allergy.AllergyCatalog
+import org.jjikmuk.backend.domain.user.AuthProvider
+import org.jjikmuk.backend.domain.user.DelimitedProfileNormalizer
+import org.jjikmuk.backend.domain.user.DietPreferenceCatalog
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
 import org.jjikmuk.backend.global.config.JwtProvider
+import org.jjikmuk.backend.global.exception.ApiErrorCode
 import org.jjikmuk.backend.global.exception.CustomException
+import org.springframework.beans.factory.annotation.Value
+import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import org.springframework.web.client.RestClient
 import java.util.UUID
-import java.time.LocalDateTime
 
 @Service
 class AuthService(
@@ -19,118 +24,262 @@ class AuthService(
     private val passwordEncoder: BCryptPasswordEncoder,
     private val jwtProvider: JwtProvider,
     private val restClient: RestClient,
-    private val emailVerificationRepository: EmailVerificationRepository,
-    private val emailService: EmailService
+    private val emailService: EmailService,
+    @Value("\${google.client-id:}") private val googleClientId: String
 ) {
     @Transactional
     fun signup(request: SignupRequest): User {
-        if (userRepository.findByEmail(request.email) != null) {
-            throw CustomException(HttpStatus.BAD_REQUEST, "이미 가입된 이메일입니다.")
-        }
-        val encodedPassword = passwordEncoder.encode(request.password)
-        val user = User(
-            email = request.email,
-            password = encodedPassword!!,
-            nickname = request.nickname,
-            allergies = normalizeAllergies(request.allergies),
-            diseases = request.diseases
+        val email = AccountInputPolicy.normalizeEmail(request.email)
+        val nickname = AccountInputPolicy.normalizeNickname(request.nickname)
+        AccountInputPolicy.validatePassword(request.password)
+        ensureEmailAvailable(email)
+        ensureNicknameAvailable(nickname)
+
+        emailService.consumeVerificationGrant(
+            emailValue = email,
+            purpose = EmailVerificationPurpose.SIGNUP,
+            rawToken = request.verificationToken
         )
-        return userRepository.save(user)
+        val user = User(
+            email = email,
+            password = passwordEncoder.encode(request.password)!!,
+            nickname = nickname,
+            allergies = normalizeAllergies(request.allergies),
+            diseases = normalizeDelimited(request.diseases, "기저질환"),
+            specialDiet = normalizeSpecialDiet(request.specialDiet),
+            dislikedIngredients = normalizeDelimited(request.dislikedIngredients, "기피 식재료"),
+            authProvider = AuthProvider.LOCAL,
+            profileCompleted = true
+        )
+        return try {
+            userRepository.saveAndFlush(user)
+        } catch (error: DataIntegrityViolationException) {
+            val duplicateEmail = error.mostSpecificCause.message
+                ?.contains("email", ignoreCase = true) == true
+            if (duplicateEmail) {
+                throw CustomException(
+                    HttpStatus.CONFLICT,
+                    "이미 가입된 이메일입니다.",
+                    ApiErrorCode.EMAIL_ALREADY_REGISTERED,
+                    "email"
+                )
+            }
+            throw CustomException(
+                HttpStatus.CONFLICT,
+                "이미 사용 중인 닉네임입니다.",
+                ApiErrorCode.NICKNAME_ALREADY_EXISTS,
+                "nickname"
+            )
+        }
     }
 
     @Transactional(readOnly = true)
-    fun login(request: LoginRequest): String {
-        val user = userRepository.findByEmail(request.email)
-            ?: throw CustomException(HttpStatus.UNAUTHORIZED, "이메일 또는 비밀번호가 일치하지 않습니다.")
-
-        if (!passwordEncoder.matches(request.password, user.password)) {
-            throw CustomException(HttpStatus.UNAUTHORIZED, "이메일 또는 비밀번호가 일치하지 않습니다.")
+    fun login(request: LoginRequest): AuthResponse {
+        val email = try {
+            AccountInputPolicy.normalizeEmail(request.email)
+        } catch (_: CustomException) {
+            throw loginFailed()
         }
-        return jwtProvider.createToken(user.id!!, user.email, user.role.name)
+        val user = userRepository.findByEmail(email) ?: throw loginFailed()
+        if (!user.authProvider.supportsPassword) {
+            throw CustomException(
+                HttpStatus.CONFLICT,
+                "Google로 가입한 계정입니다. Google 로그인을 이용해주세요.",
+                ApiErrorCode.AUTH_METHOD_NOT_SUPPORTED,
+                "email"
+            )
+        }
+        if (!passwordEncoder.matches(request.password, user.password)) throw loginFailed()
+        return issueAuthResponse(user, isNewUser = false, message = "로그인 성공")
     }
 
     @Transactional
-    fun googleLogin(request: GoogleLoginRequest): String {
-        // 🚀 2. 구글 공식 검증 서버로 토큰을 보내서 진짜인지 확인합니다.
+    fun googleLogin(request: GoogleLoginRequest): AuthResponse {
+        if (googleClientId.isBlank()) {
+            throw CustomException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Google 로그인이 아직 구성되지 않았습니다.",
+                ApiErrorCode.GOOGLE_LOGIN_UNAVAILABLE
+            )
+        }
         val googleResponse = try {
             restClient.get()
-                .uri("https://oauth2.googleapis.com/tokeninfo?id_token=${request.idToken}")
+                .uri { builder ->
+                    builder
+                        .scheme("https")
+                        .host("oauth2.googleapis.com")
+                        .path("/tokeninfo")
+                        .queryParam("id_token", request.idToken)
+                        .build()
+                }
                 .retrieve()
                 .body(Map::class.java)
-        } catch (e: Exception) {
-            throw CustomException(HttpStatus.UNAUTHORIZED, "유효하지 않은 구글 토큰입니다.")
+        } catch (_: Exception) {
+            throw invalidGoogleToken()
         }
 
-        // 🚀 3. 검증된 데이터에서 이메일을 뽑아냅니다.
-        val email = googleResponse?.get("email") as? String
-            ?: throw CustomException(HttpStatus.BAD_REQUEST, "구글 계정에서 이메일 정보를 가져올 수 없습니다.")
+        val audience = googleResponse?.get("aud") as? String
+        val verified = googleResponse?.get("email_verified")?.toString()?.toBooleanStrictOrNull() == true
+        if (audience != googleClientId || !verified) throw invalidGoogleToken()
+        val email = (googleResponse["email"] as? String)
+            ?.let(AccountInputPolicy::normalizeEmail)
+            ?: throw invalidGoogleToken()
 
-        // 🚀 4. 우리 DB에 있는 유저인지 확인합니다.
+        var isNewUser = false
         var user = userRepository.findByEmail(email)
-
-        // 🚀 5. 처음 보는 이메일이라면? -> 묻지도 따지지도 않고 자동 회원가입!
         if (user == null) {
-            // 소셜 로그인은 비밀번호가 필요 없지만, DB 제약조건(Not Null)을 통과하기 위해 절대 못 맞추는 쓰레기값을 암호화해서 넣습니다.
-            val dummyPassword = passwordEncoder.encode(UUID.randomUUID().toString())
-
+            isNewUser = true
             user = User(
                 email = email,
-                password = dummyPassword!!,
-                nickname = "구글유저_${email.substringBefore("@")}", // 이메일 앞자리를 임시 닉네임으로
+                password = passwordEncoder.encode(UUID.randomUUID().toString())!!,
+                nickname = generateUniqueGoogleNickname(),
                 allergies = null,
                 diseases = null,
                 specialDiet = null,
-                dislikedIngredients = null
+                dislikedIngredients = null,
+                authProvider = AuthProvider.GOOGLE,
+                profileCompleted = false
             )
-            user = userRepository.save(user)
+        } else {
+            user.authProvider = user.authProvider.linkGoogle()
         }
-
-        // 🚀 6. 최종적으로 우리 서비스의 JWT 토큰을 발급해서 돌려줍니다.
-        return jwtProvider.createToken(user.id!!, user.email, user.role.name)
+        user = userRepository.saveAndFlush(user)
+        return issueAuthResponse(user, isNewUser, "구글 로그인 성공")
     }
+
     @Transactional
     fun resetPassword(request: PasswordResetRequest) {
-        // 1. 해당 이메일로 가입된 유저가 있는지 확인
-        val user = userRepository.findByEmail(request.email)
-            ?: throw CustomException(HttpStatus.NOT_FOUND, "가입되지 않은 이메일입니다.")
-
-        // 2. 인증 테이블에서 번호 확인
-        val verification = emailVerificationRepository.findByEmail(request.email)
-            ?: throw CustomException(HttpStatus.BAD_REQUEST, "인증 요청 내역이 없습니다.")
-
-        if (verification.expiredAt.isBefore(LocalDateTime.now())) {
-            throw CustomException(HttpStatus.BAD_REQUEST, "인증 시간이 만료되었습니다.")
+        val email = AccountInputPolicy.normalizeEmail(request.email)
+        AccountInputPolicy.validatePassword(request.newPassword)
+        val user = userRepository.findByEmail(email)
+            ?: throw CustomException(
+                HttpStatus.NOT_FOUND,
+                "가입되지 않은 이메일입니다.",
+                ApiErrorCode.USER_NOT_FOUND,
+                "email"
+            )
+        if (!user.authProvider.supportsPassword) {
+            throw CustomException(
+                HttpStatus.CONFLICT,
+                "Google 전용 계정은 비밀번호를 재설정할 수 없습니다.",
+                ApiErrorCode.AUTH_METHOD_NOT_SUPPORTED,
+                "email"
+            )
         }
 
-        if (verification.code != request.code) {
-            throw CustomException(HttpStatus.BAD_REQUEST, "인증번호가 일치하지 않습니다.")
-        }
-
-        // 3. 인증이 완벽하게 성공했으니 새 비밀번호로 암호화하여 덮어쓰기
+        emailService.consumeVerificationGrant(
+            emailValue = email,
+            purpose = EmailVerificationPurpose.PASSWORD_RESET,
+            rawToken = request.verificationToken
+        )
         user.password = passwordEncoder.encode(request.newPassword)!!
+        user.invalidateSessions()
         userRepository.save(user)
-
-        // 4. 사용한 인증번호는 파기
-        emailVerificationRepository.delete(verification)
     }
 
-    fun verifyEmailCode(request: EmailVerifyRequest) {
-        val verification = emailVerificationRepository.findByEmail(request.email)
-            ?: throw CustomException(HttpStatus.BAD_REQUEST, "인증 요청 내역이 없습니다.")
-
-        if (verification.expiredAt.isBefore(LocalDateTime.now())) {
-            throw CustomException(HttpStatus.BAD_REQUEST, "인증 시간이 만료되었습니다.")
-        }
-
-        if (verification.code != request.code) {
-            throw CustomException(HttpStatus.BAD_REQUEST, "인증번호가 일치하지 않습니다.")
-        }
-        emailVerificationRepository.delete(verification)
+    @Transactional(readOnly = true)
+    fun nicknameAvailability(value: String): NicknameAvailabilityResponse {
+        val nickname = AccountInputPolicy.normalizeNickname(value)
+        return NicknameAvailabilityResponse(
+            nickname = nickname,
+            available = !userRepository.existsByNicknameIgnoreCase(nickname)
+        )
     }
+
+    private fun issueAuthResponse(user: User, isNewUser: Boolean, message: String): AuthResponse {
+        val issued = jwtProvider.createToken(
+            userId = requireNotNull(user.id),
+            email = user.email,
+            role = user.role.name,
+            tokenVersion = user.tokenVersion
+        )
+        return AuthResponse(
+            message = message,
+            token = issued.token,
+            userId = requireNotNull(user.id),
+            email = user.email,
+            expiresAt = issued.expiresAt,
+            expiresInSeconds = issued.expiresInSeconds,
+            isNewUser = isNewUser,
+            profileCompleted = user.profileCompleted
+        )
+    }
+
+    private fun ensureEmailAvailable(email: String) {
+        if (userRepository.findByEmail(email) != null) {
+            throw CustomException(
+                HttpStatus.CONFLICT,
+                "이미 가입된 이메일입니다. 가입 요청의 응답을 받지 못했다면 로그인을 시도해주세요.",
+                ApiErrorCode.EMAIL_ALREADY_REGISTERED,
+                "email"
+            )
+        }
+    }
+
+    private fun ensureNicknameAvailable(nickname: String) {
+        if (userRepository.existsByNicknameIgnoreCase(nickname)) {
+            throw CustomException(
+                HttpStatus.CONFLICT,
+                "이미 사용 중인 닉네임입니다.",
+                ApiErrorCode.NICKNAME_ALREADY_EXISTS,
+                "nickname"
+            )
+        }
+    }
+
+    private fun generateUniqueGoogleNickname(): String {
+        repeat(10) {
+            val candidate = "user_${UUID.randomUUID().toString().replace("-", "").take(8)}"
+            if (!userRepository.existsByNicknameIgnoreCase(candidate)) return candidate
+        }
+        throw CustomException(
+            HttpStatus.SERVICE_UNAVAILABLE,
+            "닉네임 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
+            ApiErrorCode.INTERNAL_SERVER_ERROR
+        )
+    }
+
+    private fun loginFailed() = CustomException(
+        HttpStatus.UNAUTHORIZED,
+        "이메일 또는 비밀번호가 일치하지 않습니다.",
+        ApiErrorCode.LOGIN_FAILED
+    )
+
+    private fun invalidGoogleToken() = CustomException(
+        HttpStatus.UNAUTHORIZED,
+        "유효하지 않은 Google ID 토큰입니다.",
+        ApiErrorCode.GOOGLE_TOKEN_INVALID
+    )
 
     private fun normalizeAllergies(value: String?): String? = try {
         AllergyCatalog.normalizeForStorage(value)
     } catch (error: IllegalArgumentException) {
-        throw CustomException(HttpStatus.BAD_REQUEST, error.message ?: "알레르기 ID가 올바르지 않습니다.")
+        throw CustomException(
+            HttpStatus.BAD_REQUEST,
+            error.message ?: "알레르기 ID가 올바르지 않습니다.",
+            ApiErrorCode.VALIDATION_FAILED,
+            "allergies"
+        )
+    }
+
+    private fun normalizeSpecialDiet(value: String?): String? = try {
+        DietPreferenceCatalog.normalizeForStorage(value)
+    } catch (error: IllegalArgumentException) {
+        throw CustomException(
+            HttpStatus.BAD_REQUEST,
+            error.message ?: "식이조건 ID가 올바르지 않습니다.",
+            ApiErrorCode.VALIDATION_FAILED,
+            "specialDiet"
+        )
+    }
+
+    private fun normalizeDelimited(value: String?, fieldName: String): String? = try {
+        DelimitedProfileNormalizer.normalizeForStorage(value, fieldName)
+    } catch (error: IllegalArgumentException) {
+        throw CustomException(
+            HttpStatus.BAD_REQUEST,
+            error.message ?: "${fieldName} 값이 올바르지 않습니다.",
+            ApiErrorCode.VALIDATION_FAILED
+        )
     }
 }

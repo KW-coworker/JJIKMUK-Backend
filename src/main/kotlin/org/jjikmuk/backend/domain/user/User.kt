@@ -7,6 +7,20 @@ enum class UserRole {
     USER, ADMIN
 }
 
+enum class AuthProvider {
+    LOCAL,
+    GOOGLE,
+    LOCAL_AND_GOOGLE;
+
+    val supportsPassword: Boolean
+        get() = this == LOCAL || this == LOCAL_AND_GOOGLE
+
+    fun linkGoogle(): AuthProvider = when (this) {
+        LOCAL -> LOCAL_AND_GOOGLE
+        GOOGLE, LOCAL_AND_GOOGLE -> this
+    }
+}
+
 @Entity
 @Table(name = "users")
 class User(
@@ -17,7 +31,7 @@ class User(
     @Column(nullable = false, unique = true)
     val email: String,
 
-    @Column(nullable = false)
+    @Column(nullable = false, unique = true)
     var nickname: String,
 
     @Column(length = 1000)
@@ -33,7 +47,20 @@ class User(
     @Enumerated(EnumType.STRING)
     var role: UserRole = UserRole.USER,
 
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 32)
+    var authProvider: AuthProvider = AuthProvider.LOCAL,
+
+    @Column(nullable = false)
+    var profileCompleted: Boolean = true,
+
+    @Column(nullable = false)
+    var tokenVersion: Int = 0,
+
+    @Column(length = 1000)
     var specialDiet: String? = null,
+
+    @Column(length = 1000)
     var dislikedIngredients: String? = null
 ){
     fun updateProfile(
@@ -48,5 +75,10 @@ class User(
         this.diseases = diseases
         this.specialDiet = specialDiet
         this.dislikedIngredients = dislikedIngredients
+        this.profileCompleted = true
+    }
+
+    fun invalidateSessions() {
+        tokenVersion += 1
     }
 }

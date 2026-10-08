@@ -1,6 +1,12 @@
 package org.jjikmuk.backend
 
 import org.jjikmuk.backend.domain.auth.AuthService
+import org.jjikmuk.backend.domain.auth.EmailVerificationGrant
+import org.jjikmuk.backend.domain.auth.EmailVerificationGrantRepository
+import org.jjikmuk.backend.domain.auth.EmailVerificationPurpose
+import org.jjikmuk.backend.domain.auth.EmailVerificationSecurity
+import org.jjikmuk.backend.domain.auth.LoginRequest
+import org.jjikmuk.backend.domain.auth.PasswordResetRequest
 import org.jjikmuk.backend.domain.auth.SignupRequest
 import org.jjikmuk.backend.domain.product.Product
 import org.jjikmuk.backend.domain.product.AllergyEvidenceLevel
@@ -12,6 +18,9 @@ import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
 import org.jjikmuk.backend.domain.user.UserService
 import org.jjikmuk.backend.domain.user.UserProfileRequest
+import org.jjikmuk.backend.domain.user.UserController
+import org.jjikmuk.backend.domain.user.UserProfileResponse
+import org.jjikmuk.backend.global.exception.ApiErrorCode
 import org.jjikmuk.backend.global.exception.CustomException
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -30,24 +39,83 @@ class BackendApplicationTests @Autowired constructor(
     private val userRepository: UserRepository,
     private val jdbcTemplate: JdbcTemplate,
     private val authService: AuthService,
-    private val userService: UserService
+    private val userService: UserService,
+    private val emailVerificationGrantRepository: EmailVerificationGrantRepository,
+    private val userController: UserController
 ) {
     @Test
     fun contextLoads() {
     }
 
     @Test
-    fun `signup and profile updates persist canonical allergy IDs and reject unknown entries`() {
-        val user = authService.signup(
-            SignupRequest(
+    fun `signup stores canonical allergy diet and vegetarian IDs and profile can clear them`() {
+        val verificationToken = "signup-verification-token"
+        val signupRequest = SignupRequest(
+            email = "allergy-contract-signup@example.com",
+            password = "test-password1",
+            nickname = "계약테스트",
+            allergies = "계란, 밀",
+            diseases = null,
+            specialDiet = "저당, highProtein, 락토오보",
+            dislikedIngredients = null,
+            verificationToken = verificationToken
+        )
+        emailVerificationGrantRepository.save(
+            EmailVerificationGrant(
                 email = "allergy-contract-signup@example.com",
-                password = "test-password",
-                nickname = "계약 테스트",
-                allergies = "우유, 밀가루",
-                diseases = null
+                purpose = EmailVerificationPurpose.SIGNUP,
+                tokenHash = EmailVerificationSecurity.hashToken(verificationToken),
+                expiredAt = java.time.LocalDateTime.now().plusMinutes(30),
+                createdAt = java.time.LocalDateTime.now()
             )
         )
-        assertEquals("milk,wheat", user.allergies)
+        val user = authService.signup(signupRequest)
+        assertEquals("egg,wheat", user.allergies)
+        assertEquals("lactoOvoVegetarian,lowSugar,highProtein", user.specialDiet)
+        assertEquals(null, user.diseases)
+        assertEquals(null, user.dislikedIngredients)
+
+        val login = authService.login(LoginRequest(user.email, "test-password1"))
+        assertEquals(user.id, login.userId)
+        assertEquals(user.email, login.email)
+        assertEquals(false, login.isNewUser)
+        assertEquals(true, login.profileCompleted)
+        assertEquals(86_400L, login.expiresInSeconds)
+        assertEquals(false, authService.nicknameAvailability(user.nickname).available)
+
+        val authentication = UsernamePasswordAuthenticationToken(requireNotNull(user.id), null, emptyList())
+        val profileResponse = userController.getMyProfile(authentication)
+        val profile = (profileResponse.body as Map<*, *>)["data"] as UserProfileResponse
+        assertEquals(user.id, profile.id)
+        assertEquals(user.email, profile.email)
+
+        val duplicateError = assertThrows(CustomException::class.java) {
+            authService.signup(signupRequest)
+        }
+        assertEquals(409, duplicateError.status.value())
+        assertEquals(ApiErrorCode.EMAIL_ALREADY_REGISTERED, duplicateError.code)
+        kotlin.test.assertTrue(duplicateError.message.contains("로그인"))
+
+        val duplicateNicknameEmail = "duplicate-nickname@example.com"
+        val duplicateNicknameToken = "duplicate-nickname-token"
+        emailVerificationGrantRepository.save(
+            EmailVerificationGrant(
+                email = duplicateNicknameEmail,
+                purpose = EmailVerificationPurpose.SIGNUP,
+                tokenHash = EmailVerificationSecurity.hashToken(duplicateNicknameToken),
+                expiredAt = java.time.LocalDateTime.now().plusMinutes(30),
+                createdAt = java.time.LocalDateTime.now()
+            )
+        )
+        val nicknameError = assertThrows(CustomException::class.java) {
+            authService.signup(
+                signupRequest.copy(
+                    email = duplicateNicknameEmail,
+                    verificationToken = duplicateNicknameToken
+                )
+            )
+        }
+        assertEquals(ApiErrorCode.NICKNAME_ALREADY_EXISTS, nicknameError.code)
 
         val updated = userService.updateUserProfile(
             requireNotNull(user.id),
@@ -60,6 +128,7 @@ class BackendApplicationTests @Autowired constructor(
             )
         )
         assertEquals("egg,walnut,pine_nut,almond", updated?.allergies)
+        assertEquals(null, updated?.specialDiet)
         assertThrows(CustomException::class.java) {
             userService.updateUserProfile(
                 requireNotNull(user.id),
@@ -69,6 +138,114 @@ class BackendApplicationTests @Autowired constructor(
                     diseases = null,
                     specialDiet = null,
                     dislikedIngredients = null
+                )
+            )
+        }
+
+        val conflictingDietError = assertThrows(CustomException::class.java) {
+            userService.updateUserProfile(
+                requireNotNull(user.id),
+                UserProfileRequest(
+                    nickname = user.nickname,
+                    allergies = null,
+                    diseases = null,
+                    specialDiet = "vegan,pescatarian,lowSugar",
+                    dislikedIngredients = null
+                )
+            )
+        }
+        assertEquals(400, conflictingDietError.status.value())
+
+        val cleared = userService.updateUserProfile(
+            requireNotNull(user.id),
+            UserProfileRequest(
+                nickname = user.nickname,
+                allergies = null,
+                diseases = null,
+                specialDiet = null,
+                dislikedIngredients = null
+            )
+        )
+        assertEquals(null, cleared?.allergies)
+        assertEquals(null, cleared?.diseases)
+        assertEquals(null, cleared?.specialDiet)
+        assertEquals(null, cleared?.dislikedIngredients)
+    }
+
+    @Test
+    fun `failed signup keeps an unexpired verification grant for retry`() {
+        val email = "retryable-signup@example.com"
+        val verificationToken = "retryable-signup-token"
+        emailVerificationGrantRepository.save(
+            EmailVerificationGrant(
+                email = email,
+                purpose = EmailVerificationPurpose.SIGNUP,
+                tokenHash = EmailVerificationSecurity.hashToken(verificationToken),
+                expiredAt = java.time.LocalDateTime.now().plusMinutes(30),
+                createdAt = java.time.LocalDateTime.now()
+            )
+        )
+
+        assertThrows(CustomException::class.java) {
+            authService.signup(
+                SignupRequest(
+                    email = email,
+                    password = "test-password1",
+                    nickname = "재시도사용자",
+                    allergies = "unsupported-allergen",
+                    diseases = null,
+                    verificationToken = verificationToken
+                )
+            )
+        }
+
+        val preserved = emailVerificationGrantRepository.findAll()
+            .firstOrNull { it.email == email && it.purpose == EmailVerificationPurpose.SIGNUP }
+        kotlin.test.assertNotNull(preserved)
+        kotlin.test.assertTrue(
+            EmailVerificationSecurity.tokenMatches(verificationToken, preserved.tokenHash)
+        )
+    }
+
+    @Test
+    fun `password reset consumes a purpose scoped one time verification token`() {
+        val email = "password-reset-contract@example.com"
+        val verificationToken = "password-reset-verification-token"
+        userRepository.save(
+            User(
+                email = email,
+                password = org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder()
+                    .encode("old-password")!!,
+                nickname = "비밀번호 재설정 테스트"
+            )
+        )
+        emailVerificationGrantRepository.save(
+            EmailVerificationGrant(
+                email = email,
+                purpose = EmailVerificationPurpose.PASSWORD_RESET,
+                tokenHash = EmailVerificationSecurity.hashToken(verificationToken),
+                expiredAt = java.time.LocalDateTime.now().plusMinutes(5),
+                createdAt = java.time.LocalDateTime.now()
+            )
+        )
+
+        authService.resetPassword(
+            PasswordResetRequest(
+                email = email,
+                verificationToken = verificationToken,
+                newPassword = "new-password1"
+            )
+        )
+
+        val updatedUser = requireNotNull(userRepository.findByEmail(email))
+        assertEquals(1, updatedUser.tokenVersion)
+        assertEquals(email, authService.login(LoginRequest(email, "new-password1")).email)
+        assertThrows(CustomException::class.java) {
+            authService.resetPassword(
+                PasswordResetRequest(
+                    email = email,
+                    verificationToken = verificationToken,
+                    newPassword = "another-password1"
                 )
             )
         }
