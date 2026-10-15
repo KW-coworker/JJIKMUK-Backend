@@ -47,6 +47,35 @@ class DistinctProductSearchRepository(
 
     fun activeSearchMode(): String = searchMode.name.lowercase()
 
+    /** Use exactly the same grouping expression as search, including legacy/null-key behaviour. */
+    fun findDisplayGroupMembers(reference: Product, limit: Int): List<Product> {
+        // Missing identity must not combine unrelated, unnamed legacy products.
+        if (reference.productName.isNullOrBlank()) return listOf(reference)
+        if (groupingMode == ProductGroupingMode.KEY && reference.productGroupKey == null) {
+            return listOf(reference)
+        }
+        val condition = if (groupingMode == ProductGroupingMode.KEY) {
+            // Keep the indexed column bare; COALESCE on it would defeat an equality index lookup.
+            "product_group_key = ?"
+        } else {
+            "($displayGroupExpressions) = (SELECT $displayGroupExpressions FROM products WHERE barcode = ?)"
+        }
+        val groupParameter = if (groupingMode == ProductGroupingMode.KEY) reference.productGroupKey else reference.barcode
+        val sql = """
+            SELECT barcode FROM products
+            WHERE $condition
+            ORDER BY barcode
+            LIMIT ?
+        """.trimIndent()
+        val barcodes = jdbcTemplate.query(
+            sql,
+            { resultSet, _ -> resultSet.getString("barcode") },
+            groupParameter,
+            limit
+        )
+        return findProductsInOrder(barcodes)
+    }
+
     fun searchByFilters(
         filters: Set<ProductFilter>,
         matchMode: ProductFilterMatchMode,
