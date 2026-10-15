@@ -4,6 +4,7 @@ import org.jjikmuk.backend.domain.allergy.AllergyCatalog
 import org.jjikmuk.backend.domain.allergy.AllergySafetyService
 import org.jjikmuk.backend.domain.allergy.FoodAllergy
 import org.jjikmuk.backend.domain.recommendation.SafetyStatus
+import org.jjikmuk.backend.domain.recommendation.SafetyDecision
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
 import org.springframework.stereotype.Service
@@ -132,8 +133,13 @@ class ProductService(
         )
     }
 
-    private fun analyzeProductAllergy(product: Product, user: User?): Map<String, Any> {
-        val safety = allergySafetyService.evaluate(
+    /** Read-only projection, also used by capacity options without generating SCAN history. */
+    internal fun analyzeProductAllergy(
+        product: Product,
+        user: User?,
+        safetyOverride: SafetyDecision? = null
+    ): Map<String, Any> {
+        val safety = safetyOverride ?: allergySafetyService.evaluate(
             product = product,
             allergies = user?.allergies?.let { AllergyCatalog.parse(it) }
                 ?.let { profile -> profile.ids.map { it.id } + profile.unknownTerms }

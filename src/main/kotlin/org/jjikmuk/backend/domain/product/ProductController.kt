@@ -13,8 +13,21 @@ import org.springframework.data.domain.Sort
 @RestController
 @RequestMapping("/api/products")
 class ProductController(
-    private val productService: ProductService
+    private val productService: ProductService,
+    private val productVariantService: ProductVariantService
 ) {
+    @GetMapping("/{barcode}/variants")
+    fun getCapacityVariants(
+        @PathVariable barcode: String,
+        @RequestParam(required = false) userId: Long?,
+        authentication: Authentication?
+    ): ResponseEntity<*> = ResponseEntity.ok(
+        mapOf(
+            "message" to "상품 용량 옵션 조회 성공",
+            "data" to productVariantService.getVariants(barcode, getValidatedUserId(userId, authentication))
+        )
+    )
+
     @GetMapping("/filters")
     fun getAvailableFilters(): ResponseEntity<*> = ResponseEntity.ok(
         mapOf(
