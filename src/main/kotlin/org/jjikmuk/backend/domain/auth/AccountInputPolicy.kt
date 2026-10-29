@@ -40,13 +40,13 @@ object AccountInputPolicy {
         val utf8Length = value.toByteArray(StandardCharsets.UTF_8).size
         val valid = value.length >= 8 &&
             utf8Length <= 72 &&
-            value.none(Char::isWhitespace) &&
-            value.any(Char::isLetter) &&
-            value.any(Char::isDigit)
+            value.all { it in '!'..'~' } &&
+            value.any { it in 'A'..'Z' || it in 'a'..'z' } &&
+            value.any { it in '0'..'9' }
         if (!valid) {
             throw CustomException(
                 HttpStatus.BAD_REQUEST,
-                "비밀번호는 공백 없이 영문 또는 한글 문자와 숫자를 포함한 8~72바이트여야 합니다.",
+                "비밀번호는 8자 이상, UTF-8 72바이트 이하이며 영문과 숫자를 포함해야 합니다. 공백·한글은 사용할 수 없고 ASCII 특수문자는 선택 사항입니다.",
                 ApiErrorCode.PASSWORD_INVALID,
                 "password"
             )

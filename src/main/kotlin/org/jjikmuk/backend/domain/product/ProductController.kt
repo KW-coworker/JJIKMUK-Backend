@@ -14,17 +14,46 @@ import org.springframework.data.domain.Sort
 @RequestMapping("/api/products")
 class ProductController(
     private val productService: ProductService,
-    private val productVariantService: ProductVariantService
+    private val productVariantService: ProductVariantService,
+    private val analysisSelection: org.jjikmuk.backend.domain.user.AnalysisSelectionService
 ) {
+    @GetMapping("/id/{productId}/variants")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    fun getVariantsByInternalId(@PathVariable productId: Long,
+        @RequestParam(required = false) userId: Long?, authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null): ResponseEntity<*> {
+        if (productId <= 0) throw CustomException(HttpStatus.BAD_REQUEST, "productId는 양수여야 합니다.")
+        getValidatedUserId(userId, authentication)
+        return getCapacityVariants(productService.barcodeForProductId(productId), userId, authentication, analysisMode, includeSelf, familyProfileIds)
+    }
+
+    @GetMapping("/id/{productId}")
+    fun getProductByInternalId(@PathVariable productId: Long,
+        @RequestParam(required = false) userId: Long?, authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null): ResponseEntity<*> {
+        if (productId <= 0) throw CustomException(HttpStatus.BAD_REQUEST, "productId는 양수여야 합니다.")
+        val target = getValidatedUserId(userId, authentication)
+        return ResponseEntity.ok(mapOf("message" to "조회 성공", "data" to productService.getProductAnalysisById(
+            productId, target, analysisSelection.resolve(target, analysisMode, includeSelf, familyProfileIds))))
+    }
+
     @GetMapping("/{barcode}/variants")
     fun getCapacityVariants(
         @PathVariable barcode: String,
         @RequestParam(required = false) userId: Long?,
-        authentication: Authentication?
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null
     ): ResponseEntity<*> = ResponseEntity.ok(
         mapOf(
             "message" to "상품 용량 옵션 조회 성공",
-            "data" to productVariantService.getVariants(barcode, getValidatedUserId(userId, authentication))
+            "data" to productVariantService.getVariants(barcode, getValidatedUserId(userId, authentication),
+                analysisSelection.resolve(getValidatedUserId(userId, authentication), analysisMode, includeSelf, familyProfileIds))
         )
     )
 
@@ -42,6 +71,8 @@ class ProductController(
             "message" to "상품 분류 목록 조회 성공",
             "data" to mapOf(
                 "foodCategories" to ProductFoodCategory.entries.map(ProductFoodCategory::toMetadata),
+                "categoryPolicy" to mapOf("version" to ProductCategoryPolicy.VERSION, "multiLabel" to true,
+                    "unclassifiedExclusive" to true, "substitutionUsesPurpose" to true),
                 "allergens" to FoodAllergy.entries.map { allergy ->
                     mapOf("id" to allergy.id, "label" to allergy.displayName)
                 },
@@ -64,7 +95,10 @@ class ProductController(
         @RequestParam(defaultValue = "0") page: Int,
         @RequestParam(defaultValue = "20") size: Int,
         @RequestParam(required = false) userId: Long?,
-        authentication: Authentication?
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null
     ): ResponseEntity<*> {
         val requestedFilters = splitRequestValues(filters)
         val requestedCategories = splitRequestValues(categories)
@@ -146,6 +180,7 @@ class ProductController(
         val parsedCategories = requestedCategories.mapNotNull(ProductFoodCategory::resolve).toSet()
         val parsedAllergens = requestedAllergens.mapNotNull(AllergyCatalog::resolve).toSet()
         val targetUserId = getValidatedUserId(userId, authentication)
+        val analysis = analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds)
         val pageable = PageRequest.of(
             page,
             size,
@@ -160,7 +195,8 @@ class ProductController(
             allergenMatchMode = allergenMatchMode,
             keyword = normalizedKeyword,
             pageable = pageable,
-            userId = targetUserId
+            userId = targetUserId,
+            analysis = analysis
         )
 
         val responseData = mapOf(
@@ -215,13 +251,17 @@ class ProductController(
     fun getProductByBarcode(
         @PathVariable barcode: String,
         @RequestParam(required = false) userId: Long?, // 다시 부활!
-        authentication: Authentication?
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null
     ): ResponseEntity<*> {
 
         // 🚀 검증 함수 통과 (실패 시 여기서 에러 터지고 끝남)
         val targetUserId = getValidatedUserId(userId, authentication)
 
-        val responseData = productService.getProductAnalysis(barcode, targetUserId)
+        val responseData = productService.getProductAnalysis(barcode, targetUserId,
+            analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds))
             ?: return ResponseEntity.status(404).body(mapOf("message" to "해당 바코드(${barcode})의 제품을 찾을 수 없습니다."))
 
         return ResponseEntity.ok(mapOf("message" to "조회 성공", "data" to responseData))
@@ -231,7 +271,10 @@ class ProductController(
     fun searchProducts(
         @RequestParam keyword: String,
         @RequestParam(required = false) userId: Long?, // 다시 부활!
-        authentication: Authentication?
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null
     ): ResponseEntity<*> {
         if (keyword.trim().length < 2) {
             return ResponseEntity.badRequest().body(mapOf("message" to "검색어는 2글자 이상 입력해주세요."))
@@ -245,7 +288,8 @@ class ProductController(
         // 🚀 검증 함수 통과
         val targetUserId = getValidatedUserId(userId, authentication)
 
-        val responseData = productService.searchProductsAnalysis(keyword, targetUserId)
+        val responseData = productService.searchProductsAnalysis(keyword, targetUserId,
+            analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds))
 
         if (responseData.isEmpty()) {
             return ResponseEntity.ok(

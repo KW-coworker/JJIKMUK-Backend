@@ -57,6 +57,12 @@ class User(
     @Column(nullable = false)
     var tokenVersion: Int = 0,
 
+    @Column(unique = true, length = 255)
+    var googleSubject: String? = null,
+
+    @Column(nullable = false)
+    var hasProfilePhoto: Boolean = false,
+
     @Column(length = 1000)
     var specialDiet: String? = null,
 
@@ -75,7 +81,6 @@ class User(
         this.diseases = diseases
         this.specialDiet = specialDiet
         this.dislikedIngredients = dislikedIngredients
-        this.profileCompleted = true
     }
 
     fun invalidateSessions() {

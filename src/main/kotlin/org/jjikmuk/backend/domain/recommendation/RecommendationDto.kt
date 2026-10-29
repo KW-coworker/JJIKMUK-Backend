@@ -5,6 +5,7 @@ import org.jjikmuk.backend.domain.product.AllergyEvidenceLevel
 import org.jjikmuk.backend.domain.product.ProductDataOrigin
 
 enum class SafetyStatus {
+    NOT_EVALUATED,
     PASS,
     DANGER,
     UNKNOWN
@@ -20,12 +21,30 @@ data class SafetyDecision(
 )
 
 enum class DietConstraintStatus {
+    NOT_EVALUATED,
     PASS,
     MISMATCH,
     UNKNOWN
 }
 
+enum class DietaryAttributeStatus { MET, NOT_MET, UNKNOWN }
+enum class DietaryAttributeReason {
+    STORED_CLASSIFICATION, UNRELIABLE_ORIGIN, INSUFFICIENT_CONFIDENCE, MISSING_OR_INVALID_EVIDENCE,
+    EXPLICIT_INGREDIENT_CONFLICT, AMBIGUOUS_INGREDIENT_EVIDENCE
+}
+
+data class DietaryAttributeDecision(
+    val key: String,
+    val status: DietaryAttributeStatus,
+    val storedValue: Boolean,
+    val evidenceOrigin: ProductDataOrigin,
+    val confidence: Double?,
+    val reason: DietaryAttributeReason,
+    val ingredientEvidence: List<String> = emptyList()
+)
+
 enum class RecommendationResultMode {
+    GENERAL,
     VERIFIED,
     RELAXED_SAFE,
     VERIFICATION_REQUIRED,
@@ -33,6 +52,7 @@ enum class RecommendationResultMode {
 }
 
 enum class RecommendationTier {
+    GENERAL,
     VERIFIED,
     RELAXED_SAFE,
     VERIFICATION_REQUIRED
@@ -52,7 +72,8 @@ data class DietConstraintDecision(
     val uncertainFilters: List<String>,
     val evidenceOrigin: ProductDataOrigin,
     val confidence: Double?,
-    val message: String
+    val message: String,
+    val attributes: List<DietaryAttributeDecision> = emptyList()
 )
 
 data class UserRecommendationContext(
@@ -73,7 +94,9 @@ data class RecommendationExclusionSummary(
     val unknownSafety: Int,
     val dietMismatch: Int,
     val dietUnknown: Int,
-    val dislikedIngredient: Int
+    val dislikedIngredient: Int,
+    val categoryMismatch: Int = 0,
+    val categoryUnknown: Int = 0
 )
 
 data class RecommendationScoreBreakdown(
@@ -118,7 +141,8 @@ data class RecommendedProduct(
     val recommendationTier: RecommendationTier = RecommendationTier.VERIFIED,
     val verificationRequired: Boolean = false,
     val warnings: List<String> = emptyList(),
-    val requiredActions: List<String> = emptyList()
+    val requiredActions: List<String> = emptyList(),
+    val categoryCompatibility: org.jjikmuk.backend.domain.product.CategoryCompatibilityDecision? = null
 )
 
 data class ProductRecommendationResponse(
@@ -144,5 +168,6 @@ data class ProductRecommendationResponse(
     val fallbackCandidateCount: Int = 0,
     val fallbackReason: RecommendationFallbackReason? = null,
     val requiredActions: List<String> = emptyList(),
-    val notice: String = "추천 결과는 표기 데이터 기반이며 실제 포장 라벨과 의료 전문가의 지침을 우선해야 합니다."
+    val notice: String = "추천 결과는 표기 데이터 기반이며 실제 포장 라벨과 의료 전문가의 지침을 우선해야 합니다.",
+    val analysisSelection: org.jjikmuk.backend.domain.user.AnalysisSelectionResponse? = null
 )

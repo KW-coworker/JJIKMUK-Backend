@@ -3,11 +3,17 @@
 This stage uses an expand/migrate/contract strategy so existing barcode APIs,
 history rows, and precomputed recommendation data continue to work.
 
+2026-10-28: [상품 동일성·용량·리뉴얼 기준](product-identity-policy-v1.md)을 후속 설계 기준으로 사용한다.
+아래 내용은 현재 단계의 구현 기록이다. 기존 `product_group_key`는 화면 중복 제거 키이며
+영구 상품 동일성 키가 아니다. `product_id`의 기본키 전환만으로 그룹/옵션/버전 모델이 완성되지 않는다.
+
 ## Decisions
 
 - `barcode` remains the JPA and database primary key during stage 1.
-- `product_id` is added as a generated unique internal identifier only through
-  the maintenance SQL in `db/operations/add_product_internal_id.sql`.
+- 2026-10-28: V15 adds a nullable `product_id` if absent; existing IDs remain intact.
+  Explicit batched maintenance allocates IDs. Indexing and baseline observation capture
+  follow [the staged rollout](catalog-evolution-stage1-3.md). Do not rerun the old
+  `add_product_internal_id.sql` after V15.
 - The primary-key switch and nullable barcode are deferred until the product
   importer uses a staging-table swap and preserves existing product IDs.
 - `product_group_key` is a deterministic SHA-256 key based on the four values

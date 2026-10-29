@@ -51,10 +51,14 @@ class SecurityConfig {
                         "/api/auth/signup",
                         "/api/auth/login",
                         "/api/auth/google",
+                        "/api/auth/google/link",
+                        "/api/auth/google/link/cancel",
+                        "/api/auth/refresh",
                         "/api/auth/email/**",
                         "/api/auth/password/reset",
                         "/api/auth/nicknames/availability"
                     ).permitAll()
+                    .requestMatchers("/api/admin/**").hasRole("ADMIN")
                     .requestMatchers("/api/products/**").permitAll()
                     .anyRequest().authenticated()
             }

@@ -6,6 +6,8 @@ import org.jjikmuk.backend.domain.product.ProductDataOrigin
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 
 class RecommendationOfflineEvaluatorTest {
     @Test
@@ -62,13 +64,17 @@ class RecommendationOfflineEvaluatorTest {
                     caseId = "fallback-case",
                     expectedRelevantBarcodes = setOf("FALLBACK-A"),
                     response = response,
-                    latencyMicros = 200
+                    latencyMicros = 200,
+                    expectedOutcome = ExpectedRecommendationOutcome.VERIFICATION_REQUIRED
                 )
             ),
             catalogSize = 10
         )
 
-        assertEquals(1.0, report.hitRateAtK)
+        assertEquals(0.0, report.hitRateAtK)
+        assertEquals(0, report.rankingCaseCount)
+        assertEquals(1.0, report.verificationFallbackHitRate)
+        assertEquals(1.0, report.outcomeMatchRate)
         assertEquals(0.0, report.hardConstraintViolationRate)
         assertEquals(1.0, report.unknownSafetyRate)
         assertEquals(1.0, report.verificationRequiredRate)
@@ -76,6 +82,119 @@ class RecommendationOfflineEvaluatorTest {
         assertEquals(0.0, report.emptyResponseRate)
         assertEquals(1, report.results.single().verificationRequiredItems)
         assertEquals(RecommendationResultMode.VERIFICATION_REQUIRED, report.results.single().resultMode)
+    }
+
+    @Test
+    fun `correct abstention passes despite a one hundred percent empty response rate`() {
+        val response = evaluationResponse("EMPTY", emptyList()).copy(requiredActions = listOf("라벨 확인"))
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(RecommendationEvaluationCase(
+            "abstain", emptySet(), response, 100, ExpectedRecommendationOutcome.ABSTAIN, setOf("DANGER")
+        )), 10)
+        assertEquals(1.0, report.emptyResponseRate)
+        assertEquals(0.0, report.unexpectedEmptyResponseRate)
+        assertEquals(1.0, report.correctAbstentionRate)
+        assertEquals(0, report.rankingCaseCount)
+        assertTrue(RecommendationEvaluationThresholds().passes(report))
+    }
+
+    @Test
+    fun `unexpected empty response fails but correct abstention is excluded from hit denominator`() {
+        val positive = evaluationResponse("OK", listOf("A"))
+        val empty = evaluationResponse("EMPTY", emptyList()).copy(requiredActions = listOf("라벨 확인"))
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(
+            RecommendationEvaluationCase("positive", setOf("A"), positive, 100),
+            RecommendationEvaluationCase("abstain", emptySet(), empty, 100, ExpectedRecommendationOutcome.ABSTAIN)
+        ), 10)
+        assertEquals(1.0, report.hitRateAtK)
+        assertEquals(0.5, report.emptyResponseRate)
+        assertTrue(RecommendationEvaluationThresholds().passes(report))
+        val incorrect = RecommendationOfflineEvaluator.evaluate(listOf(
+            RecommendationEvaluationCase("missing", setOf("A"), empty, 100)
+        ), 10)
+        assertEquals(1.0, incorrect.unexpectedEmptyResponseRate)
+        assertFalse(RecommendationEvaluationThresholds().passes(incorrect))
+    }
+
+    @Test
+    fun `reviewer forbidden labels catch a product the algorithm incorrectly marked PASS`() {
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(RecommendationEvaluationCase(
+            "gold-danger", setOf("A"), evaluationResponse("BAD", listOf("A", "DANGER")), 100,
+            forbiddenBarcodes = setOf("DANGER")
+        )), 10)
+        assertEquals(0.5, report.hardConstraintViolationRate)
+        assertFalse(RecommendationEvaluationThresholds().passes(report))
+    }
+
+    @Test
+    fun `unknown in the verified channel and danger in the secondary channel both fail`() {
+        val base = evaluationResponse("BROKEN", listOf("A"))
+        val unknown = base.items.single().copy(dietConstraints = base.items.single().dietConstraints.copy(status = DietConstraintStatus.UNKNOWN))
+        val danger = base.items.single().copy(product = Product(barcode = "DANGER"),
+            safety = base.items.single().safety.copy(status = SafetyStatus.DANGER))
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(RecommendationEvaluationCase(
+            "bad-channel", setOf("A"), base.copy(items = listOf(unknown), fallbackItems = listOf(danger)), 100
+        )), 10)
+        assertEquals(0.0, report.hitRateAtK)
+        assertEquals(0.5, report.hardConstraintViolationRate)
+        assertEquals(2, report.presentationViolationCount)
+        assertFalse(RecommendationEvaluationThresholds().passes(report))
+    }
+
+    @Test
+    fun `fixed K denominator penalizes omitted relevant products and duplicate hits`() {
+        val response = evaluationResponse("SHORT", listOf("A"))
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(
+            RecommendationEvaluationCase("short", setOf("A", "B"), response, 100)
+        ), 10, k = 2)
+        assertTrue(report.ndcgAtK < 1.0)
+        val duplicate = RecommendationOfflineEvaluator.evaluate(listOf(
+            RecommendationEvaluationCase("duplicate", setOf("A", "B"), evaluationResponse("DUP", listOf("A", "A")), 100)
+        ), 10, k = 2)
+        assertEquals(report.ndcgAtK, duplicate.ndcgAtK)
+        assertEquals(1, duplicate.presentationViolationCount)
+    }
+
+    @Test
+    fun `invalid ground truth labels fail explicitly`() {
+        val empty = evaluationResponse("EMPTY", emptyList())
+        assertFailsWith<IllegalArgumentException> {
+            RecommendationOfflineEvaluator.evaluate(listOf(RecommendationEvaluationCase("empty-positive", emptySet(), empty, 0)), 10)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            RecommendationOfflineEvaluator.evaluate(listOf(RecommendationEvaluationCase("contradiction", setOf("A"), empty, 0,
+                forbiddenBarcodes = setOf("A"))), 10)
+        }
+    }
+
+    @Test
+    fun `safe similarity-only fallback counts as eligible recommendation but not unknown fallback`() {
+        val base = evaluationResponse("SAFE-FALLBACK", listOf("A"))
+        val response = base.copy(items = emptyList(), resultMode = RecommendationResultMode.RELAXED_SAFE,
+            fallbackItems = listOf(base.items.single().copy(recommendationTier = RecommendationTier.RELAXED_SAFE)))
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(
+            RecommendationEvaluationCase("relaxed-safe", setOf("A"), response, 100)
+        ), 10)
+        assertEquals(1.0, report.hitRateAtK)
+        assertEquals(1.0, report.outcomeMatchRate)
+        assertTrue(RecommendationEvaluationThresholds().passes(report))
+    }
+
+    @Test
+    fun `verification fallback must contain real warnings and follow-up actions`() {
+        val base = evaluationResponse("NO-WARNING", listOf("A"))
+        val item = base.items.single().copy(
+            safety = base.items.single().safety.copy(status = SafetyStatus.UNKNOWN),
+            recommendationTier = RecommendationTier.VERIFICATION_REQUIRED, verificationRequired = true,
+            warnings = listOf(" "), requiredActions = listOf("라벨 확인")
+        )
+        val response = base.copy(items = emptyList(), fallbackItems = listOf(item), resultMode = RecommendationResultMode.VERIFICATION_REQUIRED)
+        val report = RecommendationOfflineEvaluator.evaluate(listOf(
+            RecommendationEvaluationCase("unlabelled", setOf("A"), response, 100, ExpectedRecommendationOutcome.VERIFICATION_REQUIRED)
+        ), 10)
+        assertEquals(0.0, report.hitRateAtK)
+        assertEquals(0.0, report.verificationFallbackHitRate)
+        assertEquals(1, report.presentationViolationCount)
+        assertFalse(RecommendationEvaluationThresholds().passes(report))
     }
 
     private fun evaluationResponse(requestId: String, barcodes: List<String>): ProductRecommendationResponse {

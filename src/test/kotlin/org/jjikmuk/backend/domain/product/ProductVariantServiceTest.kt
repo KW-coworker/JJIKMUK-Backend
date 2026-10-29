@@ -171,7 +171,7 @@ class ProductVariantServiceTest @Autowired constructor(
             .andExpect(jsonPath("$.data.selectedOptionKey").value("g:50"))
             .andExpect(jsonPath("$.data.options[0].amount").value(50))
             .andExpect(jsonPath("$.data.options[0].data.product.barcode").value("HTTP-01"))
-            .andExpect(jsonPath("$.data.options[0].data.analysis.status").value("UNKNOWN"))
+            .andExpect(jsonPath("$.data.options[0].data.analysis.status").value("NOT_EVALUATED"))
             .andExpect(jsonPath("$.data.options[0].data.nutrientPercents").exists())
             .andExpect(jsonPath("$.data.options[0].data.product.productGroupKey").doesNotExist())
     }

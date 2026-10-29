@@ -1,5 +1,7 @@
 # 회원가입·인증·사용자 프로필 API 명세
 
+2026-10-23 변경 상세는 [프론트 연동 v2](frontend-auth-integration-v2.md)에 있다. 사진·가족·Refresh·Google 연결·PATCH·최종 완료 API는 해당 문서를 함께 확인한다.
+
 [공통 규칙과 전체 목록](README.md). 모든 요청·응답은 별도 표시가 없으면 JSON이다. 로그인 응답은 data로 감싸지 않으며 다른 API의 응답 형태와 구분한다.
 
 ## A00. 공통 입력 규칙
@@ -8,7 +10,7 @@
 |---|---|
 | email | 필수 string. NFKC 정규화, 앞뒤 공백 제거, 소문자 변환, 이메일 형식·최대 254자 검사 |
 | nickname | 필수 string. NFKC·trim 후 2~20자, 완성형 한글·영문·숫자·밑줄 허용. 중복은 대소문자 구분 없이 검사 |
-| password / newPassword | 8자 이상, UTF-8 72바이트 이하, 문자와 숫자 각각 포함, 공백 불가. 비밀번호는 trim하지 않음 |
+| password / newPassword | 8자 이상, UTF-8 72바이트 이하, 영문과 숫자 각각 포함. ASCII 출력 가능 특수문자 선택 허용, 공백·한글·기타 Unicode 불가. trim하지 않음. 허용 범위는 v2의 추가 합의 항목 참고 |
 | allergies | 선택 string/null. 26개 영문 ID를 쉼표로 연결. 예: `egg,wheat` |
 | specialDiet | 선택 string/null. 채식 최대 1종 + 영양조건 복수 선택. 예: `lactoOvoVegetarian,lowSugar,highProtein` |
 | diseases | 선택 string/null. 실제 입력한 질환 목록. 저당 선호를 임의로 당뇨로 변환하지 않음 |
@@ -19,7 +21,7 @@
 - 선택 없음·전체 해제는 `null` 또는 `""`을 사용한다. `"없음"`은 공통 해제 값이 아니다. 알레르기·식단에서 미지원 값이면 400이다.
 - 호환용 한글 별칭을 받더라도 새 쓰기는 정규 영문 ID로 저장한다. 구형 저장 데이터 조회에는 원 문자열이 남아 있을 수 있다.
 - diseases·dislikedIngredients는 항목 최대 50개, 각 100자, 정규화 저장 문자열 최대 1000자이다. 쉼표·세미콜론·슬래시·파이프·줄바꿈을 구분자로 받으며 새 요청은 쉼표 사용을 권장한다.
-- 프로필 사진은 이번 서버 요청·응답에 포함하지 않는다.
+- 프로필 사진은 별도 `/api/users/me/photo` API로 저장하며 프로필 조회에 인증용 상대 photoUrl을 반환한다.
 
 ## A01. 이메일 인증번호 발송·재전송
 
@@ -77,7 +79,7 @@ data.email/purpose는 정규화 문자열, 두 At 필드는 시간대 없는 서
 | 429 | OTP_RATE_LIMITED | 재전송 대기·발송 횟수 제한 |
 | 500 | INTERNAL_SERVER_ERROR | 메일 발송 등 서버 오류 |
 
-429 응답에 retryAfterSeconds 등 별도 기계 판독 필드는 현재 없다. 정상 발송 응답의 resendAvailableAt을 안내에 사용한다.
+재전송 대기 429에 retryAfterSeconds와 Retry-After 헤더를 제공한다. OTP 오입력에는 remainingAttempts를 제공한다. 이메일 응답의 expiresAt/resendAvailableAt은 시간대 offset을 포함한다.
 
 ## A02. 이메일 인증번호 검증
 
@@ -167,12 +169,14 @@ data.userId는 생성된 정수 ID이다. 가입 성공 응답에는 로그인 �
 | 400 | EMAIL_INVALID / NICKNAME_INVALID / PASSWORD_INVALID | 입력 정책 위반. password 누락 기본값도 PASSWORD_INVALID로 검사 |
 | 400 | VALIDATION_FAILED | 알레르기·식단 미지원, 채식 복수 선택 등 |
 | 400 | VERIFICATION_REQUIRED | 빈 증명 또는 완료 내역 없음 |
-| 400 | VERIFICATION_TOKEN_INVALID | 증명 불일치·잘못된 이메일/목적에 사용 |
+| 400 | VERIFICATION_TOKEN_INVALID | 저장된 증명과 토큰 불일치 |
 | 410 | VERIFICATION_EXPIRED | 가입 인증 완료 증명 30분 만료 |
 | 409 | EMAIL_ALREADY_REGISTERED | 기존 이메일 |
 | 409 | NICKNAME_ALREADY_EXISTS | 중복 닉네임 |
 
 필수 verificationToken 필드 자체가 누락되면 INVALID_REQUEST_BODY이다. 실패 종류는 검증 순서에 따라 결정되므로 동일 요청에 여러 문제가 있으면 한 오류만 먼저 반환된다.
+
+증명은 이메일과 목적에 묶여 있다. 다른 이메일·목적으로 사용하여 해당 완료 내역을 찾지 못하면 VERIFICATION_REQUIRED가 될 수 있다.
 
 가입 성공 시 증명을 소비한다. 입력 오류로 가입 트랜잭션이 실패하면 유효한 증명을 보존하여 수정 후 재시도할 수 있다. 응답만 유실되었는데 서버에서 가입된 경우 재시도는 EMAIL_ALREADY_REGISTERED이며 로그인으로 진행한다.
 
@@ -198,9 +202,13 @@ POST /api/auth/login
   "userId": 42,
   "email": "user@example.com",
   "expiresAt": "2026-10-09T06:00:00Z",
-  "expiresInSeconds": 86400,
+  "expiresInSeconds": 900,
   "isNewUser": false,
-  "profileCompleted": true
+  "profileCompleted": true,
+  "refreshToken": "example-refresh-token",
+  "refreshExpiresAt": "2026-11-08T06:00:00Z",
+  "authProvider": "LOCAL",
+  "hasPassword": true
 }
 ```
 
@@ -212,9 +220,12 @@ POST /api/auth/login
 | userId | integer(Long) | 본인 ID |
 | email | string | 저장 이메일 |
 | expiresAt | string(Instant) | 로그인 토큰 만료 시각, UTC |
-| expiresInSeconds | integer | 유효시간(기본 86400초) |
+| expiresInSeconds | integer | Access 유효시간(기본 900초) |
 | isNewUser | boolean | 이메일 로그인에서는 false |
 | profileCompleted | boolean | 추가 프로필 입력 완료 여부 |
+| refreshToken | string | 회전되는 불투명 갱신 토큰 |
+| refreshExpiresAt | string(Instant) | 최초 로그인부터 고정된 갱신 만료 시각 |
+| authProvider / hasPassword | string / boolean | LOCAL, GOOGLE, LOCAL_AND_GOOGLE 및 비밀번호 지원 여부 |
 
 400 INVALID_REQUEST_BODY, 401 LOGIN_FAILED(미가입·비밀번호 불일치·잘못된 이메일), 409 AUTH_METHOD_NOT_SUPPORTED(Google 전용 계정) 등이 가능하다. 로그인 password는 과거 계정 호환을 위해 신규 가입 규칙으로 다시 검사하지 않고 저장 해시와 비교한다.
 
@@ -240,19 +251,23 @@ POST /api/auth/google
   "userId": 43,
   "email": "google-user@example.com",
   "expiresAt": "2026-10-09T06:00:00Z",
-  "expiresInSeconds": 86400,
+  "expiresInSeconds": 900,
   "isNewUser": true,
-  "profileCompleted": false
+  "profileCompleted": false,
+  "refreshToken": "example-refresh-token",
+  "refreshExpiresAt": "2026-11-08T06:00:00Z",
+  "authProvider": "GOOGLE",
+  "hasPassword": false
 }
 ```
 
-- 서버는 GOOGLE_CLIENT_ID와 aud의 일치 및 email_verified=true를 확인한다.
-- 신규 사용자는 임시 닉네임으로 자동 가입한다. `/api/users/me` 수정 성공 시 profileCompleted=true가 된다. 일반 가입 OTP를 반복할 필요는 없다.
-- 기존 일반 가입 이메일과 같으면 현재 구현은 LOCAL_AND_GOOGLE로 자동 연결한다.
+- 서버는 GOOGLE_CLIENT_ID/aud, email_verified, issuer, 만료, subject를 확인한다.
+- 신규 사용자는 임시 닉네임으로 자동 가입한다. PATCH/PUT은 profileCompleted를 바꾸지 않고 `/api/users/me/profile/complete` 최종 제출만 true로 만든다.
+- 기존 일반 가입 이메일과 같으면 GOOGLE_LINK_REQUIRED와 임시 증명을 반환한다. 비밀번호 소유 확인을 거치는 `/api/auth/google/link` 성공 전에는 계정 연결이나 서비스 로그인 토큰 발급이 없다. 상세는 v2 문서를 따른다.
 - 최초 가입 후 다시 로그인한 미완료 사용자는 isNewUser=false이고 profileCompleted=false일 수 있다. 화면 이동은 profileCompleted로 판단한다.
 - Google 전용 계정의 일반 비밀번호 로그인·찾기·변경은 지원하지 않는다. 두 방식이 연결된 계정은 기존 비밀번호 로그인이 가능하다.
 
-401 GOOGLE_TOKEN_INVALID(검증 실패, 현재 Google 검증 요청 예외도 이 코드), 503 GOOGLE_LOGIN_UNAVAILABLE(서버 Client ID 미설정), 공통 400/500 등이 가능하다.
+401 GOOGLE_TOKEN_INVALID(검증 실패), 503 GOOGLE_LOGIN_UNAVAILABLE(Client ID 미설정 또는 Google 인증 서비스 연결 장애), 공통 400/500 등이 가능하다.
 
 ## A06. 비밀번호 재설정
 
@@ -309,11 +324,11 @@ Authorization: Bearer {token}
 ```json
 {
   "message": "로그아웃 처리되었습니다. 기기에 저장된 토큰을 삭제해주세요.",
-  "data": {"userId":42,"serverTokenRevoked":false}
+  "data": {"userId":42,"serverTokenRevoked":true}
 }
 ```
 
-이 API는 서버에서 JWT를 폐기하지 않는다. 프론트가 저장된 토큰·로그인 상태를 삭제해야 한다. 요청 실패 시에도 사용자의 로컬 로그아웃 처리를 진행할 수 있다. 만료·무효·미로그인은 공통 401이다.
+현재 기기 서버 세션과 Access/Refresh를 폐기한다. 앱도 저장 토큰을 삭제한다. 구형 sid 없는 JWT는 모든 세션을 폐기한다. 실패해도 로컬 로그아웃은 가능하지만 서버 폐기 완료로 단정하지 않는다. 만료 Access는 갱신 후 로그아웃해야 한다.
 
 ## U01. 내 프로필 조회 / 기존 ID 조회
 
@@ -405,13 +420,13 @@ nickname만 필수이고 선택 4개 필드는 생략 가능하지만, **생략�
 }
 ```
 
-응답 data는 U01 전체 프로필이다. 저장 성공 시 profileCompleted=true가 된다. 모든 조건 해제 요청은 다음과 같다.
+응답 data는 U01 전체 프로필에 hasPassword와 photoUrl을 추가한 모델이다. PUT/PATCH는 profileCompleted를 바꾸지 않는다. 모든 조건 해제 요청은 다음과 같다.
 
 ```json
 {"nickname":"찍먹_user2","allergies":null,"diseases":null,"specialDiet":null,"dislikedIngredients":null}
 ```
 
-오류: 400 NICKNAME_INVALID / VALIDATION_FAILED / INVALID_REQUEST_BODY, 401 인증 오류, 403 ACCESS_DENIED, 404 USER_NOT_FOUND, 409 NICKNAME_ALREADY_EXISTS이다. diseases/dislikedIngredients의 일부 검증 오류에는 field가 없을 수 있다. PATCH는 현재 미구현이다.
+오류: 400 NICKNAME_INVALID / VALIDATION_FAILED / INVALID_REQUEST_BODY, 401 인증 오류, 403 ACCESS_DENIED, 404 USER_NOT_FOUND, 409 NICKNAME_ALREADY_EXISTS이다. diseases/dislikedIngredients의 일부 검증 오류에는 field가 없을 수 있다. PATCH는 v2에서 추가했으며 생략 필드를 보존한다.
 
 ## U03. 로그인 상태에서 비밀번호 변경
 
@@ -447,7 +462,7 @@ Authorization: Bearer {token}
 {"message":"회원 탈퇴 성공","data":null}
 ```
 
-계정·행동 이력·추천 피드백을 삭제하고 추천 로그의 사용자 연결을 제거한다. 로컬 사진·가족 데이터를 서버가 삭제하지 않으므로 앱이 계정별 로컬 데이터를 별도로 처리한다. 403 ACCESS_DENIED, 404 USER_NOT_FOUND 및 공통 401/500을 처리한다.
+계정·행동 이력·추천 피드백·서버 세션·Refresh·연결 증명·서버 사진·서버 가족을 삭제하고 추천 로그의 사용자 연결을 제거한다. 남아 있는 구형 로컬 캐시는 앱이 계정별로 처리한다. 403 ACCESS_DENIED, 404 USER_NOT_FOUND 및 공통 401/500을 처리한다.
 
 ## U05. 전체 사용자 조회(관리자)
 

@@ -9,15 +9,18 @@ import org.springframework.http.HttpStatus
 import java.time.LocalDateTime
 
 data class UserActionEventRequest(
-    val barcode: String,
-    val actionType: String
+    val barcode: String? = null,
+    val actionType: String,
+    val productId: Long? = null
 )
 
 data class UserActionEventResponse(
     val eventId: Long,
     val barcode: String,
     val actionType: String,
-    val createdAt: LocalDateTime
+    val createdAt: LocalDateTime,
+    val productId: Long? = null,
+    val attributeSnapshotId: Long? = null
 )
 
 @Service
@@ -33,21 +36,28 @@ class HistoryService(
 
         // 2. 기록 속 바코드를 이용해 상품 정보를 찾고, 아까 만든 DTO(바구니)에 담아 반환합니다.
         return histories.map { history ->
-            val product = productRepository.findFirstByBarcode(history.barcode)
+            val internalId = history.productId
+            val product = if (internalId != null) productRepository.findByProductId(internalId)
+                else if (history.barcode.startsWith("NO_BARCODE_ROW_")) null
+                else productRepository.findFirstByBarcode(history.barcode)
 
             HistoryResponse(
                 id = history.id!!,
                 actionType = history.actionType.name,
                 scannedAt = history.createdAt,
-                product = product // 여기서 합체!
+                product = product,
+                productId = history.productId,
+                attributeSnapshotId = history.attributeSnapshotId,
+                identityStatus = if (history.productId == null) "LEGACY_VERSION_UNKNOWN" else if (product == null) "NOT_IN_ACTIVE_DATASET" else "INTERNAL_ID"
             )
         }
     }
 
     @Transactional
     fun recordAction(userId: Long, request: UserActionEventRequest): UserActionEventResponse {
-        val barcode = request.barcode.trim()
-        if (barcode.isBlank() || barcode.length > 32) {
+        val barcode = request.barcode?.trim()
+        if ((barcode == null && request.productId == null) || (barcode != null && (barcode.isBlank() || barcode.length > 32)) ||
+            (request.productId != null && request.productId <= 0)) {
             throw CustomException(HttpStatus.BAD_REQUEST, "바코드 형식이 올바르지 않습니다.")
         }
         val actionType = UserActionType.fromRequest(request.actionType)
@@ -58,18 +68,22 @@ class HistoryService(
         val user = userRepository.findById(userId).orElseThrow {
             CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.")
         }
-        if (!productRepository.existsById(barcode)) {
-            throw CustomException(HttpStatus.NOT_FOUND, "해당 바코드($barcode)의 제품을 찾을 수 없습니다.")
-        }
+        val product = if (request.productId != null) productRepository.findByProductId(request.productId)
+            else productRepository.findFirstByBarcode(requireNotNull(barcode))
+        if (product == null) throw CustomException(HttpStatus.NOT_FOUND, "해당 제품을 찾을 수 없습니다.")
+        if (barcode != null && barcode != product.barcode) throw CustomException(HttpStatus.BAD_REQUEST, "productId와 barcode가 서로 다른 상품을 가리킵니다.")
 
         val saved = historyRepository.save(
-            History(user = user, barcode = barcode, actionType = actionType)
+            History(user = user, barcode = product.barcode, actionType = actionType,
+                productId = product.productId, attributeSnapshotId = product.attributeSnapshotId)
         )
         return UserActionEventResponse(
             eventId = requireNotNull(saved.id),
             barcode = saved.barcode,
             actionType = saved.actionType.name,
-            createdAt = saved.createdAt
+            createdAt = saved.createdAt,
+            productId = saved.productId,
+            attributeSnapshotId = saved.attributeSnapshotId
         )
     }
 }

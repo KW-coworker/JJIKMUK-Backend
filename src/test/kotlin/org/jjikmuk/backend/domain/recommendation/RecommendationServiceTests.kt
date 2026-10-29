@@ -57,6 +57,7 @@ class RecommendationServiceTests @Autowired constructor(
             manufacturer = "육류 제조사",
             rawMaterials = "돼지고기, 정제소금",
             vegan = false,
+            dietaryDataConfidence = 0.8,
             allergyEvidenceLevel = AllergyEvidenceLevel.DECLARED_LABEL
         )
         val dietUnknown = Product(
@@ -85,6 +86,7 @@ class RecommendationServiceTests @Autowired constructor(
             rawMaterials = "대두, 쌀, 소금",
             proteinG = 10.0,
             vegan = true,
+            dietaryDataConfidence = 0.8,
             allergyEvidenceLevel = AllergyEvidenceLevel.DECLARED_LABEL
         )
         val preferredOat = Product(
@@ -95,6 +97,7 @@ class RecommendationServiceTests @Autowired constructor(
             rawMaterials = "귀리, 쌀, 소금",
             proteinG = 8.0,
             vegan = true,
+            dietaryDataConfidence = 0.8,
             allergyEvidenceLevel = AllergyEvidenceLevel.DECLARED_LABEL
         )
         productRepository.saveAll(
@@ -327,6 +330,7 @@ class RecommendationServiceTests @Autowired constructor(
             productName = "식단 불일치 상품",
             rawMaterials = "쌀, 소금",
             vegan = false,
+            dietaryDataConfidence = 0.8,
             allergyEvidenceLevel = AllergyEvidenceLevel.INGREDIENT_DERIVED
         )
         productRepository.saveAll(listOf(reference, danger, dietMismatch))

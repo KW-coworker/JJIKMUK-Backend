@@ -36,14 +36,16 @@ class EmailService(
                 throw CustomException(
                     HttpStatus.TOO_MANY_REQUESTS,
                     "인증번호는 ${retryAfter}초 후에 다시 요청할 수 있습니다.",
-                    ApiErrorCode.OTP_RATE_LIMITED
+                    ApiErrorCode.OTP_RATE_LIMITED,
+                    retryAfterSeconds = retryAfter
                 )
             }
             if (existing.sendCount >= EmailVerificationPolicy.MAX_SENDS_PER_CODE_WINDOW) {
                 throw CustomException(
                     HttpStatus.TOO_MANY_REQUESTS,
                     "인증번호 재전송 횟수를 초과했습니다. 기존 인증번호 만료 후 다시 요청해주세요.",
-                    ApiErrorCode.OTP_RATE_LIMITED
+                    ApiErrorCode.OTP_RATE_LIMITED,
+                    retryAfterSeconds = Duration.between(now, existing.expiredAt).seconds.coerceAtLeast(1)
                 )
             }
         }
@@ -76,9 +78,10 @@ class EmailService(
         return EmailCodeDeliveryResponse(
             email = email,
             purpose = purpose.id,
-            expiresAt = expiresAt,
+            expiresAt = expiresAt.atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime(),
             expiresInSeconds = EmailVerificationPolicy.CODE_EXPIRATION_SECONDS,
             resendAvailableAt = now.plusSeconds(EmailVerificationPolicy.RESEND_COOLDOWN_SECONDS)
+                .atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime()
         )
     }
 
@@ -116,7 +119,8 @@ class EmailService(
             throw CustomException(
                 HttpStatus.TOO_MANY_REQUESTS,
                 "인증 시도 횟수를 초과했습니다. 인증번호를 다시 요청해주세요.",
-                ApiErrorCode.OTP_RATE_LIMITED
+                ApiErrorCode.OTP_RATE_LIMITED,
+                remainingAttempts = 0
             )
         }
         if (verification.code != request.code) {
@@ -127,7 +131,8 @@ class EmailService(
                 throw CustomException(
                     HttpStatus.TOO_MANY_REQUESTS,
                     "인증 시도 횟수를 초과했습니다. 인증번호를 다시 요청해주세요.",
-                    ApiErrorCode.OTP_RATE_LIMITED
+                    ApiErrorCode.OTP_RATE_LIMITED,
+                    remainingAttempts = 0
                 )
             }
             emailVerificationRepository.save(verification)
@@ -135,7 +140,8 @@ class EmailService(
                 HttpStatus.BAD_REQUEST,
                 "인증번호가 일치하지 않습니다. 남은 시도 횟수: ${remaining}회",
                 ApiErrorCode.OTP_INVALID,
-                "code"
+                "code",
+                remainingAttempts = remaining
             )
         }
 
@@ -163,7 +169,7 @@ class EmailService(
             email = email,
             purpose = purpose.id,
             verificationToken = rawToken,
-            expiresAt = grantExpiresAt,
+            expiresAt = grantExpiresAt.atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime(),
             expiresInSeconds = grantExpirationSeconds
         )
     }

@@ -36,11 +36,14 @@ LLM은 이 결과와 근거를 설명하는 역할만 맡으며 안전 판정이
 주요 동의어를 판정한다. `밀`이 `밀크`나 `메밀`에 잘못 걸리지 않도록 단일 글자
 경계를 별도로 처리했다.
 
-식단 판정은 `PASS`, `MISMATCH`, `UNKNOWN`을 사용한다. 플래그가 거짓이면
-`MISMATCH`, 플래그가 참이어도 판정 원본·신뢰도·필요 원재료/영양값이 부족하면
-`UNKNOWN`이다. `MISMATCH`는 항상 제외하고, `UNKNOWN`은 엄격 추천에서 제외하되 명시적
+식단 판정은 `PASS`, `MISMATCH`, `UNKNOWN`을 사용한다. v5부터 true/false보다 먼저
+근거를 확인한다. 출처·저장 신뢰도·해당 속성의 원재료/영양 근거가 부족하면 Boolean 값과 무관하게
+`UNKNOWN`이다. 근거가 유효한 true는 `MET`, false는 `NOT_MET`이며 개별 판정을 `attributes`로 반환한다.
+`MISMATCH`는 항상 제외하고, `UNKNOWN`은 엄격 추천에서 제외하되 명시적
 불일치가 없는 경우에만 확인 필요 대안 후보가 될 수 있다. 예를 들어 저당은
-`is_low_sugar=true`뿐 아니라 실제 `sugar_g` 값도 있어야 통과한다.
+`is_low_sugar=true`뿐 아니라 유효한 `sugar_g`와 영양 출처도 있어야 통과한다.
+홈 추천도 specialDiet와 질병 파생 조건의 합집합을 필수로 적용하며 더 이상 specialDiet를 완화하지 않는다.
+상세 기준 및 기존 데이터 한계는 [v5 변경사항](recommendation-policy-v5.md)을 따른다.
 
 빈 화면 방지를 위한 반환 우선순위는 다음과 같다.
 
@@ -173,12 +176,16 @@ V5 마이그레이션은 추천 실행 로그, 피드백, 평가셋, 평가 결�
 .\gradlew.bat bootRun --args='--spring.profiles.active=recommendation-evaluation'
 ```
 
-측정 지표는 Hit@K, MRR, NDCG@K, hard-constraint 위반률, UNKNOWN 노출률,
-검증 필요 노출률, fallback 사용 케이스 비율, 화면상 빈 응답률, catalog coverage,
-평균/p95 지연 시간이다. `DANGER`와 식단 `MISMATCH`만 hard-constraint 위반으로 집계하고,
-명시적으로 경고한 UNKNOWN은 검증 필요 노출률로 따로 측정한다. 화면상 빈 응답률 기본
-상한은 0이며 검증 필요 노출률 상한은 환경변수로 조정한다. 평가셋이 없으면 실행을
-중단해 의미 없는 성공값을 남기지 않는다.
+v5 평가셋은 RECOMMENDATION / VERIFICATION_REQUIRED / ABSTAIN 기대 결과와 독립 검수 금지 바코드를 가진다.
+Hit@K·MRR·NDCG@K는 추천이 가능한 정답 사례의 PASS/PASS 결과에서만 계산한다.
+UNKNOWN 확인 필요 대안의 적중률은 별도이며, 올바른 빈 응답은 실패가 아니다.
+전체 빈 응답률은 관찰용으로 유지하고, 예상하지 못한 빈 응답률·기대 결과 일치율·올바른 보류율을 추가한다.
+자체 DANGER/MISMATCH 외에 검수자가 금지한 바코드 노출도 제약 위반으로 집계한다.
+검증 채널에 UNKNOWN을 넣거나 경고 없이 확인 필요 대안을 반환하는 표시 규칙 위반도 실패이다.
+기본 품질 게이트는 제약/표시 위반 0, 기대 결과 일치율 100%, 예상 밖 빈 응답 0,
+추천 정답 사례 Hit@K >= 0.30, NDCG@K >= 0.15, p95 <= 1000ms이다.
+이는 프로젝트 초기 검증 기준이지 의학적 안전성이나 운영 성능을 보장하는 기준은 아니다.
+평가셋이 없으면 실행을 중단한다. 평가 테이블 확장에는 V13이 필요하다.
 
 ## 적용 순서
 

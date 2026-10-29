@@ -13,7 +13,8 @@ import org.springframework.web.bind.annotation.RestController
 @RestController
 @RequestMapping("/api/products")
 class SafeProductRecommendationController(
-    private val service: SafeProductRecommendationService
+    private val service: SafeProductRecommendationService,
+    private val analysisSelection: org.jjikmuk.backend.domain.user.AnalysisSelectionService
 ) {
     @GetMapping("/safe-recommendations")
     fun getSafeRecommendations(
@@ -23,7 +24,10 @@ class SafeProductRecommendationController(
         @RequestParam(required = false) excludeBarcodes: List<String>?,
         @RequestParam(required = false) categories: List<String>?,
         @RequestParam(required = false) userId: Long?,
-        authentication: Authentication?
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null
     ): ResponseEntity<*> {
         val requestedCategories = splitRequestValues(categories)
         val unknownCategories = requestedCategories.filter { ProductFoodCategory.resolve(it) == null }
@@ -34,6 +38,7 @@ class SafeProductRecommendationController(
             )
         }
         val targetUserId = validatedUserId(userId, authentication)
+        val analysis = analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds)
         val result = try {
             service.recommend(
                 userId = targetUserId,
@@ -41,7 +46,8 @@ class SafeProductRecommendationController(
                 cursor = cursor,
                 seed = seed,
                 excludedBarcodes = splitRequestValues(excludeBarcodes).toSet(),
-                requestedCategories = requestedCategories.mapNotNull(ProductFoodCategory::resolve).toSet()
+                requestedCategories = requestedCategories.mapNotNull(ProductFoodCategory::resolve).toSet(),
+                analysis = analysis
             )
         } catch (exception: IllegalArgumentException) {
             throw CustomException(
@@ -50,6 +56,7 @@ class SafeProductRecommendationController(
             )
         }
         val message = when (result.recommendationMode) {
+            SafeRecommendationMode.GENERAL -> "개인 조건을 적용하지 않은 일반 상품 조회 성공"
             SafeRecommendationMode.PREFERENCE_MATCHED -> "맞춤 안심 상품 추천 성공"
             SafeRecommendationMode.MIXED -> "선호 조건을 우선 적용하고 일부 완화한 안심 상품 추천 성공"
             SafeRecommendationMode.PREFERENCE_RELAXED -> "안전 조건을 유지하고 선호 조건을 완화한 상품을 추천합니다."

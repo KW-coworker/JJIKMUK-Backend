@@ -33,8 +33,8 @@ class RecommendationEvaluationRunner(
     private val minimumNdcg: Double,
     @Value("\${recommendation.evaluation.maximum-verification-required-rate:1.0}")
     private val maximumVerificationRequiredRate: Double,
-    @Value("\${recommendation.evaluation.maximum-empty-response-rate:0.0}")
-    private val maximumEmptyResponseRate: Double,
+    @Value("\${recommendation.evaluation.maximum-unexpected-empty-response-rate:0.0}")
+    private val maximumUnexpectedEmptyResponseRate: Double,
     @Value("\${recommendation.evaluation.maximum-p95-ms:1000}")
     private val maximumP95Ms: Long
 ) {
@@ -58,11 +58,13 @@ class RecommendationEvaluationRunner(
                 caseId = definition.caseId,
                 expectedRelevantBarcodes = definition.expectedRelevantBarcodes,
                 response = response,
-                latencyMicros = (System.nanoTime() - startedAt) / 1_000
+                latencyMicros = (System.nanoTime() - startedAt) / 1_000,
+                expectedOutcome = definition.expectedOutcome,
+                forbiddenBarcodes = definition.forbiddenBarcodes
             )
         }
         val catalogSize = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products", Long::class.java) ?: 0L
-        val report = RecommendationOfflineEvaluator.evaluate(cases, catalogSize)
+        val report = RecommendationOfflineEvaluator.evaluate(cases, catalogSize, limit)
         val passed = passesThresholds(report)
         val runId = saveRun(report, passed)
         saveResults(runId, report.results)
@@ -83,11 +85,19 @@ class RecommendationEvaluationRunner(
             report.catalogCoverage,
             report.p95LatencyMicros
         )
+        logger.info(
+            "평가 정답 대조: rankingCases={}, abstentionCases={}, verificationCases={}, outcomeMatchRate={}, " +
+                "correctAbstentionRate={}, unexpectedEmptyRate={}, presentationViolations={}, verificationFallbackHitRate={}",
+            report.rankingCaseCount, report.abstentionCaseCount, report.verificationCaseCount,
+            report.outcomeMatchRate, report.correctAbstentionRate, report.unexpectedEmptyResponseRate,
+            report.presentationViolationCount, report.verificationFallbackHitRate
+        )
         require(passed) {
             "Recommendation quality gate failed: Hit@K=${report.hitRateAtK}, " +
                 "NDCG=${report.ndcgAtK}, violations=${report.hardConstraintViolationRate}, " +
                 "verificationRequired=${report.verificationRequiredRate}, " +
-                "empty=${report.emptyResponseRate}, p95Micros=${report.p95LatencyMicros}"
+                "unexpectedEmpty=${report.unexpectedEmptyResponseRate}, outcomeMatch=${report.outcomeMatchRate}, " +
+                "presentationViolations=${report.presentationViolationCount}, p95Micros=${report.p95LatencyMicros}"
         }
     }
 
@@ -99,15 +109,15 @@ class RecommendationEvaluationRunner(
         require(maximumVerificationRequiredRate in 0.0..1.0) {
             "maximum-verification-required-rate must be between 0 and 1"
         }
-        require(maximumEmptyResponseRate in 0.0..1.0) {
-            "maximum-empty-response-rate must be between 0 and 1"
+        require(maximumUnexpectedEmptyResponseRate in 0.0..1.0) {
+            "maximum-unexpected-empty-response-rate must be between 0 and 1"
         }
         require(maximumP95Ms > 0) { "maximum-p95-ms must be positive" }
     }
 
     private fun loadCases(): List<EvaluationCaseDefinition> = jdbcTemplate.query(
         """
-        SELECT case_id, user_id, reference_barcode, expected_relevant_barcodes
+        SELECT case_id, user_id, reference_barcode, expected_relevant_barcodes, expected_outcome, forbidden_barcodes
         FROM product_recommendation_evaluation_cases
         WHERE active = TRUE
         ORDER BY case_id
@@ -117,24 +127,22 @@ class RecommendationEvaluationRunner(
             .split(',')
             .map(String::trim)
             .filterTo(linkedSetOf(), String::isNotEmpty)
-        require(expected.isNotEmpty()) {
-            "추천 평가 case ${resultSet.getString("case_id")}의 관련 상품 정답이 비어 있습니다."
-        }
         EvaluationCaseDefinition(
             caseId = resultSet.getString("case_id"),
             userId = resultSet.getLong("user_id"),
             referenceBarcode = resultSet.getString("reference_barcode"),
-            expectedRelevantBarcodes = expected
+            expectedRelevantBarcodes = expected,
+            expectedOutcome = ExpectedRecommendationOutcome.valueOf(resultSet.getString("expected_outcome")),
+            forbiddenBarcodes = resultSet.getString("forbidden_barcodes").orEmpty()
+                .split(',').map(String::trim).filterTo(linkedSetOf(), String::isNotEmpty)
         )
     }
 
     private fun passesThresholds(report: RecommendationEvaluationReport): Boolean =
-        report.hitRateAtK >= minimumHitRate &&
-            report.ndcgAtK >= minimumNdcg &&
-            report.hardConstraintViolationRate == 0.0 &&
-            report.verificationRequiredRate <= maximumVerificationRequiredRate &&
-            report.emptyResponseRate <= maximumEmptyResponseRate &&
-            report.p95LatencyMicros <= maximumP95Ms * 1_000
+        RecommendationEvaluationThresholds(
+            minimumHitRate, minimumNdcg, maximumVerificationRequiredRate,
+            maximumUnexpectedEmptyResponseRate, maximumP95Ms
+        ).passes(report)
 
     private fun saveRun(report: RecommendationEvaluationReport, passed: Boolean): Long {
         val keyHolder = GeneratedKeyHolder()
@@ -146,8 +154,11 @@ class RecommendationEvaluationRunner(
                      mean_reciprocal_rank, ndcg_at_k, hard_constraint_violation_rate,
                      unknown_safety_rate, verification_required_rate, fallback_case_rate,
                      empty_response_rate, catalog_coverage, average_result_count,
-                     average_latency_micros, p95_latency_micros, passed, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     average_latency_micros, p95_latency_micros, passed, created_at,
+                     ranking_case_count, abstention_case_count, verification_case_count,
+                     outcome_match_rate, correct_abstention_rate, unexpected_empty_response_rate,
+                     presentation_violation_count, verification_fallback_hit_rate, evaluation_k)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
                 Statement.RETURN_GENERATED_KEYS
             ).apply {
@@ -168,6 +179,15 @@ class RecommendationEvaluationRunner(
                 setLong(15, report.p95LatencyMicros)
                 setBoolean(16, passed)
                 setObject(17, LocalDateTime.now())
+                setInt(18, report.rankingCaseCount)
+                setInt(19, report.abstentionCaseCount)
+                setInt(20, report.verificationCaseCount)
+                setDouble(21, report.outcomeMatchRate)
+                setObject(22, report.correctAbstentionRate)
+                setDouble(23, report.unexpectedEmptyResponseRate)
+                setInt(24, report.presentationViolationCount)
+                setObject(25, report.verificationFallbackHitRate)
+                setInt(26, report.k)
             }
         }, keyHolder)
         return requireNotNull(keyHolder.key).toLong()
@@ -181,8 +201,9 @@ class RecommendationEvaluationRunner(
                     (evaluation_run_id, case_id, first_relevant_rank, result_count,
                      fallback_result_count, hard_constraint_violations, unknown_safety_items,
                      verification_required_items, empty_response, result_mode, latency_micros,
-                     result_barcodes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     result_barcodes, expected_outcome, outcome_matched, unexpected_empty,
+                     presentation_violations, fallback_relevant, ndcg_at_k)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent(),
                 runId,
                 result.caseId,
@@ -195,7 +216,13 @@ class RecommendationEvaluationRunner(
                 result.emptyResponse,
                 result.resultMode.name,
                 result.latencyMicros,
-                result.resultBarcodes.joinToString(",")
+                result.resultBarcodes.joinToString(","),
+                result.expectedOutcome.name,
+                result.outcomeMatched,
+                result.unexpectedEmpty,
+                result.presentationViolations,
+                result.fallbackRelevant,
+                result.ndcgAtK
             )
         }
     }
@@ -204,7 +231,9 @@ class RecommendationEvaluationRunner(
         val caseId: String,
         val userId: Long,
         val referenceBarcode: String,
-        val expectedRelevantBarcodes: Set<String>
+        val expectedRelevantBarcodes: Set<String>,
+        val expectedOutcome: ExpectedRecommendationOutcome,
+        val forbiddenBarcodes: Set<String>
     )
 
     private companion object {

@@ -6,26 +6,23 @@ import org.jjikmuk.backend.domain.user.DelimitedProfileNormalizer
 import org.jjikmuk.backend.domain.user.DietPreferenceCatalog
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
-import org.jjikmuk.backend.global.config.JwtProvider
 import org.jjikmuk.backend.global.exception.ApiErrorCode
 import org.jjikmuk.backend.global.exception.CustomException
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import org.springframework.web.client.RestClient
 import java.util.UUID
 
 @Service
 class AuthService(
     private val userRepository: UserRepository,
     private val passwordEncoder: BCryptPasswordEncoder,
-    private val jwtProvider: JwtProvider,
-    private val restClient: RestClient,
-    private val emailService: EmailService,
-    @Value("\${google.client-id:}") private val googleClientId: String
+    private val sessions: AuthSessionService,
+    private val googleVerifier: GoogleIdentityVerifier,
+    private val linkGrants: GoogleLinkGrantRepository,
+    private val emailService: EmailService
 ) {
     @Transactional
     fun signup(request: SignupRequest): User {
@@ -73,14 +70,15 @@ class AuthService(
         }
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     fun login(request: LoginRequest): AuthResponse {
         val email = try {
             AccountInputPolicy.normalizeEmail(request.email)
         } catch (_: CustomException) {
             throw loginFailed()
         }
-        val user = userRepository.findByEmail(email) ?: throw loginFailed()
+        val userId = userRepository.idForEmail(email) ?: throw loginFailed()
+        val user = userRepository.lockById(userId) ?: throw loginFailed()
         if (!user.authProvider.supportsPassword) {
             throw CustomException(
                 HttpStatus.CONFLICT,
@@ -94,39 +92,16 @@ class AuthService(
     }
 
     @Transactional
-    fun googleLogin(request: GoogleLoginRequest): AuthResponse {
-        if (googleClientId.isBlank()) {
-            throw CustomException(
-                HttpStatus.SERVICE_UNAVAILABLE,
-                "Google 로그인이 아직 구성되지 않았습니다.",
-                ApiErrorCode.GOOGLE_LOGIN_UNAVAILABLE
-            )
+    fun googleLogin(request: GoogleLoginRequest): Any {
+        val identity = googleVerifier.verify(request.idToken)
+        val bySubject = userRepository.idForGoogleSubject(identity.subject)
+        if (bySubject != null) {
+            val locked = userRepository.lockById(bySubject) ?: throw invalidGoogleToken()
+            return issueAuthResponse(locked, false, "구글 로그인 성공")
         }
-        val googleResponse = try {
-            restClient.get()
-                .uri { builder ->
-                    builder
-                        .scheme("https")
-                        .host("oauth2.googleapis.com")
-                        .path("/tokeninfo")
-                        .queryParam("id_token", request.idToken)
-                        .build()
-                }
-                .retrieve()
-                .body(Map::class.java)
-        } catch (_: Exception) {
-            throw invalidGoogleToken()
-        }
-
-        val audience = googleResponse?.get("aud") as? String
-        val verified = googleResponse?.get("email_verified")?.toString()?.toBooleanStrictOrNull() == true
-        if (audience != googleClientId || !verified) throw invalidGoogleToken()
-        val email = (googleResponse["email"] as? String)
-            ?.let(AccountInputPolicy::normalizeEmail)
-            ?: throw invalidGoogleToken()
-
+        val email = identity.email
         var isNewUser = false
-        var user = userRepository.findByEmail(email)
+        var user = userRepository.idForEmail(email)?.let(userRepository::lockById)
         if (user == null) {
             isNewUser = true
             user = User(
@@ -138,20 +113,68 @@ class AuthService(
                 specialDiet = null,
                 dislikedIngredients = null,
                 authProvider = AuthProvider.GOOGLE,
-                profileCompleted = false
+                profileCompleted = false,
+                googleSubject = identity.subject
             )
         } else {
-            user.authProvider = user.authProvider.linkGoogle()
+            if (user.googleSubject != null && user.googleSubject != identity.subject) throw invalidGoogleToken()
+            if (user.authProvider.supportsPassword) {
+                val token = EmailVerificationSecurity.newToken()
+                linkGrants.deleteByUserId(requireNotNull(user.id))
+                val expiresAt = java.time.Instant.now().plusSeconds(300)
+                linkGrants.save(GoogleLinkGrant(EmailVerificationSecurity.hashToken(token), requireNotNull(user.id),
+                    identity.subject, user.tokenVersion, expiresAt))
+                return GoogleLinkRequiredResponse(linkToken = token, expiresAt = expiresAt)
+            }
+            // Legacy Google-only account: bind its verified identity once, never link a LOCAL account here.
+            user.googleSubject = identity.subject
         }
         user = userRepository.saveAndFlush(user)
         return issueAuthResponse(user, isNewUser, "구글 로그인 성공")
     }
 
+    @Transactional(noRollbackFor = [CustomException::class])
+    fun linkGoogle(request: GoogleLinkRequest): AuthResponse {
+        val hash = linkHash(request.linkToken)
+        val owner = linkGrants.ownerForHash(hash) ?: throw invalidLink()
+        val user = userRepository.lockById(owner) ?: throw invalidLink()
+        val grant = linkGrants.lockByHash(hash) ?: throw invalidLink()
+        if (grant.consumedAt != null || !grant.expiresAt.isAfter(java.time.Instant.now()) ||
+            grant.tokenVersion != user.tokenVersion || grant.attempts >= 5) throw invalidLink()
+        if (!user.authProvider.supportsPassword || !passwordEncoder.matches(request.currentPassword, user.password)) {
+            grant.attempts++
+            throw CustomException(HttpStatus.BAD_REQUEST, "기존 계정 비밀번호를 확인해주세요.", "GOOGLE_LINK_PASSWORD_INVALID", "currentPassword")
+        }
+        if ((user.googleSubject != null && user.googleSubject != grant.googleSubject) ||
+            userRepository.findByGoogleSubject(grant.googleSubject)?.id?.let { it != user.id } == true) {
+            throw CustomException(HttpStatus.CONFLICT, "이미 다른 계정과 연결된 Google 계정입니다.", "GOOGLE_ACCOUNT_ALREADY_LINKED")
+        }
+        grant.consumedAt = java.time.Instant.now()
+        user.googleSubject = grant.googleSubject
+        user.authProvider = user.authProvider.linkGoogle()
+        userRepository.saveAndFlush(user)
+        return issueAuthResponse(user, false, "기존 계정에 Google 연결 및 로그인 성공")
+    }
+
+    @Transactional
+    fun cancelGoogleLink(token: String) {
+        val hash = linkHash(token)
+        val owner = linkGrants.ownerForHash(hash) ?: return
+        userRepository.lockById(owner) ?: return
+        linkGrants.lockByHash(hash)?.consumedAt = java.time.Instant.now()
+    }
+
+    private fun linkHash(token: String): String {
+        if (!token.matches(Regex("[A-Za-z0-9_-]{43}"))) throw invalidLink()
+        return EmailVerificationSecurity.hashToken(token)
+    }
+    private fun invalidLink() = CustomException(HttpStatus.GONE, "계정 연결 요청이 만료되었거나 사용되었습니다. Google 로그인을 다시 진행해주세요.", "GOOGLE_LINK_EXPIRED")
+
     @Transactional
     fun resetPassword(request: PasswordResetRequest) {
         val email = AccountInputPolicy.normalizeEmail(request.email)
         AccountInputPolicy.validatePassword(request.newPassword)
-        val user = userRepository.findByEmail(email)
+        val user = userRepository.idForEmail(email)?.let(userRepository::lockById)
             ?: throw CustomException(
                 HttpStatus.NOT_FOUND,
                 "가입되지 않은 이메일입니다.",
@@ -174,6 +197,7 @@ class AuthService(
         )
         user.password = passwordEncoder.encode(request.newPassword)!!
         user.invalidateSessions()
+        sessions.revokeAll(requireNotNull(user.id))
         userRepository.save(user)
     }
 
@@ -187,22 +211,7 @@ class AuthService(
     }
 
     private fun issueAuthResponse(user: User, isNewUser: Boolean, message: String): AuthResponse {
-        val issued = jwtProvider.createToken(
-            userId = requireNotNull(user.id),
-            email = user.email,
-            role = user.role.name,
-            tokenVersion = user.tokenVersion
-        )
-        return AuthResponse(
-            message = message,
-            token = issued.token,
-            userId = requireNotNull(user.id),
-            email = user.email,
-            expiresAt = issued.expiresAt,
-            expiresInSeconds = issued.expiresInSeconds,
-            isNewUser = isNewUser,
-            profileCompleted = user.profileCompleted
-        )
+        return sessions.issue(user, isNewUser, message)
     }
 
     private fun ensureEmailAvailable(email: String) {

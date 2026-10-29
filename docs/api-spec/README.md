@@ -1,15 +1,19 @@
 # 찍먹 Backend API 명세서
 
-작성 기준: 2026-10-08. 로컬 백엔드 커밋 `aae4ece`(팀 저장소 업로드 커밋 `d5b04c5`) 및 이후 로컬에 추가한 상품 용량 옵션 API의 구현을 기준으로 한다. 운영 서버에 같은 버전이 배포되었다는 의미는 아니다. 아래 JSON의 이메일·토큰·상품·ID는 설명용 예시이며 실제 조회 결과가 아니다.
+작성 기준: 2026-10-15 팀 저장소 커밋 `87184c4`(로컬 `072ddac`), 2026-10-23 로컬 추천 정책 v5.1 및 프론트 인증 연동 v2이다. 기존 27개에 13개를 추가해 40개 Method·요청주소 조합이다. Git 업로드·운영 배포 완료를 의미하지 않는다. JSON 값은 설명용 예시이다.
 
 ## 문서 구성
 
+- [상품 ID·속성 이력·카테고리 정책 단계 전환](../catalog-evolution-stage1-3.md) — 2026-10-28 로컬 추가 6개 경로(ID 조회 3개·관리자 3개), 행동 이력 productId 입력, 용도 판정. 위의 기존 40개 집계에 포함되지 않은 추가 계약이다. 운영 DB 적용 전이다.
+- [챗봇 공통 분석 판정 계약](chat-analysis-contract-v1.md) — 2026-10-28 로컬 변경. JWT 본인 검증·가족 합산 조건·공통 상품 판정·AI 계약 확인. 챗봇 관련 이전 설명보다 우선하며 AI 서버 동시 연동이 필요하다.
+- [프론트 인증·프로필 연동 v2](frontend-auth-integration-v2.md) — 신규 13개 API, Refresh/명시적 Google 연결/가족/사진/분석 대상 변경 계약과 미합의 항목. 인증 및 해당 변경사항은 이 문서가 우선이다.
+- [요청주소별 전체 API 명세서](API_REFERENCE.md) — 기존 27개 API의 상세와 신규 경로 목록. 변경된 인증·분석 계약은 v2 문서를 함께 확인한다.
 - [상품·필터·분류 검색](products.md)
 - [회원가입·인증·사용자 프로필](auth-users.md)
 - [맞춤 추천·대체 추천·사용자 이력](recommendations-history.md)
 - [챗봇 중계 API와 확인 필요 사항](chat-and-gaps.md)
 
-각 문서의 API 단위 섹션을 Notion의 해당 API 페이지에 복사한다. 최초 명세 작성 후 상품 용량 옵션 API 구현에 맞춰 P07과 전체 목록을 추가 갱신했다.
+Notion에는 통합본의 요청주소별 섹션과 해당 공통 응답 모델을 복사한다. `/me`와 기존 ID 경로도 각각 분리했다. 아래 주제별 문서는 같은 API를 영역별로 읽기 위한 보조 문서이다.
 
 ## 기존 목록에서 수정할 내용
 
@@ -49,6 +53,19 @@
 | POST | `/api/auth/password/reset` | 비밀번호 재설정 | 불필요 | 갱신 |
 | GET | `/api/auth/nicknames/availability` | 닉네임 사용 가능 여부 조회 | 불필요 | 추가 |
 | POST | `/api/auth/logout` | 로그아웃 안내 | 필수 | 추가 |
+| POST | `/api/auth/refresh` | Access·Refresh 갱신 | Refresh 증명 | v2 추가 |
+| POST | `/api/auth/google/link` | Google 명시적 연결 | 임시 증명·기존 비밀번호 | v2 추가 |
+| POST | `/api/auth/google/link/cancel` | 연결 요청 취소 | 임시 증명 | v2 추가 |
+| PATCH | `/api/users/me` | 내 프로필 부분 수정 | 필수 | v2 추가 |
+| POST | `/api/users/me/profile/complete` | 추가 프로필 최종 완료 | 필수 | v2 추가 |
+| GET | `/api/users/me/photo` | 비공개 프로필 사진 조회 | 필수 | v2 추가 |
+| PUT | `/api/users/me/photo` | 프로필 사진 등록·교체 | 필수 | v2 추가 |
+| DELETE | `/api/users/me/photo` | 프로필 사진 삭제 | 필수 | v2 추가 |
+| GET | `/api/users/me/family-profiles` | 가족 목록 | 필수 | v2 추가 |
+| POST | `/api/users/me/family-profiles` | 가족 생성 | 필수 | v2 추가 |
+| GET | `/api/users/me/family-profiles/{id}` | 가족 조회 | 필수 | v2 추가 |
+| PATCH | `/api/users/me/family-profiles/{id}` | 가족 부분 수정 | 필수 | v2 추가 |
+| DELETE | `/api/users/me/family-profiles/{id}` | 가족 삭제 | 필수 | v2 추가 |
 | GET | `/api/users/me` | 내 프로필 조회 | 필수 | 추가·권장 |
 | PUT | `/api/users/me` | 내 프로필 전체 수정 | 필수 | 추가·권장 |
 | GET | `/api/users/{userId}` | ID로 프로필 조회 | 본인/관리자 | 기존 호환 |
@@ -73,16 +90,16 @@ Content-Type: application/json
 
 - `token`은 찍먹 서버의 로그인 토큰이다. Google `idToken` 및 이메일 `verificationToken`과 서로 다르다.
 - 상품·추천 API의 선택적 `userId`는 일반 앱에서는 생략한다. 서버가 로그인 토큰에서 ID를 확인한다. 일반 사용자는 타인의 ID를 지정할 수 없으며 관리자는 예외이다.
-- 인증 불필요 API에도 만료·변조된 Bearer 토큰을 보내면 인증 필터에서 401을 반환한다. 로그인·가입·공개 목록 조회에 불필요한 오래된 토큰을 붙이지 않는다.
+- login/google/refresh/google-link는 별도 증명으로 인증하므로 오래된 Bearer 때문에 차단하지 않는다. 나머지 공개 경로에는 불필요한 오래된 토큰을 붙이지 않는다.
 - 바코드는 문자열이다. 숫자로 변환하지 않는다. 데이터에 `NO_BARCODE_ROW_...` 같은 내부 대체 식별자가 포함될 수 있다.
 - 사용자 ID는 정수(Long)이다. `/{id}` 자리에 이메일을 넣지 않는다.
 - 선택값 없음은 프로필에서 `null`, 목록에서는 `[]`로 표현한다. `"없음"`을 공통 해제 값으로 사용하지 않는다.
 
 ## 시간과 로그인 상태
 
-- 로그인 만료 `expiresAt`은 UTC 오프셋을 포함하는 Instant 문자열이다. `expiresInSeconds` 기본값은 86400이다.
-- 이메일 OTP·인증 증명·행동 기록 시각은 현재 LocalDateTime이므로 응답 문자열에 시간대가 없다. 이를 무조건 UTC로 해석하지 않는다. OTP/인증 타이머는 응답의 `expiresInSeconds`를 사용하고 최종 만료 판정은 서버 응답을 따른다.
-- Refresh Token과 갱신 API는 현재 없다. 프로필 PATCH도 없다. 회의에서 나온 제안을 이미 구현된 API로 기재하지 않는다.
+- Access 만료 `expiresAt`은 UTC Instant 문자열이고 기본 유효시간은 900초다. Refresh는 최초 로그인부터 30일 고정이며 정확한 만료는 refreshExpiresAt을 사용한다.
+- 이메일 OTP·인증 증명 응답은 offset을 포함한다. 기존 행동 기록 시각은 LocalDateTime이다. 최종 만료 판정은 서버가 담당한다.
+- Refresh/PATCH/사진/가족 API의 상세와 임시 정책은 v2 명세에 있다. 로컬 구현과 운영 배포를 구분한다.
 - 앱 시작 시 `GET /api/users/me`로 사용자·세션을 확인한다. 네트워크 실패와 401을 구분한다. 403은 권한 부족이므로 무조건 로그아웃시키지 않는다.
 
 ## 공통 오류와 예외

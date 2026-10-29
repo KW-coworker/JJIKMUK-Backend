@@ -1,12 +1,22 @@
 package org.jjikmuk.backend.domain.chat.dto
 
-// 💡 프론트엔드가 성민님 서버로 보낼 요청
+import com.fasterxml.jackson.annotation.JsonAnySetter
+import org.jjikmuk.backend.domain.recommendation.ProductDataEvidence
+import org.jjikmuk.backend.domain.user.AnalysisSelectionResponse
+
+// Selection parameters are query parameters, just like the product APIs.
 data class ChatRequestDto(
-    val userId: Long?, // 멀티 프로필 확장 시 List<Long>으로 변경 가능
-    val barcode: String?,
+    val userId: Long? = null, // Compatibility only: must equal the JWT owner, including admins.
+    val barcode: String? = null,
     val message: String,
     val chatHistory: List<ChatHistoryDto> = emptyList()
-)
+) {
+    // Do not silently ignore body-level selection or forged server decisions.
+    @JsonAnySetter
+    fun rejectUnknown(name: String, value: Any?) {
+        throw IllegalArgumentException("지원하지 않는 요청 필드: $name")
+    }
+}
 
 // 💡 성민님 서버가 AI 서버(8000포트)로 보낼 요청
 data class AiChatRequestDto(
@@ -14,7 +24,34 @@ data class AiChatRequestDto(
     val profiles: List<ProfileDto>?, // 멀티 프로필용
     val product: ProductDto?,
     val message: String,
-    val chat_history: List<ChatHistoryDto>
+    val chat_history: List<ChatHistoryDto>,
+    val analysisContext: ChatAnalysisContext
+)
+
+data class ChatAnalysisContext(
+    val contextId: String,
+    val contractVersion: String = VERSION,
+    val policyVersion: String,
+    val selection: AnalysisSelectionResponse,
+    val effectiveConditions: ChatEffectiveConditions?,
+    val productResolution: String,
+    // A product detail barcode row; not the conservative aggregate of a capacity option.
+    val decisionScope: String = "BARCODE_ROW",
+    val analysis: Map<String, Any>?,
+    val dataEvidence: ProductDataEvidence?,
+    val decisionAuthority: String = "BACKEND",
+    val historyIsAuthoritative: Boolean = false,
+    val storedDietFlagsAreAuthoritative: Boolean = false
+) {
+    companion object { const val VERSION = "chat-analysis-v1" }
+}
+
+data class ChatEffectiveConditions(
+    val allergyIds: List<String>,
+    val unknownAllergyTerms: List<String>,
+    val requiredDietFilterIds: List<String>,
+    val diseases: List<String>,
+    val dislikedIngredients: List<String>
 )
 
 data class ChatHistoryDto(

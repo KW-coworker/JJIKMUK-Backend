@@ -6,8 +6,14 @@ import org.jjikmuk.backend.domain.product.ProductClassificationCatalog
 import org.jjikmuk.backend.domain.product.ProductFilter
 import org.jjikmuk.backend.domain.product.ProductFoodCategory
 import org.jjikmuk.backend.domain.product.ProductRepository
+import org.jjikmuk.backend.domain.product.ProductCategoryPolicy
+import org.jjikmuk.backend.domain.product.CategoryCompatibility
+import org.jjikmuk.backend.domain.product.CategoryCompatibilityDecision
 import org.jjikmuk.backend.domain.user.User
 import org.jjikmuk.backend.domain.user.UserRepository
+import org.jjikmuk.backend.domain.user.EffectiveAnalysis
+import org.jjikmuk.backend.domain.user.notEvaluatedSafety
+import org.jjikmuk.backend.domain.user.withoutAnalysis
 import org.jjikmuk.backend.global.exception.CustomException
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
@@ -38,21 +44,25 @@ class RecommendationService(
     @Value("\${recommendation.ranking.data-quality-weight:0.05}")
     private val dataQualityWeight: Double,
     @Value("\${recommendation.ranking.mmr-relevance:0.85}")
-    private val mmrRelevance: Double
+    private val mmrRelevance: Double,
+    @Value("\${recommendation.category-policy:enforce-known}")
+    private val categoryPolicyMode: String = "enforce-known"
 ) {
     fun recommendAlternatives(
         referenceBarcode: String,
         userId: Long,
         limit: Int,
-        minSimilarityScore: Double
+        minSimilarityScore: Double,
+        analysis: EffectiveAnalysis? = null
     ): ProductRecommendationResponse {
         validateRequest(limit, minSimilarityScore)
         val requestId = UUID.randomUUID().toString()
         val totalStartedAt = System.nanoTime()
 
-        val user = userRepository.findById(userId).orElseThrow {
+        val owner = userRepository.findById(userId).orElseThrow {
             CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.")
         }
+        val user = analysis?.profile ?: owner
         val reference = productRepository.findById(referenceBarcode).orElseThrow {
             CustomException(HttpStatus.NOT_FOUND, "해당 바코드($referenceBarcode)의 제품을 찾을 수 없습니다.")
         }
@@ -76,7 +86,8 @@ class RecommendationService(
         val dislikedIngredients = policy.profileTerms(user.dislikedIngredients)
         val requiredFilters = policy.requiredFilters(user)
         val historyStartedAt = System.nanoTime()
-        val historyProfile = buildHistoryProfile(user, allergies, requiredFilters)
+        val historyProfile = if (analysis != null && !analysis.personalHistoryAllowed) HistoryProfile(emptyList(), 0)
+            else buildHistoryProfile(owner, allergies, requiredFilters)
         val historyFetchMicros = elapsedMicros(historyStartedAt)
 
         var missingProduct = 0
@@ -86,6 +97,8 @@ class RecommendationService(
         var dietMismatch = 0
         var dietUnknown = 0
         var dislikedIngredient = 0
+        var categoryMismatch = 0
+        var categoryUnknown = 0
 
         val rankingStartedAt = System.nanoTime()
         val strictCandidates = mutableListOf<ScoredCandidate>()
@@ -116,6 +129,13 @@ class RecommendationService(
                 return@forEach
             }
 
+            val category = ProductCategoryPolicy.compare(reference, product)
+            if (category.status == CategoryCompatibility.MISMATCH) {
+                categoryMismatch++
+                if (categoryPolicyMode == "enforce-known") return@forEach
+            }
+            if (category.status == CategoryCompatibility.UNKNOWN) categoryUnknown++
+
             val preferenceScore = preferenceScore(product, historyProfile.signals)
             val qualityScore = policy.dataQualityScore(product)
             val score = combinedScore(neighbor.similarityScore, preferenceScore, qualityScore)
@@ -128,6 +148,7 @@ class RecommendationService(
                 finalScore = score.value,
                 safety = safety,
                 diet = diet,
+                category = category,
                 scoreBreakdown = score.breakdown,
                 reasons = buildReasons(
                     reference = reference,
@@ -175,6 +196,7 @@ class RecommendationService(
             else -> RecommendationResultMode.VERIFICATION_REQUIRED
         }
         val fallbackReason = when (resultMode) {
+            RecommendationResultMode.GENERAL -> null
             RecommendationResultMode.VERIFIED -> null
             RecommendationResultMode.RELAXED_SAFE -> RecommendationFallbackReason.MINIMUM_SIMILARITY_RELAXED
             RecommendationResultMode.VERIFICATION_REQUIRED -> {
@@ -183,12 +205,14 @@ class RecommendationService(
             RecommendationResultMode.ACTION_REQUIRED -> RecommendationFallbackReason.NO_RETURNABLE_CANDIDATE
         }
         val activeFallbackCandidateCount = when (resultMode) {
+            RecommendationResultMode.GENERAL -> 0
             RecommendationResultMode.VERIFIED,
             RecommendationResultMode.ACTION_REQUIRED -> 0
             RecommendationResultMode.RELAXED_SAFE -> relaxedSafeCandidates.size
             RecommendationResultMode.VERIFICATION_REQUIRED -> verificationCandidates.size
         }
         val responseRequiredActions = when (resultMode) {
+            RecommendationResultMode.GENERAL -> emptyList()
             RecommendationResultMode.VERIFIED,
             RecommendationResultMode.RELAXED_SAFE -> emptyList()
             RecommendationResultMode.VERIFICATION_REQUIRED -> listOf(
@@ -206,7 +230,9 @@ class RecommendationService(
             unknownSafety = unknownSafety,
             dietMismatch = dietMismatch,
             dietUnknown = dietUnknown,
-            dislikedIngredient = dislikedIngredient
+            dislikedIngredient = dislikedIngredient,
+            categoryMismatch = categoryMismatch,
+            categoryUnknown = categoryUnknown
         )
         val timing = RecommendationTiming(
             neighborLookupMicros = neighborLookupMicros,
@@ -215,7 +241,7 @@ class RecommendationService(
             rankingMicros = rankingMicros,
             totalMicros = elapsedMicros(totalStartedAt)
         )
-        val response = ProductRecommendationResponse(
+        var response = ProductRecommendationResponse(
             requestId = requestId,
             referenceProduct = reference,
             referenceSafety = policy.evaluateSafety(reference, allergies),
@@ -252,13 +278,24 @@ class RecommendationService(
             fallbackCandidateCount = activeFallbackCandidateCount,
             fallbackReason = fallbackReason,
             requiredActions = responseRequiredActions,
-            notice = noticeFor(resultMode)
+            notice = noticeFor(resultMode),
+            analysisSelection = analysis?.selection
         )
+        if (analysis?.applied == false) {
+            fun general(item: RecommendedProduct) = item.copy(safety = notEvaluatedSafety(),
+                dietConstraints = item.dietConstraints.withoutAnalysis(), recommendationTier = RecommendationTier.GENERAL,
+                verificationRequired = false, warnings = emptyList(), requiredActions = emptyList(),
+                reasons = listOf("개인 조건을 적용하지 않은 콘텐츠 유사도 기반 상품입니다."))
+            response = response.copy(referenceSafety = notEvaluatedSafety(), items = response.items.map(::general),
+                fallbackItems = response.fallbackItems.map(::general), resultMode = RecommendationResultMode.GENERAL,
+                requiredActions = emptyList(), notice = "분석 대상 없음: 개인 알레르기·식단 적합성을 검사하지 않은 일반 추천입니다.")
+        }
         eventPublisher.publishEvent(RecommendationCompletedEvent.from(response, userId))
         return response
     }
 
     private fun validateRequest(limit: Int, minSimilarityScore: Double) {
+        require(categoryPolicyMode in setOf("observe", "enforce-known")) { "Unsupported category policy mode" }
         require(limit in 1..MAX_LIMIT) { "limit는 1~$MAX_LIMIT 범위여야 합니다." }
         require(minSimilarityScore in 0.0..1.0) { "minScore는 0~1 범위여야 합니다." }
         require(similarityWeight >= 0 && preferenceWeight >= 0 && dataQualityWeight >= 0) {
@@ -277,12 +314,15 @@ class RecommendationService(
     ): HistoryProfile {
         val histories = historyRepository.findTop200ByUserIdOrderByCreatedAtDesc(requireNotNull(user.id))
         if (histories.isEmpty()) return HistoryProfile(emptyList(), 0)
-        val historyProducts = productRepository.findAllById(histories.map { it.barcode }.distinct())
+        val legacyHistories = histories.filter { it.productId == null && !it.barcode.startsWith("NO_BARCODE_ROW_") }
+        val historyProducts = productRepository.findAllById(legacyHistories.map { it.barcode }.distinct())
             .associateBy(Product::barcode)
+        val ids = histories.mapNotNull { it.productId }.distinct()
+        val idProducts = if (ids.isEmpty()) emptyMap() else productRepository.findAllByProductIdIn(ids).associateBy { it.productId }
         val now = LocalDateTime.now()
 
         val eventSignals = histories.mapNotNull { history ->
-            val product = historyProducts[history.barcode] ?: return@mapNotNull null
+            val product = (if (history.productId != null) idProducts[history.productId] else historyProducts[history.barcode]) ?: return@mapNotNull null
             if (history.actionType.preferenceWeight == 0.0) return@mapNotNull null
             if (policy.evaluateSafety(product, allergies).status != SafetyStatus.PASS) return@mapNotNull null
             if (policy.evaluateDietConstraints(product, requiredFilters).status != DietConstraintStatus.PASS) {
@@ -376,6 +416,7 @@ class RecommendationService(
         add("알레르기 판정 ${safety.status}: ${safety.evidenceSources.joinToString().ifBlank { "근거 없음" }}")
         if (diet.requiredFilters.isNotEmpty()) {
             when (diet.status) {
+                DietConstraintStatus.NOT_EVALUATED -> Unit
                 DietConstraintStatus.PASS ->
                     add("필수 식단 조건 충족: ${diet.satisfiedFilters.joinToString()}")
                 DietConstraintStatus.UNKNOWN ->
@@ -436,6 +477,7 @@ class RecommendationService(
     ): RecommendedProduct {
         val candidate = selected.candidate
         val warnings = when (tier) {
+            RecommendationTier.GENERAL -> emptyList()
             RecommendationTier.VERIFIED -> emptyList()
             RecommendationTier.RELAXED_SAFE -> listOf(
                 "안전·식단 조건은 통과했지만 기준 유사도 ${rounded(minSimilarityScore)} 미만인 대안입니다."
@@ -474,11 +516,13 @@ class RecommendationService(
             recommendationTier = tier,
             verificationRequired = tier == RecommendationTier.VERIFICATION_REQUIRED,
             warnings = warnings,
-            requiredActions = requiredActions
+            requiredActions = requiredActions,
+            categoryCompatibility = candidate.category
         )
     }
 
     private fun noticeFor(resultMode: RecommendationResultMode): String = when (resultMode) {
+        RecommendationResultMode.GENERAL -> "개인 조건을 적용하지 않은 일반 추천입니다."
         RecommendationResultMode.VERIFIED ->
             "추천 결과는 표기 데이터 기반이며 실제 포장 라벨과 의료 전문가의 지침을 우선해야 합니다."
         RecommendationResultMode.RELAXED_SAFE ->
@@ -572,6 +616,7 @@ class RecommendationService(
         val finalScore: Double,
         val safety: SafetyDecision,
         val diet: DietConstraintDecision,
+        val category: CategoryCompatibilityDecision,
         val scoreBreakdown: RecommendationScoreBreakdown,
         val reasons: List<String>
     )
@@ -579,7 +624,7 @@ class RecommendationService(
     private data class SelectedCandidate(val candidate: ScoredCandidate, val mmrScore: Double)
 
     companion object {
-        const val POLICY_VERSION = "hard-constraints-personalized-category-v4"
+        const val POLICY_VERSION = "unified-hard-constraints-purpose-v5.2"
         private const val MAX_LIMIT = 20
         private const val HISTORY_DECAY_DAYS = 30.0
         private const val MAX_PRODUCT_HISTORY_WEIGHT = 6.0

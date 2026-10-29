@@ -26,7 +26,8 @@ class JwtProvider(
         userId: Long,
         email: String,
         role: String,
-        tokenVersion: Int
+        tokenVersion: Int,
+        sessionId: String? = null
     ): IssuedAccessToken {
         val now = Date()
         val validity = Date(now.time + expirationTime)
@@ -36,6 +37,7 @@ class JwtProvider(
             .claim("email", email)
             .claim("role", role)
             .claim("tokenVersion", tokenVersion)
+            .claim("sid", sessionId)
             .issuedAt(now)
             .expiration(validity)
             .signWith(key)

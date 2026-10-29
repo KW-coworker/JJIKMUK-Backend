@@ -16,8 +16,26 @@ import org.springframework.web.bind.annotation.RestController
 @RequestMapping("/api/recommendations")
 class RecommendationController(
     private val recommendationService: RecommendationService,
-    private val feedbackService: RecommendationFeedbackService
+    private val feedbackService: RecommendationFeedbackService,
+    private val analysisSelection: org.jjikmuk.backend.domain.user.AnalysisSelectionService,
+    private val productService: org.jjikmuk.backend.domain.product.ProductService
 ) {
+    @GetMapping("/products/id/{productId}")
+    @org.springframework.transaction.annotation.Transactional(readOnly = true)
+    fun recommendByProductId(@PathVariable productId: Long,
+        @RequestParam(required = false) userId: Long?,
+        @RequestParam(defaultValue = "10") limit: Int,
+        @RequestParam(defaultValue = "0.2") minScore: Double,
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null): ResponseEntity<*> {
+        validatedUserId(userId, authentication)
+        if (productId <= 0) throw CustomException(HttpStatus.BAD_REQUEST, "productId는 양수여야 합니다.")
+        return recommendAlternatives(productService.barcodeForProductId(productId), userId, limit, minScore, authentication,
+            analysisMode, includeSelf, familyProfileIds)
+    }
+
     @PostMapping("/feedback")
     fun recordFeedback(
         @RequestBody request: RecommendationFeedbackRequest,
@@ -34,17 +52,22 @@ class RecommendationController(
         @RequestParam(required = false) userId: Long?,
         @RequestParam(defaultValue = "10") limit: Int,
         @RequestParam(defaultValue = "0.2") minScore: Double,
-        authentication: Authentication?
+        authentication: Authentication?,
+        @RequestParam(required = false) analysisMode: String? = null,
+        @RequestParam(required = false) includeSelf: Boolean? = null,
+        @RequestParam(required = false) familyProfileIds: List<Long>? = null
     ): ResponseEntity<*> {
         val targetUserId = validatedUserId(userId, authentication)
         val data = try {
-            recommendationService.recommendAlternatives(barcode, targetUserId, limit, minScore)
+            recommendationService.recommendAlternatives(barcode, targetUserId, limit, minScore,
+                analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds))
         } catch (exception: IllegalArgumentException) {
             throw CustomException(HttpStatus.BAD_REQUEST, exception.message ?: "추천 요청값이 올바르지 않습니다.")
         }
         return ResponseEntity.ok(
             mapOf(
                 "message" to when (data.resultMode) {
+                    RecommendationResultMode.GENERAL -> "개인 조건을 적용하지 않은 일반 대체 상품 조회 성공"
                     RecommendationResultMode.VERIFIED -> "개인화 대체 상품 추천 성공"
                     RecommendationResultMode.RELAXED_SAFE ->
                         "안전·식단 조건을 유지하고 유사도 기준을 완화한 대안을 찾았습니다."

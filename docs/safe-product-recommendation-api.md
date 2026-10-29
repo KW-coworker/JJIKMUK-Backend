@@ -18,11 +18,13 @@ Authorization: Bearer <JWT>
 2. 근거가 부족한 `UNKNOWN` 상품 제외
 3. 사용자의 `dislikedIngredients`가 포함된 상품 제외
 4. 질병에서 파생된 저당·저염·저지방·저칼로리·글루텐프리 조건 유지
-5. `specialDiet`의 비건·저당 등 선호 조건을 만족하는 상품 우선
-6. 결과가 부족한 경우에만 `specialDiet` 선호 조건 완화
+5. `specialDiet`의 비건·저당 등을 필수 조건으로 적용하여 `PASS`만 유지
+6. 결과가 부족해도 식단 조건을 완화하거나 UNKNOWN으로 빈자리를 채우지 않음
 7. 안전 후보를 무작위화한 뒤 카테고리별 그룹으로 반환
 
-알레르기, 주의성분, 질병 기반 조건은 결과 수가 부족해도 완화하지 않는다.
+알레르기, 주의성분, 선택 식단, 질병 기반 조건은 결과 수가 부족해도 완화하지 않는다.
+2026-10-23 정책 `unified-hard-constraints-evidence-v5`부터 대체 상품 추천과 같은 필수 조건을 사용한다.
+현재 프로필에 hard/soft 구분 필드가 없으므로 `specialDiet`를 완화 가능한 취향으로 해석하지 않는다.
 
 ## Query parameter
 
@@ -56,18 +58,20 @@ GET /api/products/safe-recommendations?limit=20&cursor={nextCursor}&seed={seed}&
 
 ```json
 {
-  "message": "선호 조건을 우선 적용하고 일부 완화한 안심 상품 추천 성공",
+  "message": "맞춤 안심 상품 추천 성공",
   "data": {
     "requestId": "uuid",
     "userId": 1,
     "seed": 123456,
     "requestedLimit": 20,
-    "returnedItemCount": 20,
+    "returnedItemCount": 1,
     "returnedBarcodes": ["8800000000001"],
     "requestedCategoryIds": ["snack", "beverage"],
     "preferenceFilterIds": ["vegan"],
     "hardHealthFilterIds": ["lowSugar"],
-    "recommendationMode": "MIXED",
+    "requiredDietFilterIds": ["lowSugar", "vegan"],
+    "policyVersion": "unified-hard-constraints-evidence-v5.1",
+    "recommendationMode": "PREFERENCE_MATCHED",
     "categories": [
       {
         "categoryId": "snack",
@@ -82,6 +86,7 @@ GET /api/products/safe-recommendations?limit=20&cursor={nextCursor}&seed={seed}&
             "safety": { "status": "PASS" },
             "healthConstraints": { "status": "PASS" },
             "preferences": { "status": "PASS" },
+            "dietConstraints": { "status": "PASS", "requiredFilters": ["lowSugar", "vegan"] },
             "preferenceRelaxed": false,
             "categoryIds": ["snack"]
           }
@@ -97,6 +102,8 @@ GET /api/products/safe-recommendations?limit=20&cursor={nextCursor}&seed={seed}&
       "dislikedIngredient": 2,
       "healthMismatch": 5,
       "healthUnknown": 3,
+      "dietMismatch": 8,
+      "dietUnknown": 5,
       "categoryMismatch": 100,
       "alreadyDeliveredOrDuplicate": 2
     }
@@ -111,18 +118,23 @@ GET /api/products/safe-recommendations?limit=20&cursor={nextCursor}&seed={seed}&
 
 | 값 | 의미 |
 | --- | --- |
-| `PREFERENCE_MATCHED` | 모든 반환 상품이 선호 조건까지 충족 |
-| `MIXED` | 선호 조건 충족 상품을 우선하고 부족분만 완화 |
-| `PREFERENCE_RELAXED` | 안전 조건은 충족했지만 선호 조건을 완화한 상품만 반환 |
+| `PREFERENCE_MATCHED` | 기존 이름 유지. 모든 반환 상품이 선택 식단 및 건강 조건까지 충족 |
+| `MIXED` / `PREFERENCE_RELAXED` | 구버전 호환 enum으로만 남기며 현재 서비스에서는 반환하지 않음 |
 | `EMPTY` | 현재 순회 범위에서 안전성이 확인된 상품이 없음 |
 
 ## 프론트엔드 처리
 
 1. `categories` 배열을 그대로 카테고리 섹션 또는 탭에 표시한다.
-2. `PREFERENCE_RELAXED` 상품은 필요하면 "선호 조건 일부 완화" 표시를 붙인다.
+2. `dietConstraints`로 전체 필수 식단 판정을 확인한다. `preferenceRelaxed`는 항상 false이다.
 3. 다음 로딩 때 `nextCursor`, `seed`, 지금까지 받은 `returnedBarcodes`를 함께 보낸다.
 4. `nextCursor=null`이면 더 불러올 상품이 없다.
 5. `UNKNOWN`과 `DANGER`는 이 API 결과에 포함되지 않는다.
+
+`preferences`와 `preferenceFilterIds`는 호환 필드명이며 현재는 **필수 선택 식단**이다.
+`healthConstraints`/`hardHealthFilterIds`는 건강 조건 부분집합이고, 전체는 `dietConstraints`/`requiredDietFilterIds`이다.
+`exclusions.dietMismatch`, `dietUnknown`은 전체 식단 제외 수이며 health 카운터는 그 중 건강 조건에서의 수이다.
+서로 더해서 총 제외 수로 계산하지 않는다. UNKNOWN 사유와 개별 속성은
+[추천 정책·평가 변경사항](recommendation-policy-v5.md)을 참고한다.
 
 현재 Android의 `ProductRepositoryImpl`은 더미 데이터를 반환하므로, 실제 화면 연결 시 추천 응답
 DTO와 `foodCategoryIds: List<String>` 모델을 추가하고 이 API 호출로 교체해야 한다.

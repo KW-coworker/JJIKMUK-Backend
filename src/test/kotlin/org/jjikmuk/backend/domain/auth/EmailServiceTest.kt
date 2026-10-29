@@ -44,7 +44,8 @@ class EmailServiceTest {
         assertTrue(saved.code.matches(Regex("\\d{4}")))
         assertEquals(EmailVerificationPurpose.SIGNUP, saved.purpose)
         assertEquals(300L, response.expiresInSeconds)
-        assertEquals(60L, java.time.Duration.between(saved.sentAt, response.resendAvailableAt).seconds)
+        assertEquals(60L, java.time.Duration.between(saved.sentAt, response.resendAvailableAt.toLocalDateTime()).seconds)
+        assertEquals(java.time.ZoneId.systemDefault().rules.getOffset(java.time.Instant.now()), response.expiresAt.offset)
         verify(mailSender).send(org.mockito.ArgumentMatchers.any(SimpleMailMessage::class.java))
     }
 
@@ -99,7 +100,7 @@ class EmailServiceTest {
         )
 
         assertEquals(1_800L, response.expiresInSeconds)
-        assertTrue(response.expiresAt.isAfter(LocalDateTime.now().plusMinutes(29)))
+        assertTrue(response.expiresAt.isAfter(java.time.OffsetDateTime.now().plusMinutes(29)))
     }
 
     @Test
@@ -116,10 +117,10 @@ class EmailServiceTest {
             verificationRepository.findByEmailAndPurpose(email, EmailVerificationPurpose.SIGNUP)
         ).thenReturn(verification)
 
-        assertFailsWith<CustomException> {
+        val error = assertFailsWith<CustomException> {
             service.verifyVerificationCode(EmailVerifyRequest(email, "9999", "signup"))
         }
-
+        assertEquals(4, error.remainingAttempts)
         assertEquals(1, verification.failedAttempts)
         verify(verificationRepository).save(verification)
         verify(grantRepository, never()).save(org.mockito.ArgumentMatchers.any(EmailVerificationGrant::class.java))
@@ -150,5 +151,18 @@ class EmailServiceTest {
         }
 
         assertEquals(409, error.status.value())
+    }
+
+    @Test fun `resend cooldown exposes retry seconds and HTTP header`() {
+        val email = "cooldown@example.com"
+        `when`(verificationRepository.findByEmailAndPurpose(email, EmailVerificationPurpose.SIGNUP)).thenReturn(
+            EmailVerification(email = email, purpose = EmailVerificationPurpose.SIGNUP, code = "1234",
+                expiredAt = LocalDateTime.now().plusMinutes(5), sentAt = LocalDateTime.now()))
+        val error = assertFailsWith<CustomException> { service.sendVerificationCode(EmailSendRequest(email, "signup")) }
+        assertEquals("OTP_RATE_LIMITED", error.code)
+        assertTrue(error.retryAfterSeconds!! in 1..60)
+        val response = org.jjikmuk.backend.global.exception.GlobalExceptionHandler().handleCustomException(error)
+        assertEquals(error.retryAfterSeconds.toString(), response.headers.getFirst("Retry-After"))
+        assertEquals(error.retryAfterSeconds, response.body!!.retryAfterSeconds)
     }
 }

@@ -69,3 +69,8 @@ jjikmuk*.sql
 *.sqlite
 *.sqlite3
 *.db
+
+# Python caches created by local evaluation and audit tools.
+__pycache__/
+*.py[cod]
+.pytest_cache/
