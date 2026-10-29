@@ -14,6 +14,38 @@ class AllergyContractTests {
     private val safety = AllergySafetyService()
 
     @Test
+    fun `soybean synonyms override missing classification and unverified evidence`() {
+        for (raw in listOf("검정콩분말", "검은콩볶은가루", "서리태추출물", "서목태", "흑태", "백태", "메주콩", "검정 콩 분말")) {
+            val product = Product(barcode = "SOY-REGRESSION", rawMaterials = raw,
+                allergyClassification = "미검출", allergyEvidenceLevel = AllergyEvidenceLevel.INGREDIENT_DERIVED)
+            val decision = safety.evaluate(product, listOf("soy"))
+            assertEquals(SafetyStatus.DANGER, decision.status, raw)
+            assertEquals(listOf("soy"), decision.conflictingAllergens, raw)
+        }
+    }
+
+    @Test
+    fun `soy aliases do not turn every legume into a soybean match`() {
+        for (raw in listOf("땅콩", "완두콩", "병아리콩", "강낭콩", "녹두", "팥")) {
+            val product = Product(barcode = "NOT-SOY", rawMaterials = raw,
+                allergyEvidenceLevel = AllergyEvidenceLevel.VERIFIED_SOURCE)
+            assertEquals(SafetyStatus.PASS, safety.evaluate(product, listOf("soy")).status, raw)
+        }
+    }
+
+    @Test
+    fun `real black soybean tea remains danger even in multiple allergy profile`() {
+        val product = Product(barcode = "8809546050393",
+            rawMaterials = "식물성크림, 백설탕, 호두분태, 볶음아몬드분태, 이산화규소, 볶은찹쌀, 검정콩분말, 볶은흑미분말, 율무분말",
+            allergy = "아몬드, 호두", allergyClassification = "호두|아몬드",
+            allergyEvidenceLevel = AllergyEvidenceLevel.INGREDIENT_DERIVED)
+        for (profile in listOf(listOf("soy"), listOf("soy", "milk", "wheat", "peanut"))) {
+            assertEquals(listOf("soy"), safety.evaluate(product, profile).conflictingAllergens)
+            assertEquals(SafetyStatus.DANGER, safety.evaluate(product, profile).status)
+        }
+    }
+
+    @Test
     fun `the public allergen contract contains exactly 26 stable IDs`() {
         val expected = setOf(
             "egg", "milk", "soy", "wheat", "pork", "chicken", "shrimp", "crab", "squid",

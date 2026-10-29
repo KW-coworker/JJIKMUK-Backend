@@ -4,6 +4,7 @@ import org.jjikmuk.backend.domain.config.SystemConfig
 import org.jjikmuk.backend.domain.config.SystemConfigRepository
 import org.jjikmuk.backend.domain.product.Product
 import org.jjikmuk.backend.domain.product.ProductClassificationCatalog
+import org.jjikmuk.backend.domain.product.CatalogEvolutionService
 import org.jjikmuk.backend.domain.product.search.ProductSearchKeywordBuilder
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
@@ -47,7 +48,8 @@ class ProductDataImportService(
     @Value("\${product.import.validation.max-duplicate-barcodes:20}")
     private val maxDuplicateBarcodes: Long,
     @Value("\${product.import.validation.minimum-named-ratio:0.99}")
-    private val minimumNamedRatio: Double
+    private val minimumNamedRatio: Double,
+    private val catalogEvolution: CatalogEvolutionService
 ) {
     private val transactionTemplate = TransactionTemplate(transactionManager)
 
@@ -82,7 +84,10 @@ class ProductDataImportService(
                 updateValidatedRun(runId, report)
 
                 assertSwapCompatibleSchema()
-                prepareStagingTable()
+                require(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM products WHERE product_id IS NULL OR attribute_snapshot_id IS NULL", Long::class.java) == 0L) {
+                    "Before replacing an existing catalogue, finish internal ID backfill and baseline attribute capture"
+                }
+                prepareStagingTable(report.nonEmptyRecordCount)
                 updateRunStatus(runId, "STAGING")
                 val loadReport = streamIntoStaging(resource)
                 require(loadReport.attemptedRows == report.nonEmptyRecordCount) {
@@ -94,6 +99,13 @@ class ProductDataImportService(
                 }
 
                 preserveExistingProductIdsIfPresent()
+                while (catalogEvolution.assignMissingIds(batchSize, STAGING_TABLE).attempted > 0) { /* bounded committed pages */ }
+                var attributeCursor = ""
+                while (true) {
+                    val captured = catalogEvolution.captureAttributes(dataVersion, "CSV_IMPORT_OBSERVATION", attributeCursor, batchSize, STAGING_TABLE)
+                    if (captured.scanned == 0) break
+                    attributeCursor = requireNotNull(captured.nextAfterBarcode)
+                }
                 val stagedCount = validateStagingTable(report)
                 val duplicateCount = report.nonEmptyRecordCount - stagedCount
                 require(duplicateCount <= maxDuplicateBarcodes) {
@@ -163,6 +175,9 @@ class ProductDataImportService(
                 "Classification rollback tables do not exist"
             }
             assertSwapCompatibleSchema()
+            require(columnExists(ROLLBACK_TABLE, "attribute_snapshot_id") && columnExists(ROLLBACK_TABLE, PRODUCT_ID_COLUMN)) {
+                "Rollback dataset predates the identity/history schema; operator migration is required"
+            }
 
             val currentVersion = readTableMarker(MAIN_TABLE)?.version ?: configValue(VERSION_KEY)
             val targetMarker = readTableMarker(ROLLBACK_TABLE)
@@ -229,7 +244,7 @@ class ProductDataImportService(
     }
 
     private fun validateSettings() {
-        require(batchSize > 0) { "product.import.batch-size must be greater than zero" }
+        require(batchSize in 1..1000) { "product.import.batch-size must be between 1 and 1000" }
         require(expectedRows > 0) { "product.import.expected-rows must be greater than zero" }
         require(maxEmptyRows >= 0) { "max-empty-rows must not be negative" }
         require(maxDuplicateBarcodes >= 0) { "max-duplicate-barcodes must not be negative" }
@@ -252,7 +267,11 @@ class ProductDataImportService(
         }
     }
 
-    private fun prepareStagingTable() {
+    private fun prepareStagingTable(sourceRows: Long) {
+        // Reserve before dropping legacy staging: its IDs may already have been externally observed.
+        val currentMaxId = catalogEvolution.maxKnownId()
+        require(currentMaxId < Long.MAX_VALUE) { "product_id sequence is exhausted" }
+        val firstId = catalogEvolution.reserveIds(sourceRows + 1, currentMaxId + 1)
         dropStagingTables()
         jdbcTemplate.execute("CREATE TABLE `$STAGING_TABLE` LIKE `$MAIN_TABLE`")
         jdbcTemplate.execute(
@@ -262,13 +281,9 @@ class ProductDataImportService(
             "CREATE TABLE `$ALLERGY_CLASSIFICATION_STAGING_TABLE` LIKE `$ALLERGY_CLASSIFICATION_TABLE`"
         )
         if (columnExists(MAIN_TABLE, PRODUCT_ID_COLUMN)) {
-            val currentMaxId = jdbcTemplate.queryForObject(
-                "SELECT COALESCE(MAX(`$PRODUCT_ID_COLUMN`), 0) FROM `$MAIN_TABLE`",
-                Long::class.java
-            ) ?: 0L
-            require(currentMaxId < Long.MAX_VALUE) { "product_id sequence is exhausted" }
+            // Reserve even for legacy AUTO_INCREMENT schemas; failed imports/rollbacks must not reuse IDs.
             jdbcTemplate.execute(
-                "ALTER TABLE `$STAGING_TABLE` AUTO_INCREMENT = ${currentMaxId + 1}"
+                "ALTER TABLE `$STAGING_TABLE` AUTO_INCREMENT = $firstId"
             )
         }
     }
@@ -365,73 +380,19 @@ class ProductDataImportService(
 
     private fun preserveExistingProductIdsIfPresent() {
         if (!columnExists(MAIN_TABLE, PRODUCT_ID_COLUMN)) return
-        val currentMaxId = jdbcTemplate.queryForObject(
-            "SELECT COALESCE(MAX(`$PRODUCT_ID_COLUMN`), 0) FROM `$MAIN_TABLE`",
-            Long::class.java
-        ) ?: 0L
         val barcodeMatches = jdbcTemplate.update(
             """
             UPDATE `$STAGING_TABLE` staged
             INNER JOIN `$MAIN_TABLE` live ON live.barcode = staged.barcode
-            SET staged.`$PRODUCT_ID_COLUMN` = live.`$PRODUCT_ID_COLUMN`
+            SET staged.`$PRODUCT_ID_COLUMN` = live.`$PRODUCT_ID_COLUMN`,
+                staged.attribute_snapshot_id = live.attribute_snapshot_id
             WHERE LEFT(staged.barcode, ${SYNTHETIC_BARCODE_PREFIX.length}) <> '$SYNTHETIC_BARCODE_PREFIX'
+              AND live.`$PRODUCT_ID_COLUMN` IS NOT NULL
             """.trimIndent()
         )
-        dropTableIfExists(PRODUCT_ID_MAP_TABLE)
-        try {
-            jdbcTemplate.execute(
-                """
-                CREATE TABLE `$PRODUCT_ID_MAP_TABLE` (
-                    product_group_key CHAR(64) NOT NULL,
-                    product_id BIGINT UNSIGNED NOT NULL,
-                    PRIMARY KEY (product_group_key),
-                    UNIQUE KEY uk_product_id_preservation_map_id (product_id)
-                )
-                """.trimIndent()
-            )
-            jdbcTemplate.update(
-                """
-                INSERT INTO `$PRODUCT_ID_MAP_TABLE` (product_group_key, product_id)
-                SELECT live.product_group_key, MIN(live.`$PRODUCT_ID_COLUMN`)
-                FROM `$MAIN_TABLE` live
-                INNER JOIN (
-                    SELECT product_group_key
-                    FROM `$MAIN_TABLE`
-                    WHERE product_group_key IS NOT NULL
-                    GROUP BY product_group_key
-                    HAVING COUNT(*) = 1
-                ) live_unique ON live_unique.product_group_key = live.product_group_key
-                INNER JOIN (
-                    SELECT product_group_key
-                    FROM `$STAGING_TABLE`
-                    WHERE product_group_key IS NOT NULL
-                      AND `$PRODUCT_ID_COLUMN` > $currentMaxId
-                    GROUP BY product_group_key
-                    HAVING COUNT(*) = 1
-                ) staged_unique ON staged_unique.product_group_key = live.product_group_key
-                LEFT JOIN `$STAGING_TABLE` already_used
-                    ON already_used.`$PRODUCT_ID_COLUMN` = live.`$PRODUCT_ID_COLUMN`
-                WHERE already_used.`$PRODUCT_ID_COLUMN` IS NULL
-                GROUP BY live.product_group_key
-                """.trimIndent()
-            )
-            val groupMatches = jdbcTemplate.update(
-                """
-                UPDATE `$STAGING_TABLE` staged
-                INNER JOIN `$PRODUCT_ID_MAP_TABLE` identity_map
-                    ON identity_map.product_group_key = staged.product_group_key
-                SET staged.`$PRODUCT_ID_COLUMN` = identity_map.product_id
-                WHERE staged.`$PRODUCT_ID_COLUMN` > $currentMaxId
-                """.trimIndent()
-            )
-            logger.info(
-                "기존 내부 product_id 보존 완료: barcodeMatches={}, uniqueGroupMatches={}",
-                barcodeMatches,
-                groupMatches
-            )
-        } finally {
-            dropTableIfExists(PRODUCT_ID_MAP_TABLE)
-        }
+        // A display group key or CSV row number is not an approved persistent identity.
+        // Unmapped no-barcode rows get a fresh provisional ID; never retarget old history.
+        logger.info("기존 내부 product_id 보존 완료: barcodeMatches={}, displayGroupReuse=disabled", barcodeMatches)
     }
 
     private fun validateStagingTable(report: ProductCsvValidationReport): Long {

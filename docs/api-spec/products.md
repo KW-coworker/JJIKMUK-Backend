@@ -2,6 +2,9 @@
 
 [공통 규칙과 전체 목록](README.md). 아래 응답 예시는 정적 목록을 제외하면 설명용 데이터이다.
 
+2026-10-28 추가: [내부 ID 조회·용량 조회, 관측 이력, categoryAssessment 계약](../catalog-evolution-stage1-3.md#5-추가확장-api).
+기존 바코드 API는 유지하며 이 추가 계약이 신규 필드와 경로에 우선한다. 실제 DB 적용은 별도 절차다.
+
 ## P01. 식단·영양 필터 종류 조회
 
 ```http
@@ -425,6 +428,8 @@ GET /api/products/{barcode}
 | lowSugar, lowSodium, glutenFree, lowCalorie, lowFat, highProtein | boolean | 저장된 식단·영양 분류 값 |
 
 `searchKeywords`, `productGroupKey`, 내부 출처 신뢰도 필드는 Product JSON에 노출하지 않는다. API에는 영양 수치의 100g/1회/총내용량 기준을 명시하는 공통 필드가 없어 `totalWeight`만으로 환산 기준을 단정하지 않는다.
+
+이 버전에는 `imageUrl`만 있으며 상품 대표 사진과 카테고리 참고 사진을 구분하는 `imageRole`·`imageDisplayNotice` 등의 필드는 없다. Firebase 업로드와 운영 DB 반영은 별도 작업이다.
 
 ### nutrientPercents
 

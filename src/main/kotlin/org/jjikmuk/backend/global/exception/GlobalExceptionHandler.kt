@@ -9,6 +9,16 @@ import org.springframework.web.bind.annotation.RestControllerAdvice
 @RestControllerAdvice // 💡 프로젝트 전체의 에러를 감시하는 레이더 역할입니다!
 class GlobalExceptionHandler {
 
+    @ExceptionHandler(org.springframework.web.method.annotation.MethodArgumentTypeMismatchException::class)
+    fun invalidParameter(ex: org.springframework.web.method.annotation.MethodArgumentTypeMismatchException): ResponseEntity<ErrorResponse> =
+        ResponseEntity.badRequest().body(ErrorResponse(400, ApiErrorCode.VALIDATION_FAILED,
+            "요청 파라미터 형식이 올바르지 않습니다.", ex.name))
+
+    @ExceptionHandler(org.springframework.web.bind.MissingServletRequestParameterException::class,
+        org.springframework.web.multipart.support.MissingServletRequestPartException::class)
+    fun missingParameter(ex: Exception): ResponseEntity<ErrorResponse> =
+        ResponseEntity.badRequest().body(ErrorResponse(400, ApiErrorCode.VALIDATION_FAILED, "필수 요청 항목이 누락되었습니다."))
+
     @ExceptionHandler(HttpMessageNotReadableException::class)
     fun handleUnreadableRequest(ex: HttpMessageNotReadableException): ResponseEntity<ErrorResponse> {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
@@ -27,10 +37,22 @@ class GlobalExceptionHandler {
             status = ex.status.value(),
             code = ex.code,
             message = ex.message,
-            field = ex.field
+            field = ex.field,
+            retryAfterSeconds = ex.retryAfterSeconds,
+            remainingAttempts = ex.remainingAttempts
         )
-        return ResponseEntity.status(ex.status).body(errorResponse)
+        val builder = ResponseEntity.status(ex.status)
+        ex.retryAfterSeconds?.let { builder.header("Retry-After", it.toString()) }
+        return builder.body(errorResponse)
     }
+
+    @ExceptionHandler(org.springframework.orm.ObjectOptimisticLockingFailureException::class)
+    fun concurrentEdit(ex: Exception): ResponseEntity<ErrorResponse> = ResponseEntity.status(409)
+        .body(ErrorResponse(409, "PROFILE_VERSION_CONFLICT", "다른 기기에서 변경되었습니다. 다시 조회 후 수정해주세요."))
+
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException::class)
+    fun tooLarge(ex: Exception): ResponseEntity<ErrorResponse> = ResponseEntity.status(413)
+        .body(ErrorResponse(413, "PHOTO_TOO_LARGE", "사진 업로드 크기를 초과했습니다.", "file"))
 
     // 🎯 2. 예상치 못한 진짜 서버 에러(500)가 터졌을 때 방어하는 곳 (최후의 보루)
     @ExceptionHandler(Exception::class)

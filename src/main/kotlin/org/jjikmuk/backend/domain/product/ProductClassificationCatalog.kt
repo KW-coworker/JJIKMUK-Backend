@@ -62,8 +62,11 @@ object ProductClassificationCatalog {
         .map(String::trim)
         .filter(String::isNotBlank)
 
-    fun parseFoodCategories(value: String?): List<ProductFoodCategory> =
-        splitStored(value).mapNotNull(ProductFoodCategory::resolve).distinct()
+    fun parseFoodCategories(value: String?): List<ProductFoodCategory> {
+        val known = splitStored(value).mapNotNull(ProductFoodCategory::resolve).distinct()
+            .filterNot { it == ProductFoodCategory.UNCLASSIFIED }
+        return known.ifEmpty { listOf(ProductFoodCategory.UNCLASSIFIED) }
+    }
 
     fun parseAllergyClassification(value: String?): ParsedAllergyClassification {
         val tokens = splitStored(value)

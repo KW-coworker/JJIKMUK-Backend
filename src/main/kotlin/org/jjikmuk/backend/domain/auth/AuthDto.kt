@@ -48,16 +48,16 @@ data class EmailVerifyRequest(
 data class EmailCodeDeliveryResponse(
     val email: String,
     val purpose: String,
-    val expiresAt: java.time.LocalDateTime,
+    val expiresAt: java.time.OffsetDateTime,
     val expiresInSeconds: Long,
-    val resendAvailableAt: java.time.LocalDateTime
+    val resendAvailableAt: java.time.OffsetDateTime
 )
 
 data class EmailVerificationResponse(
     val email: String,
     val purpose: String,
     val verificationToken: String,
-    val expiresAt: java.time.LocalDateTime,
+    val expiresAt: java.time.OffsetDateTime,
     val expiresInSeconds: Long
 )
 
@@ -70,7 +70,23 @@ data class AuthResponse(
     val expiresAt: Instant,
     val expiresInSeconds: Long,
     val isNewUser: Boolean,
-    val profileCompleted: Boolean
+    val profileCompleted: Boolean,
+    val refreshToken: String,
+    val refreshExpiresAt: Instant,
+    val authProvider: String,
+    val hasPassword: Boolean
+)
+
+data class RefreshRequest(val refreshToken: String)
+data class GoogleLinkRequest(val linkToken: String, val currentPassword: String)
+data class GoogleLinkCancelRequest(val linkToken: String)
+data class GoogleLinkRequiredResponse(
+    val message: String = "기존 계정 소유 확인 후 Google 계정을 연결해주세요.",
+    val code: String = "GOOGLE_LINK_REQUIRED",
+    val linkToken: String,
+    val expiresAt: Instant,
+    val expiresInSeconds: Long = 300,
+    val loginGranted: Boolean = false
 )
 
 data class NicknameAvailabilityResponse(

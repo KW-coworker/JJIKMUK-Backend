@@ -28,7 +28,7 @@ class SafeProductRecommendationServiceTest @Autowired constructor(
     private val userRepository: UserRepository
 ) {
     @Test
-    fun `home recommendations keep safety constraints and relax preferences only when needed`() {
+    fun `home recommendations never relax selected diets when candidates run short`() {
         val category = ProductFoodCategory.SPECIAL.displayName
         val delivered = safeProduct("SAFE-HOME-000", "이미 노출된 상품", category, vegan = true, group = "group-delivered")
         val duplicate = safeProduct("SAFE-HOME-001", "이미 노출된 상품", category, vegan = true, group = "group-delivered")
@@ -82,15 +82,18 @@ class SafeProductRecommendationServiceTest @Autowired constructor(
             requestedCategories = setOf(ProductFoodCategory.SPECIAL)
         )
 
-        assertEquals(SafeRecommendationMode.MIXED, result.recommendationMode)
-        assertEquals(listOf(strict.barcode, relaxed.barcode), result.returnedBarcodes)
+        assertEquals(SafeRecommendationMode.PREFERENCE_MATCHED, result.recommendationMode)
+        assertEquals(listOf(strict.barcode), result.returnedBarcodes)
+        assertEquals(listOf("vegan"), result.requiredDietFilterIds)
+        assertTrue(result.exclusions.dietMismatch >= 1)
+        assertTrue(result.categories.single().items.all { it.dietConstraints.status == DietConstraintStatus.PASS })
         assertTrue(result.categories.single().items.all { it.safety.status == SafetyStatus.PASS })
         assertFalse(result.returnedBarcodes.contains(duplicate.barcode))
         assertFalse(result.returnedBarcodes.contains(danger.barcode))
         assertFalse(result.returnedBarcodes.contains(unknown.barcode))
         assertFalse(result.returnedBarcodes.contains(disliked.barcode))
         assertFalse(result.categories.single().items.first().preferenceRelaxed)
-        assertTrue(result.categories.single().items.last().preferenceRelaxed)
+        assertTrue(result.categories.single().items.none { it.preferenceRelaxed })
         assertTrue(result.exclusions.danger >= 1)
         assertTrue(result.exclusions.unknownSafety >= 1)
         assertTrue(result.exclusions.dislikedIngredient >= 1)

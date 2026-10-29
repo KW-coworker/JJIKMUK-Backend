@@ -80,7 +80,7 @@ class BackendApplicationTests @Autowired constructor(
         assertEquals(user.email, login.email)
         assertEquals(false, login.isNewUser)
         assertEquals(true, login.profileCompleted)
-        assertEquals(86_400L, login.expiresInSeconds)
+        assertEquals(900L, login.expiresInSeconds)
         assertEquals(false, authService.nicknameAvailability(user.nickname).available)
 
         val authentication = UsernamePasswordAuthenticationToken(requireNotNull(user.id), null, emptyList())

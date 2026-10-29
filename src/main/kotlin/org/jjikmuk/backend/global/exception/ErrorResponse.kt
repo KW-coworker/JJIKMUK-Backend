@@ -7,5 +7,7 @@ data class ErrorResponse(
     val status: Int,
     val code: String,
     val message: String,
-    val field: String? = null
+    val field: String? = null,
+    val retryAfterSeconds: Long? = null,
+    val remainingAttempts: Int? = null
 )

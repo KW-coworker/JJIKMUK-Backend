@@ -17,7 +17,11 @@ class UserService(
     private val userRepository: UserRepository,
     private val passwordEncoder: BCryptPasswordEncoder,
     private val historyRepository: HistoryRepository,
-    private val recommendationFeedbackService: RecommendationFeedbackService
+    private val recommendationFeedbackService: RecommendationFeedbackService,
+    private val sessions: org.jjikmuk.backend.domain.auth.AuthSessionService,
+    private val linkGrants: org.jjikmuk.backend.domain.auth.GoogleLinkGrantRepository,
+    private val families: FamilyProfileRepository,
+    private val photos: ProfilePhotoRepository
 ) {
     @Transactional(readOnly = true)
     fun getAllUsers(): List<User> {
@@ -31,13 +35,7 @@ class UserService(
 
     @Transactional
     fun updatePassword(id: Long, request: UpdatePasswordRequest) {
-        val user = userRepository.findById(id).orElseThrow {
-            CustomException(
-                HttpStatus.NOT_FOUND,
-                "사용자를 찾을 수 없습니다.",
-                ApiErrorCode.USER_NOT_FOUND
-            )
-        }
+        val user = userRepository.lockById(id) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
 
         if (!user.authProvider.supportsPassword) {
             throw CustomException(
@@ -59,12 +57,13 @@ class UserService(
         AccountInputPolicy.validatePassword(request.newPassword)
         user.password = passwordEncoder.encode(request.newPassword)!!
         user.invalidateSessions()
+        sessions.revokeAll(id)
         userRepository.save(user)
     }
 
     @Transactional
     fun updateUserProfile(id: Long, request: UserProfileRequest): User? {
-        val user = userRepository.findById(id).orElse(null) ?: return null
+        val user = userRepository.lockById(id) ?: return null
         val nickname = AccountInputPolicy.normalizeNickname(request.nickname)
         if (userRepository.existsByNicknameIgnoreCaseAndIdNot(nickname, id)) {
             throw CustomException(
@@ -94,14 +93,32 @@ class UserService(
     }
 
     @Transactional
+    fun patchProfile(id: Long, body: Map<String, Any?>): User {
+        ProfileInputs.validateKeys(body)
+        val user = userRepository.lockById(id) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
+        val request = UserProfileRequest(
+            nickname = requireNotNull(ProfileInputs.text(body, "nickname", user.nickname)),
+            allergies = ProfileInputs.text(body, "allergies", user.allergies),
+            diseases = ProfileInputs.text(body, "diseases", user.diseases),
+            specialDiet = ProfileInputs.text(body, "specialDiet", user.specialDiet),
+            dislikedIngredients = ProfileInputs.text(body, "dislikedIngredients", user.dislikedIngredients))
+        return requireNotNull(updateUserProfile(id, request))
+    }
+
+    @Transactional
+    fun completeProfile(id: Long, request: UserProfileRequest): User {
+        val user = updateUserProfile(id, request) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
+        user.profileCompleted = true
+        return userRepository.saveAndFlush(user)
+    }
+
+    @Transactional
     fun deleteUser(id: Long) {
-        val user = userRepository.findById(id).orElseThrow {
-            CustomException(
-                HttpStatus.NOT_FOUND,
-                "사용자를 찾을 수 없습니다.",
-                ApiErrorCode.USER_NOT_FOUND
-            )
-        }
+        val user = userRepository.lockById(id) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
+        sessions.deleteAll(id)
+        linkGrants.deleteByUserId(id)
+        families.deleteByOwnerId(id)
+        photos.deleteById(id)
         historyRepository.deleteByUserId(id)
         recommendationFeedbackService.deleteByUserId(id)
         userRepository.delete(user)

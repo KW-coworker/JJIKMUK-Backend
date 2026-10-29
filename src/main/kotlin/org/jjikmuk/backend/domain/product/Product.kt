@@ -158,7 +158,14 @@ class Product(
 
     @JsonIgnore
     @Column(name = "dietary_data_confidence")
-    val dietaryDataConfidence: Double? = null
+    val dietaryDataConfidence: Double? = null,
+
+    // Expand phase: barcode remains the JPA key; IDs are allocated by the maintenance/import path.
+    @Column(name = "product_id")
+    val productId: Long? = null,
+
+    @Column(name = "attribute_snapshot_id")
+    val attributeSnapshotId: Long? = null
 ) {
     init {
         allergyDataConfidence?.let { confidence ->
@@ -181,6 +188,9 @@ class Product(
     /** Stable IDs are exposed alongside the source labels kept in the DB. */
     val foodCategoryIds: List<String>
         get() = ProductClassificationCatalog.foodCategoryIds(foodCategories)
+
+    val categoryAssessment: ProductCategoryAssessment
+        get() = ProductCategoryPolicy.assess(this)
 
     val allergyClassificationIds: List<String>
         get() = ProductClassificationCatalog.allergyIds(allergyClassification)

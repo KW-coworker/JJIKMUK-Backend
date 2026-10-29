@@ -7,5 +7,7 @@ class CustomException(
     val status: HttpStatus,
     override val message: String,
     val code: String = ApiErrorCode.REQUEST_FAILED,
-    val field: String? = null
+    val field: String? = null,
+    val retryAfterSeconds: Long? = null,
+    val remainingAttempts: Int? = null
 ) : RuntimeException(message)

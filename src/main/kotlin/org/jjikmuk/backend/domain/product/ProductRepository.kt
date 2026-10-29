@@ -5,6 +5,8 @@ import org.springframework.data.domain.Pageable
 
 interface ProductRepository : JpaRepository<Product, String> {
     fun findFirstByBarcode(barcode: String): Product?
+    fun findByProductId(productId: Long): Product?
+    fun findAllByProductIdIn(productIds: Collection<Long>): List<Product>
 
     /**
      * Keyset-based catalogue traversal for randomised home recommendations.

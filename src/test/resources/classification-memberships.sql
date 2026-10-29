@@ -15,3 +15,5 @@ CREATE TABLE IF NOT EXISTS product_allergy_classification_memberships (
 
 CREATE INDEX IF NOT EXISTS idx_product_allergy_classification_lookup
     ON product_allergy_classification_memberships(allergy_id, barcode);
+
+MERGE INTO product_id_sequence (sequence_name,next_id) KEY(sequence_name) VALUES ('products',1);

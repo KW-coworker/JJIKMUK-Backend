@@ -20,7 +20,8 @@ import javax.crypto.SecretKey
 @Component
 class JwtAuthenticationFilter(
     @Value("\${jwt.secret}") secretKey: String,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val sessions: org.jjikmuk.backend.domain.auth.AuthSessionRepository
 ) : OncePerRequestFilter() {
     private val key: SecretKey = Keys.hmacShaKeyFor(secretKey.toByteArray())
 
@@ -29,6 +30,13 @@ class JwtAuthenticationFilter(
         response: HttpServletResponse,
         filterChain: FilterChain
     ) {
+        // These endpoints authenticate their own password/Google/refresh proof. An expired access
+        // header must not prevent refresh or signing in again.
+        if (request.servletPath in setOf("/api/auth/login", "/api/auth/google", "/api/auth/refresh",
+                "/api/auth/google/link", "/api/auth/google/link/cancel")) {
+            filterChain.doFilter(request, response)
+            return
+        }
         val authHeader = request.getHeader("Authorization")
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             filterChain.doFilter(request, response)
@@ -60,8 +68,17 @@ class JwtAuthenticationFilter(
             }
 
             val authorities = listOf(SimpleGrantedAuthority("ROLE_${user.role.name}"))
+            val sessionId = claims["sid"] as? String
+            if (sessionId != null) {
+                val session = sessions.findById(sessionId).orElse(null)
+                if (session == null || session.userId != userId || session.revokedAt != null ||
+                    !session.expiresAt.isAfter(java.time.Instant.now()) || session.tokenVersion != user.tokenVersion) {
+                    writeUnauthorized(response, ApiErrorCode.AUTH_TOKEN_INVALID, "로그인 세션이 무효화되었습니다.")
+                    return
+                }
+            }
             SecurityContextHolder.getContext().authentication =
-                UsernamePasswordAuthenticationToken(requireNotNull(user.id), null, authorities)
+                UsernamePasswordAuthenticationToken(requireNotNull(user.id), null, authorities).apply { details = sessionId }
         } catch (_: ExpiredJwtException) {
             writeUnauthorized(
                 response,
@@ -76,12 +93,14 @@ class JwtAuthenticationFilter(
                 "로그인 토큰이 유효하지 않습니다."
             )
             return
+        } catch (_: IllegalArgumentException) {
+            writeUnauthorized(response, ApiErrorCode.AUTH_TOKEN_INVALID, "로그인 토큰이 유효하지 않습니다.")
+            return
         } catch (_: Exception) {
-            writeUnauthorized(
-                response,
-                ApiErrorCode.AUTH_TOKEN_INVALID,
-                "로그인 토큰이 유효하지 않습니다."
-            )
+            response.status = HttpServletResponse.SC_SERVICE_UNAVAILABLE
+            response.characterEncoding = "UTF-8"
+            response.contentType = "application/json"
+            response.writer.write("""{"status":503,"code":"AUTH_SERVICE_UNAVAILABLE","message":"로그인 상태 확인에 실패했습니다. 세션을 유지하고 다시 시도해주세요."}""")
             return
         }
         filterChain.doFilter(request, response)

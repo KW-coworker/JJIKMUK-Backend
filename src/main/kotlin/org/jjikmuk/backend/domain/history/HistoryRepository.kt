@@ -8,7 +8,10 @@ data class HistoryResponse(
     val id: Long,
     val actionType: String,
     val scannedAt: LocalDateTime,
-    val product: Product? // 바코드를 기반으로 찾아낸 실제 상품 정보 전체
+    val product: Product?, // Current display data, not a reconstruction of the historical label.
+    val productId: Long? = null,
+    val attributeSnapshotId: Long? = null,
+    val identityStatus: String = "LEGACY_VERSION_UNKNOWN"
 )
 
 interface HistoryRepository : JpaRepository<History, Long> {

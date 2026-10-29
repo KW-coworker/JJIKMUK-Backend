@@ -27,11 +27,11 @@ class RecommendationPolicy(
         .orEmpty()
 
     fun requiredFilters(user: User): Set<ProductFilter> {
-        return preferredFilters(user) + healthConstraintFilters(user)
+        return selectedDietFilters(user) + healthConstraintFilters(user)
     }
 
-    /** Preferences may be relaxed only after safe matching products run short. */
-    fun preferredFilters(user: User): Set<ProductFilter> =
+    /** The profile has no hard/soft distinction: selected diets are mandatory in both APIs. */
+    fun selectedDietFilters(user: User): Set<ProductFilter> =
         DietPreferenceCatalog.knownFilters(user.specialDiet)
 
     /** Disease-derived constraints remain hard constraints in every recommendation tier. */
@@ -71,19 +71,10 @@ class RecommendationPolicy(
             )
         }
 
-        val failed = required.filterNot { it.matches(product) }
-        val effectiveConfidence = product.dietaryDataConfidence
-            ?: inferredDietaryConfidence(product)
-        val uncertain = if (failed.isEmpty()) {
-            required.filter { filter ->
-                product.dietaryDataOrigin == ProductDataOrigin.UNKNOWN ||
-                    effectiveConfidence == null ||
-                    effectiveConfidence < MIN_DIETARY_CONFIDENCE ||
-                    !hasConstraintEvidence(product, filter)
-            }
-        } else {
-            emptyList()
-        }
+        val attributes = required.map { evaluateDietaryAttribute(product, it) }
+        val byKey = attributes.associateBy(DietaryAttributeDecision::key)
+        val failed = required.filter { byKey.getValue(it.key).status == DietaryAttributeStatus.NOT_MET }
+        val uncertain = required.filter { byKey.getValue(it.key).status == DietaryAttributeStatus.UNKNOWN }
         val satisfied = required - failed.toSet() - uncertain.toSet()
         val status = when {
             failed.isNotEmpty() -> DietConstraintStatus.MISMATCH
@@ -91,6 +82,7 @@ class RecommendationPolicy(
             else -> DietConstraintStatus.PASS
         }
         val message = when (status) {
+            DietConstraintStatus.NOT_EVALUATED -> "식단 조건을 검사하지 않았습니다."
             DietConstraintStatus.MISMATCH ->
                 "필수 식단 조건을 충족하지 않습니다: ${failed.joinToString { it.label }}"
             DietConstraintStatus.UNKNOWN ->
@@ -105,8 +97,43 @@ class RecommendationPolicy(
             failedFilters = failed.map(ProductFilter::key),
             uncertainFilters = uncertain.map(ProductFilter::key),
             evidenceOrigin = product.dietaryDataOrigin,
-            confidence = effectiveConfidence,
-            message = message
+            confidence = product.dietaryDataConfidence,
+            message = message,
+            attributes = attributes
+        )
+    }
+
+    /** Boolean false alone is not evidence of a negative classification. Never invent confidence. */
+    fun evaluateDietaryAttribute(product: Product, filter: ProductFilter): DietaryAttributeDecision {
+        val confidence = product.dietaryDataConfidence
+        // Raw ingredient contradictions override inferred flags AND absent/low confidence.
+        // Allergy warnings may describe shared facilities; do not treat them as vegan ingredients.
+        val ingredients = if (filter == ProductFilter.VEGAN) {
+            VeganIngredientEvidence.inspect(product.rawMaterials)
+        } else VeganIngredientEvidence.Findings(emptyList(), emptyList())
+        val reason = when {
+            ingredients.conflicts.isNotEmpty() -> DietaryAttributeReason.EXPLICIT_INGREDIENT_CONFLICT
+            ingredients.uncertain.isNotEmpty() -> DietaryAttributeReason.AMBIGUOUS_INGREDIENT_EVIDENCE
+            product.dietaryDataOrigin in setOf(ProductDataOrigin.UNKNOWN, ProductDataOrigin.IMPUTED) ->
+                DietaryAttributeReason.UNRELIABLE_ORIGIN
+            confidence == null || !confidence.isFinite() || confidence < MIN_DIETARY_CONFIDENCE ->
+                DietaryAttributeReason.INSUFFICIENT_CONFIDENCE
+            !hasConstraintEvidence(product, filter) -> DietaryAttributeReason.MISSING_OR_INVALID_EVIDENCE
+            else -> DietaryAttributeReason.STORED_CLASSIFICATION
+        }
+        return DietaryAttributeDecision(
+            key = filter.key,
+            status = when {
+                reason == DietaryAttributeReason.EXPLICIT_INGREDIENT_CONFLICT -> DietaryAttributeStatus.NOT_MET
+                reason != DietaryAttributeReason.STORED_CLASSIFICATION -> DietaryAttributeStatus.UNKNOWN
+                filter.matches(product) -> DietaryAttributeStatus.MET
+                else -> DietaryAttributeStatus.NOT_MET
+            },
+            storedValue = filter.matches(product),
+            evidenceOrigin = product.dietaryDataOrigin,
+            confidence = confidence,
+            reason = reason,
+            ingredientEvidence = ingredients.conflicts.ifEmpty { ingredients.uncertain }
         )
     }
 
@@ -146,23 +173,6 @@ class RecommendationPolicy(
         .lowercase()
         .filter { it.isLetterOrDigit() }
 
-    private fun inferredDietaryConfidence(product: Product): Double? {
-        val nutritionCount = listOf(
-            product.energyKcal,
-            product.carbsG,
-            product.proteinG,
-            product.fatG,
-            product.sugarG,
-            product.sodiumMg
-        ).count { it != null }
-        return when {
-            !product.rawMaterials.isNullOrBlank() && nutritionCount >= 3 -> 0.80
-            !product.rawMaterials.isNullOrBlank() -> 0.70
-            nutritionCount >= 3 -> 0.60
-            else -> null
-        }
-    }
-
     private fun hasConstraintEvidence(product: Product, filter: ProductFilter): Boolean = when (filter) {
         ProductFilter.VEGAN,
         ProductFilter.LACTO_VEGETARIAN,
@@ -170,15 +180,22 @@ class RecommendationPolicy(
         ProductFilter.LACTO_OVO_VEGETARIAN,
         ProductFilter.PESCATARIAN,
         ProductFilter.POLLOTARIAN,
-        ProductFilter.GLUTEN_FREE -> !product.rawMaterials.isNullOrBlank()
-        ProductFilter.LOW_SUGAR -> product.sugarG != null
-        ProductFilter.LOW_SODIUM -> product.sodiumMg != null
-        ProductFilter.LOW_CALORIE -> product.energyKcal != null
-        ProductFilter.LOW_FAT -> product.fatG != null
-        ProductFilter.HIGH_PROTEIN -> product.proteinG != null
+        ProductFilter.GLUTEN_FREE -> normalize(product.rawMaterials) !in MISSING_INGREDIENT_MARKERS
+        ProductFilter.LOW_SUGAR -> hasNutrientEvidence(product, product.sugarG)
+        ProductFilter.LOW_SODIUM -> hasNutrientEvidence(product, product.sodiumMg)
+        ProductFilter.LOW_CALORIE -> hasNutrientEvidence(product, product.energyKcal)
+        ProductFilter.LOW_FAT -> hasNutrientEvidence(product, product.fatG)
+        ProductFilter.HIGH_PROTEIN -> hasNutrientEvidence(product, product.proteinG)
     }
+
+    private fun hasNutrientEvidence(product: Product, value: Double?): Boolean =
+        value != null && value.isFinite() && value >= 0.0 &&
+            product.nutritionDataOrigin in setOf(
+                ProductDataOrigin.SOURCE, ProductDataOrigin.NORMALIZED, ProductDataOrigin.CALCULATED
+            )
 
     private companion object {
         const val MIN_DIETARY_CONFIDENCE = 0.50
+        val MISSING_INGREDIENT_MARKERS = setOf("", "null", "none", "na", "unknown", "정보없음", "미상", "미입력", "해당없음")
     }
 }

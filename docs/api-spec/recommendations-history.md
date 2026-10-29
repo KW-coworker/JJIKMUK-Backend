@@ -2,6 +2,9 @@
 
 [공통 규칙과 전체 목록](README.md), [Product 전체 필드](products.md). 상품 ID·응답 값은 설명용 예시이다.
 
+2026-10-28 추가: [ID 기반 추천·행동 이력, 용도 MATCH/MISMATCH/UNKNOWN 계약](../catalog-evolution-stage1-3.md).
+이력 입력은 barcode 또는 productId 중 하나 이상이며 둘 다 입력 시 동일 상품이어야 한다. 기존 바코드 주소는 유지한다.
+
 ## R01. 맞춤 안심 상품 추천·카테고리별 보기
 
 ```http
@@ -35,7 +38,7 @@ page·size·filters·categoryMatch 파라미터는 이 API의 계약에 없다. 
 
 - 알레르기 DANGER·UNKNOWN은 제외하고 PASS만 반환한다.
 - 기피 식재료가 표기에서 확인되는 상품 및 질환에서 유도한 건강 조건이 MISMATCH·UNKNOWN인 상품도 제외한다.
-- specialDiet는 선호 조건으로 사용한다. 현재 탐색 구간 내에서 충족 상품을 우선하고 부족한 자리는 선호만 완화한다. 비건·글루텐프리 등을 반드시 지켜야 하는 조건으로 간주하려면 이 완화 정책을 그대로 사용해서는 안 된다.
+- specialDiet는 대체 상품 추천과 동일한 필수 조건이다. 후보가 부족해도 완화하지 않는다. 질병 파생 조건과 합친 dietConstraints가 PASS인 상품만 반환한다.
 - diseases에서 유도하는 현재 매핑: 당뇨/혈당→lowSugar, 고혈압/혈압→lowSodium, 고지혈/이상지질/심혈관→lowFat, 비만/체중조절/다이어트→lowCalorie, 셀리악/글루텐→glutenFree. 이는 구현 규칙 설명이며 의학적 기준을 보장하는 설명이 아니다.
 - 기피 식재료 매칭은 현재 정규화 후 2자 이상 문자열 포함 기준이다. 임의 식재료에 대한 완전한 알레르기 검증으로 설명하지 않는다.
 - 최대 5000개 후보를 스캔하고, 통과 후보가 limit만큼 모이면 탐색을 끝낸다. seed로 시작 지점과 현재 구간의 순서를 달리하는 방식이며 전체 DB 균등 무작위 추출이나 전체 DB 선호 최적 순위를 보장하지 않는다.
@@ -70,6 +73,8 @@ Authorization: Bearer {token}
     "requestedCategoryIds": ["snack"],
     "preferenceFilterIds": [],
     "hardHealthFilterIds": [],
+    "requiredDietFilterIds": [],
+    "policyVersion": "unified-hard-constraints-evidence-v5.1",
     "recommendationMode": "PREFERENCE_MATCHED",
     "categories": [{
       "categoryId": "snack",
@@ -85,6 +90,7 @@ Authorization: Bearer {token}
           "message": "등록된 알레르기 조건이 없습니다."
         },
         "healthConstraints": {
+          "attributes": [],
           "status": "PASS",
           "requiredFilters": [],
           "satisfiedFilters": [],
@@ -95,6 +101,7 @@ Authorization: Bearer {token}
           "message": "등록된 필수 식단 조건이 없습니다."
         },
         "preferences": {
+          "attributes": [],
           "status": "PASS",
           "requiredFilters": [],
           "satisfiedFilters": [],
@@ -103,6 +110,17 @@ Authorization: Bearer {token}
           "evidenceOrigin": "INFERRED",
           "confidence": null,
           "message": "등록된 필수 식단 조건이 없습니다."
+        },
+        "dietConstraints": {
+          "status": "PASS",
+          "requiredFilters": [],
+          "satisfiedFilters": [],
+          "failedFilters": [],
+          "uncertainFilters": [],
+          "evidenceOrigin": "INFERRED",
+          "confidence": null,
+          "message": "등록된 필수 식단 조건이 없습니다.",
+          "attributes": []
         },
         "preferenceRelaxed": false,
         "categoryIds": ["snack"]
@@ -117,10 +135,12 @@ Authorization: Bearer {token}
       "dislikedIngredient": 0,
       "healthMismatch": 0,
       "healthUnknown": 0,
+      "dietMismatch": 0,
+      "dietUnknown": 0,
       "categoryMismatch": 0,
       "alreadyDeliveredOrDuplicate": 0
     },
-    "notice": "알레르기·주의성분·건강 조건을 우선 적용한 추천입니다. 실제 제품 포장 표시를 다시 확인해 주세요."
+    "notice": "알레르기·주의성분·필수 식단·건강 조건을 적용한 표기 데이터 기반 추천입니다. 실제 제품 포장 표시를 다시 확인해 주세요."
   }
 }
 ```
@@ -134,7 +154,9 @@ Authorization: Bearer {token}
 | requestedLimit / returnedItemCount | integer | 요청 상한과 반환 고유 상품 수 |
 | returnedBarcodes | string[] | 이번에 반환한 고유 상품 바코드 |
 | requestedCategoryIds | string[] | 적용한 카테고리 제한 |
-| preferenceFilterIds / hardHealthFilterIds | string[] | 완화 가능한 선호 / 유지하는 건강 조건 |
+| preferenceFilterIds / hardHealthFilterIds | string[] | 필수 선택 식단(호환 필드명) / 건강 조건 |
+| requiredDietFilterIds | string[] | 선택 식단과 건강 조건의 합집합 |
+| policyVersion | string | 현재 unified-hard-constraints-evidence-v5.1 |
 | recommendationMode | string | 아래 모드 표 참고 |
 | categories | CategoryGroup[] | 결과가 있는 카테고리만 반환 |
 | categories[].categoryId / categoryName | string | 분류 ID·표시 이름 |
@@ -142,16 +164,15 @@ Authorization: Bearer {token}
 | nextCursor | string/null | 다음 탐색 위치. 내부 해석·편집 금지 |
 | hasNext | boolean | 다음 탐색 가능 여부 |
 | scannedCandidateCount | integer | 이번 탐색 수 |
-| exclusions | object | 예시의 7개 정수 카운터 |
+| exclusions | object | 예시의 9개 정수 카운터. healthMismatch/healthUnknown은 dietMismatch/dietUnknown의 부분집합이며 합산하지 않음 |
 | notice | string | 결과 안내 |
 
-SafeItem은 product(Product), safety(SafetyDecision), healthConstraints(DietConstraintDecision), preferences(DietConstraintDecision), preferenceRelaxed(boolean), categoryIds(string[])를 가진다. 판정 객체는 R03을 참고한다.
+SafeItem은 product(Product), safety(SafetyDecision), healthConstraints(DietConstraintDecision), preferences(DietConstraintDecision), dietConstraints(DietConstraintDecision), preferenceRelaxed(boolean, 항상 false), categoryIds(string[])를 가진다. dietConstraints는 전체 필수 조건이고 healthConstraints/preferences는 부분집합 판정이다. 판정 객체는 R03을 참고한다.
 
 | recommendationMode | 의미·message |
 |---|---|
 | PREFERENCE_MATCHED | `맞춤 안심 상품 추천 성공` |
-| MIXED | `선호 조건을 우선 적용하고 일부 완화한 안심 상품 추천 성공` |
-| PREFERENCE_RELAXED | `안전 조건을 유지하고 선호 조건을 완화한 상품을 추천합니다.` |
+| MIXED / PREFERENCE_RELAXED | 구버전 호환 enum. 현재 서비스에서는 생성하지 않음 |
 | EMPTY | `현재 범위에서 안전성이 확인된 추천 상품을 찾지 못했습니다.` |
 
 ### 카테고리·추가 로딩 규칙
@@ -243,7 +264,7 @@ dataEvidence는 allergyEvidenceLevel(string), allergyConfidence(number/null), nu
 | VERIFICATION_REQUIRED | fallbackItems | 자료 부족 대안. 안전 추천과 분리하고 warnings·requiredActions 표시 |
 | ACTION_REQUIRED | 두 배열 모두 빈 배열 | 반환 가능한 상품 없음. requiredActions 표시 |
 
-items가 1개라도 있으면 limit보다 적더라도 fallback으로 부족분을 채우지 않는다. UNKNOWN 대안은 items와 분리하고 DANGER·명시적인 식단 MISMATCH·기피 식재료 확인 상품은 대안에도 넣지 않는다. R01과 달리 여기서는 specialDiet의 명시적 불일치도 배제한다.
+items가 1개라도 있으면 limit보다 적더라도 fallback으로 부족분을 채우지 않는다. UNKNOWN 대안은 items와 분리하고 DANGER·명시적인 식단 MISMATCH·기피 식재료 확인 상품은 대안에도 넣지 않는다. R01과 동일하게 specialDiet와 건강 조건을 필수로 적용한다. 홈은 UNKNOWN을 반환하지 않으며 대체 추천만 별도 경고 대안을 제공한다.
 
 예시는 핵심 분기 필드만 발췌한다. 실제 응답에는 위 표의 전체 필드가 포함된다.
 
@@ -287,9 +308,17 @@ items가 1개라도 있으면 limit보다 적더라도 fallback으로 부족분�
 | satisfiedFilters | string[] | 충족 조건 |
 | failedFilters | string[] | 불충족 조건 |
 | uncertainFilters | string[] | 판단 불가 조건 |
+| attributes | DietaryAttributeDecision[] | 요구된 개별 속성의 근거·3상태 판정 |
 | evidenceOrigin | string | SOURCE / NORMALIZED / INFERRED / IMPUTED / CALCULATED / UNKNOWN |
 | confidence | number/null | 근거 신뢰도 |
 | message | string | 판단 설명 |
+
+DietaryAttributeDecision은 key(string), status(MET/NOT_MET/UNKNOWN), storedValue(boolean), evidenceOrigin(string), confidence(number/null), reason(string), ingredientEvidence(string[])이다.
+reason은 STORED_CLASSIFICATION / UNRELIABLE_ORIGIN / INSUFFICIENT_CONFIDENCE / MISSING_OR_INVALID_EVIDENCE / EXPLICIT_INGREDIENT_CONFLICT / AMBIGUOUS_INGREDIENT_EVIDENCE 중 하나이다.
+비건 요구 시 원재료의 젓갈 등 명시적 동물성 근거를 저장 분류보다 우선한다. 충돌은 EXPLICIT_INGREDIENT_CONFLICT 및 NOT_MET, 향·식물성 대체 등의 모호한 표현은 AMBIGUOUS_INGREDIENT_EVIDENCE 및 UNKNOWN이다. ingredientEvidence는 사용한 성분 키워드이며 없으면 []이다.
+명시적 충돌 없이 근거가 부족한 경우 true/false 모두 UNKNOWN으로 판정하며, 명시적 NOT_MET와 UNKNOWN이 섞여도 failedFilters와 uncertainFilters를 모두 보존한다. storedValue는 원본 Boolean이므로 true라도 NOT_MET일 수 있다. UI는 status와 reason을 사용하고 새 reason을 모르면 공통 안내로 처리한다.
+종합 판정은 NOT_MET가 있으면 MISMATCH, 없고 UNKNOWN이 있으면 UNKNOWN, 나머지는 PASS이다.
+현재 출처·신뢰도는 상품 단위 자료를 사용하며 속성별 독립 검수·인증을 의미하지 않는다.
 
 PASS는 서비스의 표기 데이터 기반 결과이고, 어떤 사용자에게도 실제 섭취 안전을 보증하는 값이 아니다. 등록 조건 없음에 따른 PASS도 있으므로 message·요구 조건 배열을 함께 사용한다.
 
@@ -329,6 +358,8 @@ Authorization: Bearer {token}
 필드 타입은 요청과 같으며 createdAt은 LocalDateTime 문자열이다. 400 REQUEST_FAILED(형식·유형·순위), 404 REQUEST_FAILED(사용자·상품 없음), 409 REQUEST_FAILED(동일 추천 피드백 중복), 공통 401/500이 가능하다.
 
 rankPosition 상한이 20이므로 최대 50개를 주는 첫 화면 추천의 21번째 이후 위치를 그대로 전송하면 400이다. 생략 또는 null은 허용한다. 이 피드백은 추천 평가 테이블에 저장되며 현재 취향 이력 학습용 `/api/histories/events`를 자동 생성하지 않는다.
+
+현재 서버는 requestId의 UUID 형식, 사용자·상품 존재와 동일 피드백 중복을 검사한다. 실제 발급된 추천 요청인지, 본인 소유인지, 해당 상품이 그 응답에 포함됐는지는 검증하지 않는다. 프론트는 실제 응답의 ID·상품을 전송해야 하며 서버 측 소유권 검증은 별도 보완이 필요하다.
 
 ## H01. 사용자 행동·스캔 이력 조회
 

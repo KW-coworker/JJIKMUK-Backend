@@ -29,7 +29,9 @@ data class UserProfileResponse(
     val dislikedIngredients: String?,
     val role: String,
     val authProvider: String,
-    val profileCompleted: Boolean
+    val profileCompleted: Boolean,
+    val hasPassword: Boolean,
+    val photoUrl: String?
 )
 
 fun User.toProfileResponse(): UserProfileResponse = UserProfileResponse(
@@ -42,7 +44,9 @@ fun User.toProfileResponse(): UserProfileResponse = UserProfileResponse(
     dislikedIngredients = dislikedIngredients,
     role = role.name,
     authProvider = authProvider.name,
-    profileCompleted = profileCompleted
+    profileCompleted = profileCompleted,
+    hasPassword = authProvider.supportsPassword,
+    photoUrl = if (hasProfilePhoto) "/api/users/me/photo" else null
 )
 
 @RestController
@@ -78,6 +82,16 @@ class UserController(
         request = request,
         authentication = authentication
     )
+
+    @PatchMapping("/me")
+    fun patchMyProfile(@RequestBody body: Map<String, Any?>, authentication: Authentication): ResponseEntity<*> =
+        ResponseEntity.ok(mapOf("message" to "프로필 부분 수정 성공",
+            "data" to userService.patchProfile(authentication.principal.toString().toLong(), body).toProfileResponse()))
+
+    @PostMapping("/me/profile/complete")
+    fun completeMyProfile(@RequestBody request: UserProfileRequest, authentication: Authentication): ResponseEntity<*> =
+        ResponseEntity.ok(mapOf("message" to "추가 프로필 입력 완료",
+            "data" to userService.completeProfile(authentication.principal.toString().toLong(), request).toProfileResponse()))
 
     @GetMapping("/{userId}")
     fun getUserInfo(@PathVariable userId: Long, authentication: Authentication): ResponseEntity<*> {

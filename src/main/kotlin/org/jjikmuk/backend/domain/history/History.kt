@@ -58,5 +58,8 @@ class History(
     val actionType: UserActionType,
 
     @Column(nullable = false)
-    val createdAt: LocalDateTime = LocalDateTime.now()
+    val createdAt: LocalDateTime = LocalDateTime.now(),
+
+    @Column(name = "product_id") val productId: Long? = null,
+    @Column(name = "attribute_snapshot_id") val attributeSnapshotId: Long? = null
 )
