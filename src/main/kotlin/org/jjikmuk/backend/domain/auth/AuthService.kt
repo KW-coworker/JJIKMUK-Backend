@@ -13,14 +13,13 @@ import org.springframework.http.HttpStatus
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
-import java.util.UUID
 
 @Service
 class AuthService(
     private val userRepository: UserRepository,
     private val passwordEncoder: BCryptPasswordEncoder,
     private val sessions: AuthSessionService,
-    private val googleVerifier: GoogleIdentityVerifier,
+    private val googleLoginService: GoogleLoginService,
     private val linkGrants: GoogleLinkGrantRepository,
     private val emailService: EmailService
 ) {
@@ -91,47 +90,9 @@ class AuthService(
         return issueAuthResponse(user, isNewUser = false, message = "로그인 성공")
     }
 
-    @Transactional
-    fun googleLogin(request: GoogleLoginRequest): Any {
-        val identity = googleVerifier.verify(request.idToken)
-        val bySubject = userRepository.idForGoogleSubject(identity.subject)
-        if (bySubject != null) {
-            val locked = userRepository.lockById(bySubject) ?: throw invalidGoogleToken()
-            return issueAuthResponse(locked, false, "구글 로그인 성공")
-        }
-        val email = identity.email
-        var isNewUser = false
-        var user = userRepository.idForEmail(email)?.let(userRepository::lockById)
-        if (user == null) {
-            isNewUser = true
-            user = User(
-                email = email,
-                password = passwordEncoder.encode(UUID.randomUUID().toString())!!,
-                nickname = generateUniqueGoogleNickname(),
-                allergies = null,
-                diseases = null,
-                specialDiet = null,
-                dislikedIngredients = null,
-                authProvider = AuthProvider.GOOGLE,
-                profileCompleted = false,
-                googleSubject = identity.subject
-            )
-        } else {
-            if (user.googleSubject != null && user.googleSubject != identity.subject) throw invalidGoogleToken()
-            if (user.authProvider.supportsPassword) {
-                val token = EmailVerificationSecurity.newToken()
-                linkGrants.deleteByUserId(requireNotNull(user.id))
-                val expiresAt = java.time.Instant.now().plusSeconds(300)
-                linkGrants.save(GoogleLinkGrant(EmailVerificationSecurity.hashToken(token), requireNotNull(user.id),
-                    identity.subject, user.tokenVersion, expiresAt))
-                return GoogleLinkRequiredResponse(linkToken = token, expiresAt = expiresAt)
-            }
-            // Legacy Google-only account: bind its verified identity once, never link a LOCAL account here.
-            user.googleSubject = identity.subject
-        }
-        user = userRepository.saveAndFlush(user)
-        return issueAuthResponse(user, isNewUser, "구글 로그인 성공")
-    }
+    // Deliberately non-transactional: Google verification must finish before account/session writes.
+    // GoogleLoginService rejects callers that already hold a transaction; do not add @Transactional here.
+    fun googleLogin(request: GoogleLoginRequest): Any = googleLoginService.login(request)
 
     @Transactional(noRollbackFor = [CustomException::class])
     fun linkGoogle(request: GoogleLinkRequest): AuthResponse {
@@ -202,11 +163,12 @@ class AuthService(
     }
 
     @Transactional(readOnly = true)
-    fun nicknameAvailability(value: String): NicknameAvailabilityResponse {
+    fun nicknameAvailability(value: String, currentUserId: Long? = null): NicknameAvailabilityResponse {
         val nickname = AccountInputPolicy.normalizeNickname(value)
         return NicknameAvailabilityResponse(
             nickname = nickname,
-            available = !userRepository.existsByNicknameIgnoreCase(nickname)
+            available = if (currentUserId == null) !userRepository.existsByNicknameIgnoreCase(nickname)
+                else !userRepository.existsByNicknameIgnoreCaseAndIdNot(nickname, currentUserId)
         )
     }
 
@@ -236,28 +198,10 @@ class AuthService(
         }
     }
 
-    private fun generateUniqueGoogleNickname(): String {
-        repeat(10) {
-            val candidate = "user_${UUID.randomUUID().toString().replace("-", "").take(8)}"
-            if (!userRepository.existsByNicknameIgnoreCase(candidate)) return candidate
-        }
-        throw CustomException(
-            HttpStatus.SERVICE_UNAVAILABLE,
-            "닉네임 생성에 실패했습니다. 잠시 후 다시 시도해주세요.",
-            ApiErrorCode.INTERNAL_SERVER_ERROR
-        )
-    }
-
     private fun loginFailed() = CustomException(
         HttpStatus.UNAUTHORIZED,
         "이메일 또는 비밀번호가 일치하지 않습니다.",
         ApiErrorCode.LOGIN_FAILED
-    )
-
-    private fun invalidGoogleToken() = CustomException(
-        HttpStatus.UNAUTHORIZED,
-        "유효하지 않은 Google ID 토큰입니다.",
-        ApiErrorCode.GOOGLE_TOKEN_INVALID
     )
 
     private fun normalizeAllergies(value: String?): String? = try {

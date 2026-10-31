@@ -1,5 +1,6 @@
 package org.jjikmuk.backend.domain.auth
 
+import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.ResponseEntity
 import org.springframework.http.HttpStatus
 import org.springframework.security.core.Authentication
@@ -10,7 +11,8 @@ import org.springframework.web.bind.annotation.*
 class AuthController(
     private val authService: AuthService,
     private val emailService: EmailService,
-    private val sessions: AuthSessionService
+    private val sessions: AuthSessionService,
+    private val loginAttemptLimiter: LoginAttemptLimiter
 ) {
     @PostMapping("/signup")
     fun signup(@RequestBody request: SignupRequest): ResponseEntity<*> {
@@ -21,7 +23,10 @@ class AuthController(
     }
 
     @PostMapping("/login")
-    fun login(@RequestBody request: LoginRequest): ResponseEntity<*> {
+    fun login(@RequestBody request: LoginRequest, httpRequest: HttpServletRequest): ResponseEntity<*> {
+        // Only use the container's peer address; never trust raw Forwarded/X-Forwarded-For here.
+        // Admission is outside AuthService's DB transaction, so failed logins cannot roll it back.
+        loginAttemptLimiter.acquire(request.email, httpRequest.remoteAddr)
         return ResponseEntity.ok(authService.login(request))
     }
 
@@ -43,11 +48,11 @@ class AuthController(
     }
 
     @GetMapping("/nicknames/availability")
-    fun nicknameAvailability(@RequestParam nickname: String): ResponseEntity<*> =
+    fun nicknameAvailability(@RequestParam nickname: String, authentication: Authentication?): ResponseEntity<*> =
         ResponseEntity.ok(
             mapOf(
                 "message" to "닉네임 사용 가능 여부 조회 성공",
-                "data" to authService.nicknameAvailability(nickname)
+                "data" to authService.nicknameAvailability(nickname, authentication?.principal as? Long)
             )
         )
 
@@ -64,6 +69,15 @@ class AuthController(
         )
         )
     }
+    @PostMapping("/logout/refresh")
+    fun logoutByRefresh(@RequestBody request: RefreshLogoutRequest): ResponseEntity<*> {
+        val userId = sessions.logoutByRefresh(request.refreshToken)
+        return ResponseEntity.ok(mapOf(
+            "message" to "서버 세션을 폐기했습니다. 기기에 저장된 토큰을 삭제해주세요.",
+            "data" to mapOf("userId" to userId, "serverTokenRevoked" to true)
+        ))
+    }
+
     @PostMapping("/email/send")
     fun sendEmailCode(@RequestBody request: EmailSendRequest): ResponseEntity<*> {
         val result = emailService.sendVerificationCode(request)

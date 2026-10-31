@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.Mockito.`when`
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.http.MediaType
 import org.springframework.mock.web.MockMultipartFile
@@ -54,6 +55,7 @@ class FrontendContractIntegrationTest @Autowired constructor(
     private val jdbc: org.springframework.jdbc.core.JdbcTemplate
 ) {
     @MockitoBean lateinit var google: GoogleIdentityVerifier
+    @Value("\${jwt.secret}") lateinit var jwtSecret: String
     private lateinit var mvc: MockMvc
     @BeforeEach fun setup() {
         mvc = MockMvcBuilders.webAppContextSetup(context)
@@ -72,6 +74,193 @@ class FrontendContractIntegrationTest @Autowired constructor(
     private fun bearer(token: String) = "Bearer $token"
     private fun error(code: String, action: () -> Unit) = assertEquals(code, assertFailsWith<CustomException> { action() }.code)
     private fun png() = ByteArrayOutputStream().also { ImageIO.write(BufferedImage(4, 4, BufferedImage.TYPE_INT_RGB), "png", it) }.toByteArray()
+
+    @Test fun `incomplete Google account is limited until explicit completion then same token works`() {
+        val unique = UUID.randomUUID().toString().replace("-", "")
+        `when`(google.verify("onboarding")).thenReturn(GoogleIdentity(unique, "$unique@example.com"))
+        val issued = assertIs<AuthResponse>(auth.googleLogin(GoogleLoginRequest("onboarding")))
+        val account = users.findById(issued.userId).orElseThrow()
+        assertFalse(issued.profileCompleted)
+        val barcode = "ONBOARD-${account.id}"
+        products.saveAndFlush(Product(barcode = barcode, productName = "온보딩 테스트"))
+        for (path in listOf("/api/products/$barcode", "/api/products/search?keyword=$barcode",
+            "/api/products/filter", "/api/products/safe-recommendations?analysisMode=none",
+            "/api/recommendations/products/$barcode", "/api/histories/user/${account.id}",
+            "/api/users/me/family-profiles", "/api/users/${account.id}")) {
+            mvc.perform(get(path).header("Authorization", bearer(issued.token)))
+                .andExpect(status().isForbidden).andExpect(jsonPath("$.code").value("PROFILE_INCOMPLETE"))
+        }
+        for (path in listOf("/api/chat", "/api/histories/events", "/api/recommendations/feedback")) {
+            mvc.perform(post(path).header("Authorization", bearer(issued.token)).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden).andExpect(jsonPath("$.code").value("PROFILE_INCOMPLETE"))
+        }
+        for (path in listOf("/api/users/me", "/api/users/${account.id}")) {
+            mvc.perform(put(path).header("Authorization", bearer(issued.token)).contentType(MediaType.APPLICATION_JSON)
+                .content("""{"nickname":"${account.nickname}"}"""))
+                .andExpect(status().isForbidden).andExpect(jsonPath("$.code").value("PROFILE_INCOMPLETE"))
+        }
+        for (path in listOf("/api/users/me", "/api/products/filters", "/api/products/classifications")) {
+            mvc.perform(get(path).header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        }
+        mvc.perform(patch("/api/users/me").header("Authorization", bearer(issued.token)).contentType(MediaType.APPLICATION_JSON)
+            .content("""{"nickname":"${account.nickname}"}"""))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.profileCompleted").value(false))
+        mvc.perform(post("/api/users/me/profile/complete").header("Authorization", bearer(issued.token))
+            .contentType(MediaType.APPLICATION_JSON).content("""{"nickname":"${account.nickname}","allergies":null,"specialDiet":null}"""))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.profileCompleted").value(true))
+        mvc.perform(get("/api/products/$barcode").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+    }
+
+    @Test fun `incomplete account can manage own photo and withdraw but not delete another account`() {
+        val account = user(complete = false); val other = user(); val issued = login(account)
+        mvc.perform(multipart("/api/users/me/photo").file(MockMultipartFile("file", "avatar.png", "image/png", png()))
+            .with { it.method = "PUT"; it }.header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        mvc.perform(get("/api/users/me/photo").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        mvc.perform(delete("/api/users/me/photo").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        mvc.perform(delete("/api/users/${other.id}").header("Authorization", bearer(issued.token)))
+            .andExpect(status().isForbidden).andExpect(jsonPath("$.code").value("PROFILE_INCOMPLETE"))
+        mvc.perform(delete("/api/users/${account.id}").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        assertFalse(users.existsById(account.id!!)); assertTrue(users.existsById(other.id!!))
+    }
+
+    @Test fun `incomplete account can refresh and logout without completing profile`() {
+        val account = user(complete = false); val issued = login(account)
+        mvc.perform(post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+            .content("""{"refreshToken":"${issued.refreshToken}"}"""))
+            .andExpect(status().isOk).andExpect(jsonPath("$.profileCompleted").value(false))
+        mvc.perform(post("/api/auth/logout").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        assertFalse(users.findById(account.id!!).orElseThrow().profileCompleted)
+    }
+
+    @Test fun `anonymous catalog access is preserved and invalid or expired access never becomes a profile error`() {
+        val account = user(complete = false); val issued = login(account)
+        val barcode = "ANON-${account.id}"
+        products.saveAndFlush(Product(barcode = barcode, productName = "공개 상품"))
+        mvc.perform(get("/api/products/$barcode")).andExpect(status().isOk)
+        mvc.perform(get("/api/products/$barcode").header("Authorization", "Bearer invalid"))
+            .andExpect(status().isUnauthorized).andExpect(jsonPath("$.code").value("AUTH_TOKEN_INVALID"))
+        val expired = org.jjikmuk.backend.global.config.JwtProvider(jwtSecret, -60000)
+            .createToken(account.id!!, account.email, "USER", account.tokenVersion,
+                credentials.sessionIdForHash(EmailVerificationSecurity.hashToken(issued.refreshToken))).token
+        mvc.perform(get("/api/products/$barcode").header("Authorization", bearer(expired)))
+            .andExpect(status().isUnauthorized).andExpect(jsonPath("$.code").value("AUTH_TOKEN_EXPIRED"))
+    }
+
+    @Test fun `refresh logout accepts expired access is idempotent and preserves other sessions and private data`() {
+        val account = user(complete = false); val issued = login(account); val otherDevice = login(account)
+        val otherAccount = user(); val foreignSession = login(otherAccount)
+        val id = credentials.sessionIdForHash(EmailVerificationSecurity.hashToken(issued.refreshToken))!!
+        val expired = org.jjikmuk.backend.global.config.JwtProvider(jwtSecret, -60000)
+            .createToken(account.id!!, account.email, "USER", account.tokenVersion, id).token
+        photos.upload(account.id!!, MockMultipartFile("file", "avatar.png", "image/png", png()))
+        families.create(account.id!!, mapOf("nickname" to "유지가족"))
+        val before = credentials.count()
+        for (header in listOf(expired, foreignSession.token, null)) {
+            val request = post("/api/auth/logout/refresh").contentType(MediaType.APPLICATION_JSON)
+                .content("""{"refreshToken":"${issued.refreshToken}"}""")
+            if (header != null) request.header("Authorization", bearer(header))
+            mvc.perform(request).andExpect(status().isOk)
+                .andExpect(jsonPath("$.data.userId").value(account.id!!.toInt()))
+                .andExpect(jsonPath("$.data.serverTokenRevoked").value(true))
+                .andExpect(jsonPath("$.token").doesNotExist()).andExpect(jsonPath("$.refreshToken").doesNotExist())
+        }
+        assertEquals(before, credentials.count())
+        assertNotNull(sessionRepository.findById(id).orElseThrow().revokedAt)
+        mvc.perform(get("/api/users/me").header("Authorization", bearer(issued.token))).andExpect(status().isUnauthorized)
+        error("REFRESH_TOKEN_INVALID") { sessions.refresh(issued.refreshToken) }
+        for (token in listOf(otherDevice.token, foreignSession.token)) {
+            mvc.perform(get("/api/users/me").header("Authorization", bearer(token))).andExpect(status().isOk)
+        }
+        assertTrue(photoRepository.existsById(account.id!!)); assertEquals(1L, familyRepository.countByOwnerId(account.id!!))
+    }
+
+    @Test fun `retained rotated or expired refresh can only revoke not restore a session`() {
+        val account = user(); val issued = login(account); val rotated = sessions.refresh(issued.refreshToken)
+        mvc.perform(post("/api/auth/logout/refresh").contentType(MediaType.APPLICATION_JSON)
+            .content("""{"refreshToken":"${issued.refreshToken}"}"""))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.serverTokenRevoked").value(true))
+        error("REFRESH_TOKEN_INVALID") { sessions.refresh(rotated.refreshToken) }
+        val expired = sessionRepository.saveAndFlush(AuthSession(userId = account.id!!, tokenVersion = 0,
+            expiresAt = Instant.now().minusSeconds(1)))
+        val raw = EmailVerificationSecurity.newToken()
+        credentials.saveAndFlush(RefreshCredential(EmailVerificationSecurity.hashToken(raw), expired.id))
+        assertEquals(account.id, sessions.logoutByRefresh(raw))
+        assertNotNull(sessionRepository.findById(expired.id).orElseThrow().revokedAt)
+        error("REFRESH_TOKEN_INVALID") { sessions.refresh(raw) }
+    }
+
+    @Test fun `invalid refresh logout never revokes an access header session`() {
+        val account = user(); val issued = login(account)
+        for (raw in listOf("", "bad", EmailVerificationSecurity.newToken())) {
+            mvc.perform(post("/api/auth/logout/refresh").header("Authorization", bearer(issued.token))
+                .contentType(MediaType.APPLICATION_JSON).content("""{"refreshToken":"$raw"}"""))
+                .andExpect(status().isUnauthorized).andExpect(jsonPath("$.code").value("REFRESH_TOKEN_INVALID"))
+        }
+        for (body in listOf("{}", """{"refreshToken":null}""")) {
+            mvc.perform(post("/api/auth/logout/refresh").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest).andExpect(jsonPath("$.code").value("INVALID_REQUEST_BODY"))
+        }
+        mvc.perform(get("/api/auth/logout/refresh")).andExpect(status().isUnauthorized)
+        mvc.perform(get("/api/users/me").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
+        assertNotNull(sessions.refresh(issued.refreshToken).refreshToken)
+    }
+
+    @Test fun `refresh racing logout cannot leave a live rotated session`() {
+        val account = user(); val issued = login(account)
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+        val start = java.util.concurrent.CountDownLatch(1)
+        try {
+            val refresh = pool.submit(java.util.concurrent.Callable {
+                start.await()
+                try { sessions.refresh(issued.refreshToken) as Any } catch (e: CustomException) { e.code }
+            })
+            val logout = pool.submit(java.util.concurrent.Callable { start.await(); sessions.logoutByRefresh(issued.refreshToken) })
+            start.countDown()
+            assertEquals(account.id, logout.get(10, java.util.concurrent.TimeUnit.SECONDS))
+            val result = refresh.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            if (result is AuthResponse) error("REFRESH_TOKEN_INVALID") { sessions.refresh(result.refreshToken) }
+            else assertEquals("REFRESH_TOKEN_INVALID", result)
+            mvc.perform(get("/api/users/me").header("Authorization", bearer(issued.token))).andExpect(status().isUnauthorized)
+        } finally { pool.shutdownNow() }
+    }
+
+    @Test fun `nickname availability excludes only authenticated self and final save still rejects duplicates`() {
+        val account = user(complete = false); val other = user(); val issued = login(account)
+        mvc.perform(get("/api/auth/nicknames/availability").param("nickname", " ${account.nickname.uppercase()} ")
+            .header("Authorization", bearer(issued.token)))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.available").value(true))
+        mvc.perform(get("/api/auth/nicknames/availability").param("nickname", account.nickname)
+            .param("userId", account.id.toString()))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.available").value(false))
+        mvc.perform(get("/api/auth/nicknames/availability").param("nickname", other.nickname)
+            .param("userId", other.id.toString()).header("Authorization", bearer(issued.token)))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.available").value(false))
+        mvc.perform(get("/api/auth/nicknames/availability").param("nickname", "n" + UUID.randomUUID().toString().take(8)))
+            .andExpect(status().isOk).andExpect(jsonPath("$.data.available").value(true))
+        mvc.perform(get("/api/auth/nicknames/availability").param("nickname", "!"))
+            .andExpect(status().isBadRequest).andExpect(jsonPath("$.code").value("NICKNAME_INVALID"))
+        mvc.perform(get("/api/auth/nicknames/availability").param("nickname", account.nickname).header("Authorization", "Bearer bad"))
+            .andExpect(status().isUnauthorized).andExpect(jsonPath("$.code").value("AUTH_TOKEN_INVALID"))
+        mvc.perform(patch("/api/users/me").header("Authorization", bearer(issued.token)).contentType(MediaType.APPLICATION_JSON)
+            .content("""{"nickname":"${other.nickname}"}"""))
+            .andExpect(status().isConflict).andExpect(jsonPath("$.code").value("NICKNAME_ALREADY_EXISTS"))
+    }
+
+    @Test fun `public proof routes reach their own verification without an access token`() {
+        val unknownProof = EmailVerificationSecurity.newToken()
+        for (header in listOf(null, "Bearer stale-access")) {
+            val link = post("/api/auth/google/link").contentType(MediaType.APPLICATION_JSON)
+                .content("""{"linkToken":"$unknownProof","currentPassword":"Example123!"}""")
+            val cancel = post("/api/auth/google/link/cancel").contentType(MediaType.APPLICATION_JSON)
+                .content("""{"linkToken":"$unknownProof"}""")
+            val refresh = post("/api/auth/refresh").contentType(MediaType.APPLICATION_JSON)
+                .content("""{"refreshToken":"$unknownProof"}""")
+            if (header != null) listOf(link, cancel, refresh).forEach { it.header("Authorization", header) }
+            mvc.perform(link).andExpect(status().isGone).andExpect(jsonPath("$.code").value("GOOGLE_LINK_EXPIRED"))
+            mvc.perform(cancel).andExpect(status().isOk)
+            mvc.perform(refresh).andExpect(status().isUnauthorized).andExpect(jsonPath("$.code").value("REFRESH_TOKEN_INVALID"))
+        }
+    }
 
     @Test fun `refresh rotates hashed tokens without extending fixed expiry and replay revokes session`() {
         val account = user()

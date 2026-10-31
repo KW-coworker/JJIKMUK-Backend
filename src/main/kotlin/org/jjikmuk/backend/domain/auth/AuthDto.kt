@@ -78,6 +78,7 @@ data class AuthResponse(
 )
 
 data class RefreshRequest(val refreshToken: String)
+data class RefreshLogoutRequest(val refreshToken: String)
 data class GoogleLinkRequest(val linkToken: String, val currentPassword: String)
 data class GoogleLinkCancelRequest(val linkToken: String)
 data class GoogleLinkRequiredResponse(

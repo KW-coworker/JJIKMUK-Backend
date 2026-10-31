@@ -206,6 +206,27 @@ class CoreUserFlowHttpIntegrationTest {
         assertEquals(90001L, event.at("/data/productId").asLong())
     }
 
+    @Test @Order(6) fun `HTTP onboarding gate self nickname and refresh logout use the production filter chain`() {
+        val session = register()
+        // Fixture-only H2 change, emulating a newly created incomplete Google account.
+        jdbc.update("UPDATE users SET profile_completed=false WHERE id=?", session.id)
+        val me = request("GET", "/api/users/me", token = session.token)
+        assertFalse(me.at("/data/profileCompleted").asBoolean())
+        val nickname = me.at("/data/nickname").asText()
+        val query = URLEncoder.encode(nickname, Charsets.UTF_8)
+        assertFalse(request("GET", "/api/auth/nicknames/availability?nickname=$query").at("/data/available").asBoolean())
+        assertTrue(request("GET", "/api/auth/nicknames/availability?nickname=$query", token = session.token).at("/data/available").asBoolean())
+        val blocked = request("GET", "/api/products/9900000000001?analysisMode=none", token = session.token, expected = 403)
+        assertEquals("PROFILE_INCOMPLETE", blocked["code"].asText())
+        request("GET", "/api/products/filters", token = session.token)
+        request("POST", "/api/users/me/profile/complete", mapOf("nickname" to nickname), session.token)
+        request("GET", "/api/products/9900000000001", token = session.token)
+        val loggedOut = request("POST", "/api/auth/logout/refresh", mapOf("refreshToken" to session.refresh), "stale-access")
+        assertTrue(loggedOut.at("/data/serverTokenRevoked").asBoolean())
+        request("POST", "/api/auth/logout/refresh", mapOf("refreshToken" to session.refresh))
+        request("GET", "/api/users/me", token = session.token, expected = 401)
+    }
+
     companion object {
         private val mapper = JsonMapper.builder().findAndAddModules().build()
         private val samples = linkedMapOf<String, JsonNode>()

@@ -1,5 +1,7 @@
 # 찍먹 Backend 전체 API 명세서
 
+> 2026-11-01 인증 후속: `403 PROFILE_INCOMPLETE` 서버 제한, `POST /api/auth/logout/refresh`, JWT 본인 제외 닉네임 사전 확인을 추가했다. [인증 v2](frontend-auth-integration-v2.md)의 허용 API/FE 처리 규칙을 따른다. 운영 배포 완료를 의미하지 않는다.
+
 > 최신 계약 우선순위: 아래 기존 상세와 충돌하면 [챗봇 공통 판정 계약](chat-analysis-contract-v1.md), [프론트 인증·프로필 v2](frontend-auth-integration-v2.md), [상품 ID·관측 이력 계약](../catalog-evolution-stage1-3.md)을 따른다. 하단의 과거 챗봇 본인 검증 미구현 설명은 최신 계약으로 대체된다. 실제 서버 배포 여부는 별도로 확인한다.
 
 > 2026-10-28 상품 모델 추가: [내부 상품 ID·관측 이력·카테고리 용도 계약](../catalog-evolution-stage1-3.md)을 함께 확인한다. ID 조회 3개·관리자 3개 경로, 행동 이력 productId 입력, 상품/추천 응답의 용도 근거가 추가되었다. 기존 barcode API와 PK는 유지한다. 원본/운영 DB 적용은 아직 하지 않았다.
@@ -32,7 +34,8 @@
 | POST | [`/api/auth/google`](#post-apiauthgoogle) | Google 로그인 및 자동 가입 | 불필요 |
 | POST | [`/api/auth/login`](#post-apiauthlogin) | 이메일 로그인 | 불필요 |
 | POST | [`/api/auth/logout`](#post-apiauthlogout) | 로그아웃 | 필수 |
-| GET | [`/api/auth/nicknames/availability`](#get-apiauthnicknamesavailability) | 닉네임 사용 가능 여부 조회 | 불필요 |
+| POST | [`/api/auth/logout/refresh`](#post-apiauthlogoutrefresh) | Refresh 기반 서버 로그아웃 | body의 Refresh |
+| GET | [`/api/auth/nicknames/availability`](#get-apiauthnicknamesavailability) | 닉네임 사용 가능 여부 조회 | 선택, 본인 제외는 Bearer 필요 |
 | POST | [`/api/auth/password/reset`](#post-apiauthpasswordreset) | 비밀번호 재설정 | 불필요 |
 | POST | [`/api/auth/signup`](#post-apiauthsignup) | 회원가입 | 불필요 |
 | POST | [`/api/chat`](#post-apichat) | AI 챗봇 중계 | 필수 |
@@ -55,7 +58,7 @@
 | DELETE | [`/api/users/{id}`](#delete-apiusersid) | 회원 탈퇴 | 본인 또는 관리자 |
 | PUT | [`/api/users/{id}/password`](#put-apiusersidpassword) | 로그인 상태에서 비밀번호 변경 | 본인 |
 
-아래 신규 13개를 포함해 현재 구현 경로는 40개다. 신규 상세 및 기존 계약 변경은 [v2 명세](frontend-auth-integration-v2.md)에 있다.
+아래는 10월 23일 추가 경로 13개다. 11월 1일 추가 로그아웃은 위 목록에 포함했다. 상품 ID 관련 별도 추가 경로는 상품 계약을 참고한다. 신규 상세 및 기존 계약 변경은 [v2 명세](frontend-auth-integration-v2.md)에 있다.
 
 | Method | 요청주소 | 기능 |
 |---|---|---|
@@ -126,6 +129,7 @@ CustomException 및 인증 필터 오류는 다음 구조를 사용한다. `fiel
 | 401 | `AUTH_TOKEN_EXPIRED` | 서비스 로그인 토큰 만료 |
 | 401 | `AUTH_TOKEN_INVALID` | 변조·이전 형식·무효화된 서비스 토큰, 사용자 조회 실패 등 |
 | 403 | `ACCESS_DENIED` | 사용자/인증 API에서 권한 부족 |
+| 403 | `PROFILE_INCOMPLETE` | 미완료 계정의 허용 범위 밖 요청. 토큰 유지, 추가 프로필 입력으로 이동 |
 | API별 | `REQUEST_FAILED` | 상품·추천·이력 등에서 사용하는 일반 업무 오류 코드 |
 | 500 | `INTERNAL_SERVER_ERROR` | 서버 오류 |
 
@@ -292,13 +296,15 @@ POST /api/auth/google
 }
 ```
 
-- 서버는 GOOGLE_CLIENT_ID와 aud의 일치 및 email_verified=true를 확인한다.
-- 신규 사용자는 임시 닉네임으로 가입하며 `/api/users/me/profile/complete` 최종 제출만 profileCompleted=true로 변경한다. PUT/PATCH 중간 저장은 완료로 처리하지 않는다.
+- 서버는 GoogleIdTokenVerifier와 캐시된 Google 공개키로 RS256 서명을 검증한다. GOOGLE_CLIENT_ID와 aud의 일치, issuer, exp/iat, email_verified=true, subject 및 이메일을 확인한다. tokeninfo에 사용자 토큰을 보내지 않는다.
+- Google 통신·검증은 DB 트랜잭션 밖에서 완료하고, 성공한 식별 정보만 별도 계정/세션 트랜잭션에 전달한다. 이미 트랜잭션이 열린 내부 호출은 검증 전에 거부한다. 요청·응답·401/503 계약은 변경하지 않는다.
+- 신규 사용자는 임시 닉네임으로 가입하며 `/api/users/me/profile/complete` 최종 제출만 profileCompleted=true로 변경한다. 미완료 계정의 중간 저장은 PATCH를 사용하고 완료로 처리하지 않는다. 구형 PUT 프로필은 완료 전 403 PROFILE_INCOMPLETE이다.
 - 기존 일반 계정 이메일이면 GOOGLE_LINK_REQUIRED와 임시 linkToken만 반환하고 기존 비밀번호로 명시적 연결해야 로그인한다. v2의 요청/분기 모델을 사용한다.
 - 최초 가입 후 다시 로그인한 미완료 사용자는 isNewUser=false이고 profileCompleted=false일 수 있다. 화면 이동은 profileCompleted로 판단한다.
+- 최초 Google 가입 요청이 동시에 도착해 신규 사용자 유일값 충돌이 발생하면 롤백 후 새 트랜잭션에서 한 번 재조회한다. 같은 Google subject면 동일 userId/isNewUser=false로 복구하고, LOCAL 계정은 명시적 연결을 요구한다. 다른 Google subject에는 로그인 권한을 부여하지 않는다.
 - Google 전용 계정의 일반 비밀번호 로그인·찾기·변경은 지원하지 않는다. 두 방식이 연결된 계정은 기존 비밀번호 로그인이 가능하다.
 
-401 GOOGLE_TOKEN_INVALID(검증 실패, 현재 Google 검증 요청 예외도 이 코드), 503 GOOGLE_LOGIN_UNAVAILABLE(서버 Client ID 미설정), 공통 400/500 등이 가능하다.
+401 GOOGLE_TOKEN_INVALID(형식·서명·클레임 검증 실패), 503 GOOGLE_LOGIN_UNAVAILABLE(서버 Client ID 미설정 또는 Google 공개키 조회/인증서 장애), 공통 400/500 등이 가능하다. 요청·성공 응답 계약은 그대로다.
 
 ## POST /api/auth/login
 
@@ -344,6 +350,8 @@ POST /api/auth/login
 
 400 INVALID_REQUEST_BODY, 401 LOGIN_FAILED(미가입·비밀번호 불일치·잘못된 이메일), 409 AUTH_METHOD_NOT_SUPPORTED(Google 전용 계정) 등이 가능하다. 로그인 password는 과거 계정 호환을 위해 신규 가입 규칙으로 다시 검사하지 않고 저장 해시와 비교한다.
 
+2026-11-01 추가: `429 LOGIN_RATE_LIMITED` — 계정별 최근 5분 5회 / IP별 최근 5분 30회(기본값), 성공·실패 포함. `Retry-After` 헤더와 최상위 `retryAfterSeconds`에 정수 초를 반환한다. 429에서는 자동 로그인 재시도·Refresh 재시도를 하지 않고 로그인 화면에 대기시간을 표시한다. [상세 정책·FE 전달 사항](frontend-auth-integration-v2.md#33-이메일비밀번호-로그인-시도-제한--2026-11-01)을 참고한다.
+
 ## POST /api/auth/logout
 
 로그아웃.
@@ -364,6 +372,12 @@ Authorization: Bearer {token}
 
 현재 기기의 서버 세션과 Access/Refresh를 폐기한다. 앱도 로컬 토큰을 삭제한다. 구형 sid 없는 JWT는 모든 기기 세션을 폐기한다. 실패 시 서버 폐기 완료로 단정하지 않는다.
 
+## POST /api/auth/logout/refresh
+
+Access가 만료되어도 갱신 없이 서버 세션을 폐기한다. Authorization 불필요, JSON Body는 `{"refreshToken":"<저장된 Refresh Token>"}`다. 성공 200은 기존 로그아웃과 같은 data.userId/serverTokenRevoked=true를 반환하며 새 토큰을 발급하지 않는다. 해당 세션만 폐기하고 다른 기기·계정과 사진·가족은 유지한다.
+
+증명 해시/세션이 남아 있으면 소비·만료·이미 폐기된 Refresh의 반복 폐기는 200이다. 누락/null은 400 INVALID_REQUEST_BODY, 잘못된 형식·미등록·삭제된 증명은 401 REFRESH_TOKEN_INVALID이다. **폐기 요청의 재시도와 Refresh 갱신의 재시도는 다르다.** [인증 v2 3.1절](frontend-auth-integration-v2.md)을 참고한다.
+
 ## GET /api/auth/nicknames/availability
 
 닉네임 사용 가능 여부 조회.
@@ -372,7 +386,7 @@ Authorization: Bearer {token}
 GET /api/auth/nicknames/availability?nickname=찍먹_user1
 ```
 
-인증 불필요, nickname 필수 string, Body 없음, 성공 200이다.
+인증 선택(본인 닉네임을 제외하려면 Bearer 필요), nickname 필수 string, Body 없음, 성공 200이다.
 
 ```json
 {
@@ -381,7 +395,7 @@ GET /api/auth/nicknames/availability?nickname=찍먹_user1
 }
 ```
 
-data.nickname은 정규화된 이름이고 available은 boolean이다. 이미 사용 중이면 409가 아니라 200과 available=false이다. 형식이 잘못되면 400 NICKNAME_INVALID이다. 닉네임을 예약하지 않으므로 최종 가입/수정에서도 중복을 다시 검사한다. 현재 본인이 사용 중인 닉네임을 이 공개 API로 확인하면 available=false가 될 수 있지만, 본인 프로필을 동일 닉네임으로 저장하는 것은 가능하다.
+data.nickname은 정규화된 이름이고 available은 boolean이다. 이미 사용 중이면 409가 아니라 200과 available=false이다. 형식이 잘못되면 400 NICKNAME_INVALID이다. 닉네임을 예약하지 않으므로 최종 가입/수정에서도 중복을 다시 검사한다. 유효한 Bearer를 전달하면 JWT 본인을 제외하여 현재 닉네임은 available=true이다. 비로그인 요청은 전체 사용자와 비교한다. userId 쿼리로 본인을 지정할 수 없으며 잘못된/만료 Bearer는 401이다. 미완료 계정도 이 API는 사용할 수 있다.
 
 ## POST /api/auth/password/reset
 

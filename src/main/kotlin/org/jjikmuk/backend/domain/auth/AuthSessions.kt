@@ -101,6 +101,23 @@ class AuthSessionService(
     }
 
     @Transactional
+    fun logoutByRefresh(raw: String): Long {
+        if (!raw.matches(Regex("[A-Za-z0-9_-]{43}"))) throw invalid()
+        val hash = EmailVerificationSecurity.hashToken(raw)
+        val id = credentials.sessionIdForHash(hash) ?: throw invalid()
+        val owner = sessions.ownerForId(id) ?: throw invalid()
+        // Same user -> session lock order as rotation, password changes and account deletion.
+        users.lockById(owner) ?: throw invalid()
+        val session = sessions.lockById(id) ?: throw invalid()
+        val credential = credentials.findById(hash).orElse(null) ?: throw invalid()
+        if (session.userId != owner || credential.sessionId != session.id) throw invalid()
+        // Revocation only: a retained consumed/expired credential may close its own session,
+        // but must NEVER issue tokens or restore authorization. Repeated revocation is a no-op.
+        if (session.revokedAt == null) session.revokedAt = Instant.now()
+        return owner
+    }
+
+    @Transactional
     fun revokeAll(userId: Long) {
         sessions.findAllByUserId(userId).forEach { it.revokedAt = Instant.now() }
     }

@@ -1,5 +1,16 @@
 # Copy this file to backend/application-local.properties and enter local values.
 # The real file is Git-ignored and is not packaged into the application JAR.
+# Google login: set GOOGLE_CLIENT_ID in the process environment, or replace the empty fallback locally.
+# This is the Web OAuth client ID, not an Android client ID or a client secret.
+google.client-id=${GOOGLE_CLIENT_ID:}
+# Password login quotas: independently per account and peer IP, over a sliding window.
+# Successful attempts also count; no DB migration is required (single-process memory only).
+auth.login-throttle.account-limit=${AUTH_LOGIN_ACCOUNT_LIMIT:5}
+auth.login-throttle.ip-limit=${AUTH_LOGIN_IP_LIMIT:30}
+auth.login-throttle.window-seconds=${AUTH_LOGIN_WINDOW_SECONDS:300}
+auth.login-throttle.max-tracked-keys=${AUTH_LOGIN_MAX_TRACKED_KEYS:10000}
+# See docs/api-spec/frontend-auth-integration-v2.md before enabling proxy header handling.
+server.forward-headers-strategy=${SERVER_FORWARD_HEADERS_STRATEGY:none}
 # Point this URL to the restored MySQL database on the new server.
 spring.datasource.url=jdbc:mysql://localhost:3306/jjikmuk?serverTimezone=Asia/Seoul&characterEncoding=UTF-8&rewriteBatchedStatements=true
 spring.datasource.username=your-db-user

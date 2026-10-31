@@ -229,6 +229,8 @@ POST /api/auth/login
 
 400 INVALID_REQUEST_BODY, 401 LOGIN_FAILED(미가입·비밀번호 불일치·잘못된 이메일), 409 AUTH_METHOD_NOT_SUPPORTED(Google 전용 계정) 등이 가능하다. 로그인 password는 과거 계정 호환을 위해 신규 가입 규칙으로 다시 검사하지 않고 저장 해시와 비교한다.
 
+2026-11-01: 로그인 시도 제한을 추가했다. 기본 **계정별 최근 5분 5회 / IP별 최근 5분 30회**이며 두 조건을 모두 만족해야 한다. 성공·실패를 포함하여 서버가 허용한 시도를 세고, 같은 계정은 IP를 바꿔도 제한을 공유한다. 초과 시 `429 LOGIN_RATE_LIMITED`, `Retry-After` 헤더와 최상위 `retryAfterSeconds`(정수 초)를 반환한다. 요청 Body와 성공 응답은 변경하지 않았다. 구체적인 응답·FE 처리·서버 적용 주의사항은 [v2 로그인 제한 계약](frontend-auth-integration-v2.md#33-이메일비밀번호-로그인-시도-제한--2026-11-01)을 따른다.
+
 ## A05. Google 로그인·자동 가입
 
 ```http
@@ -261,13 +263,15 @@ POST /api/auth/google
 }
 ```
 
-- 서버는 GOOGLE_CLIENT_ID/aud, email_verified, issuer, 만료, subject를 확인한다.
+- 서버는 공식 GoogleIdTokenVerifier로 RS256 서명과 GOOGLE_CLIENT_ID/aud, issuer, exp/iat를 검증하고 email_verified=true, subject, 이메일 형식을 확인한다. Google 공개키는 singleton으로 캐시하며 tokeninfo에 사용자 토큰을 전송하지 않는다.
+- 공개키 조회·토큰 검증을 트랜잭션 밖에서 완료한 후에만 별도 DB 트랜잭션으로 계정·세션을 처리한다. 활성 트랜잭션에서 Google 검증을 호출하는 내부 코드 경로는 즉시 거부한다. API 형식과 401/503 계약은 유지하며 상세 구현·검증은 인증 v2 문서를 따른다.
 - 신규 사용자는 임시 닉네임으로 자동 가입한다. PATCH/PUT은 profileCompleted를 바꾸지 않고 `/api/users/me/profile/complete` 최종 제출만 true로 만든다.
 - 기존 일반 가입 이메일과 같으면 GOOGLE_LINK_REQUIRED와 임시 증명을 반환한다. 비밀번호 소유 확인을 거치는 `/api/auth/google/link` 성공 전에는 계정 연결이나 서비스 로그인 토큰 발급이 없다. 상세는 v2 문서를 따른다.
 - 최초 가입 후 다시 로그인한 미완료 사용자는 isNewUser=false이고 profileCompleted=false일 수 있다. 화면 이동은 profileCompleted로 판단한다.
+- 최초 가입 동시 요청의 신규 users 유일값 충돌은 롤백 후 새 트랜잭션에서 한 번 재조회한다. 같은 Google subject면 동일 userId로 로그인하며 복구 요청의 isNewUser는 false다. LOCAL 계정이면 명시적 연결을 요구하고 다른 Google subject면 거부한다. 상세 복구 범위는 인증 v2 문서를 따른다.
 - Google 전용 계정의 일반 비밀번호 로그인·찾기·변경은 지원하지 않는다. 두 방식이 연결된 계정은 기존 비밀번호 로그인이 가능하다.
 
-401 GOOGLE_TOKEN_INVALID(검증 실패), 503 GOOGLE_LOGIN_UNAVAILABLE(Client ID 미설정 또는 Google 인증 서비스 연결 장애), 공통 400/500 등이 가능하다.
+401 GOOGLE_TOKEN_INVALID(형식·서명·클레임 검증 실패), 503 GOOGLE_LOGIN_UNAVAILABLE(Client ID 미설정 또는 Google 공개키 조회/인증서 장애), 공통 400/500 등이 가능하다.
 
 ## A06. 비밀번호 재설정
 
@@ -301,7 +305,7 @@ POST /api/auth/password/reset
 GET /api/auth/nicknames/availability?nickname=찍먹_user1
 ```
 
-인증 불필요, nickname 필수 string, Body 없음, 성공 200이다.
+인증 선택(본인 닉네임을 제외하려면 Bearer 필요), nickname 필수 string, Body 없음, 성공 200이다.
 
 ```json
 {
@@ -310,7 +314,7 @@ GET /api/auth/nicknames/availability?nickname=찍먹_user1
 }
 ```
 
-data.nickname은 정규화된 이름이고 available은 boolean이다. 이미 사용 중이면 409가 아니라 200과 available=false이다. 형식이 잘못되면 400 NICKNAME_INVALID이다. 닉네임을 예약하지 않으므로 최종 가입/수정에서도 중복을 다시 검사한다. 현재 본인이 사용 중인 닉네임을 이 공개 API로 확인하면 available=false가 될 수 있지만, 본인 프로필을 동일 닉네임으로 저장하는 것은 가능하다.
+data.nickname은 정규화된 이름이고 available은 boolean이다. 이미 사용 중이면 409가 아니라 200과 available=false이다. 형식이 잘못되면 400 NICKNAME_INVALID이다. 닉네임을 예약하지 않으므로 최종 가입/수정에서도 중복을 다시 검사한다. 유효한 Bearer를 전달하면 JWT의 본인 ID를 제외하므로 현재 본인 닉네임은 available=true이다. Bearer 없는 가입 요청은 전체 사용자와 비교한다. userId 쿼리는 본인 식별에 사용하지 않는다. 잘못되거나 만료된 Bearer는 401이며 미완료 계정은 정상 호출 가능하다.
 
 ## A08. 로그아웃
 
@@ -328,7 +332,17 @@ Authorization: Bearer {token}
 }
 ```
 
-현재 기기 서버 세션과 Access/Refresh를 폐기한다. 앱도 저장 토큰을 삭제한다. 구형 sid 없는 JWT는 모든 세션을 폐기한다. 실패해도 로컬 로그아웃은 가능하지만 서버 폐기 완료로 단정하지 않는다. 만료 Access는 갱신 후 로그아웃해야 한다.
+현재 기기 서버 세션과 Access/Refresh를 폐기한다. 앱도 저장 토큰을 삭제한다. 구형 sid 없는 JWT는 모든 세션을 폐기한다. 실패해도 로컬 로그아웃은 가능하지만 서버 폐기 완료로 단정하지 않는다. Access 만료 시 먼저 갱신하지 말고 아래 Refresh 기반 로그아웃을 사용한다.
+
+## A09. Refresh 기반 로그아웃
+
+`POST /api/auth/logout/refresh`, Body: `{"refreshToken":"<저장된 Refresh Token>"}`. Authorization 불필요. 성공 200의 message/data(userId, serverTokenRevoked=true)는 기존 로그아웃과 같다. 토큰을 발급하지 않고 증명에 연결된 기기 세션만 폐기한다. 다른 기기·계정·사진·가족은 유지한다.
+
+DB에 증명 해시/세션이 남아 있으면 소비·만료·이미 폐기된 Refresh도 폐기에만 사용할 수 있고 반복 호출은 200이다. 누락/null은 400 INVALID_REQUEST_BODY, 잘못된 형식·미등록·삭제된 증명은 401 REFRESH_TOKEN_INVALID이다. 응답 유실 시 폐기 요청 재시도는 가능하나 Refresh 갱신 재시도와는 다르다. 전체 계약은 [인증 v2의 3.1절](frontend-auth-integration-v2.md)을 따른다.
+
+## 미완료 계정의 공통 접근 제한
+
+유효한 토큰의 DB profileCompleted=false이면 허용 API 외 요청은 `403 PROFILE_INCOMPLETE`다. FE는 세션을 유지하고 추가 입력으로 이동한다. 본인 조회/PATCH/완료, 사진, 닉네임, 가입 선택용 메타데이터, 인증/복구·로그아웃, 본인 탈퇴는 허용한다. 구형 PUT 프로필은 완료 전 허용하지 않는다. 전체 허용 목록과 익명 조회 범위는 [인증 v2의 4절](frontend-auth-integration-v2.md)을 따른다.
 
 ## U01. 내 프로필 조회 / 기존 ID 조회
 
