@@ -32,8 +32,7 @@ class JwtAuthenticationFilter(
     ) {
         // These endpoints authenticate their own password/Google/refresh proof. An expired access
         // header must not prevent refresh or signing in again.
-        if (request.servletPath in setOf("/api/auth/login", "/api/auth/google", "/api/auth/refresh",
-                "/api/auth/google/link", "/api/auth/google/link/cancel")) {
+        if (AuthAccessPolicy.authenticatesOwnProof(request)) {
             filterChain.doFilter(request, response)
             return
         }
@@ -76,6 +75,16 @@ class JwtAuthenticationFilter(
                     writeUnauthorized(response, ApiErrorCode.AUTH_TOKEN_INVALID, "로그인 세션이 무효화되었습니다.")
                     return
                 }
+            }
+            // Read live DB state, not a stale claim: profile completion unlocks the same session.
+            if (!user.profileCompleted && !AuthAccessPolicy.allowsIncompleteProfile(request, userId)) {
+                response.status = HttpServletResponse.SC_FORBIDDEN
+                response.characterEncoding = Charsets.UTF_8.name()
+                response.contentType = "application/json"
+                response.writer.write(
+                    """{"status":403,"code":"${ApiErrorCode.PROFILE_INCOMPLETE}","message":"추가 프로필 입력을 완료해주세요."}"""
+                )
+                return
             }
             SecurityContextHolder.getContext().authentication =
                 UsernamePasswordAuthenticationToken(requireNotNull(user.id), null, authorities).apply { details = sessionId }

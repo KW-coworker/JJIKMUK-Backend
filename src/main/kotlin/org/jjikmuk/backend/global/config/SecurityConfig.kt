@@ -8,6 +8,7 @@ import org.springframework.security.config.http.SessionCreationPolicy
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder
 import org.springframework.security.web.SecurityFilterChain
 import jakarta.servlet.http.HttpServletResponse
+import org.springframework.http.HttpMethod
 import org.jjikmuk.backend.global.exception.ApiErrorCode
 
 @Configuration
@@ -47,13 +48,9 @@ class SecurityConfig {
             }
             .authorizeHttpRequests { auth ->
                 auth
+                    .requestMatchers(HttpMethod.POST, *AuthAccessPolicy.proofAuthenticatedPaths.toTypedArray()).permitAll()
                     .requestMatchers(
                         "/api/auth/signup",
-                        "/api/auth/login",
-                        "/api/auth/google",
-                        "/api/auth/google/link",
-                        "/api/auth/google/link/cancel",
-                        "/api/auth/refresh",
                         "/api/auth/email/**",
                         "/api/auth/password/reset",
                         "/api/auth/nicknames/availability"

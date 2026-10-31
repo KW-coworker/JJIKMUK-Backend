@@ -102,7 +102,7 @@ Authorization: Bearer {token}
 ## A10. Google 로그인
 
 - 이번 백엔드 범위에 Google 로그인을 포함한다.
-- Android가 전달한 Google `idToken`을 Google tokeninfo endpoint로 검증한다.
+- Android가 전달한 Google `idToken`을 공식 `GoogleIdTokenVerifier`와 캐시된 공개키로 검증한다. 사용자 토큰을 tokeninfo URL로 보내지 않는다.
 - 서버의 `GOOGLE_CLIENT_ID`와 토큰의 `aud`가 일치하고 `email_verified=true`여야 한다.
 - 서버가 반환하는 `token`은 Google 토큰이 아니라 찍먹 서비스 JWT다.
 
@@ -113,9 +113,9 @@ Authorization: Bearer {token}
 - 임시 고유 닉네임 자동 생성
 - 앱에서 추가 프로필 입력 화면으로 이동
 
-추가 입력은 `PUT /api/users/me`를 사용한다. 수정 성공 시 `profileCompleted=true`가 된다. 알레르기·식이조건 미선택은 정상 완료이므로 완료 판단은 이 필드가 아니라 `profileCompleted`를 사용한다.
+추가 입력의 중간 저장은 `PATCH /api/users/me`, 완료는 `POST /api/users/me/profile/complete`를 사용한다. 완료 API만 `profileCompleted=true`로 바꾼다. 알레르기·식이조건 미선택은 정상 완료이므로 완료 판단은 이 필드가 아니라 `profileCompleted`를 사용한다.
 
-일반 가입과 같은 검증된 Google 이메일이면 기존 계정에 Google 로그인 방식을 연결하고 별도 계정을 만들지 않는다. Google 전용 계정은 이메일·비밀번호 로그인, 비밀번호 찾기·변경을 사용할 수 없다. 연결된 `LOCAL_AND_GOOGLE` 계정은 두 방식을 모두 사용할 수 있다.
+일반 가입과 같은 검증된 Google 이메일이면 `GOOGLE_LINK_REQUIRED`와 임시 linkToken을 반환한다. `/api/auth/google/link`에서 기존 비밀번호 확인 후 명시적으로 연결하며 자동 연결하지 않는다. Google 전용 계정은 이메일·비밀번호 로그인, 비밀번호 찾기·변경을 사용할 수 없다. 연결된 `LOCAL_AND_GOOGLE` 계정은 두 방식을 모두 사용할 수 있다.
 
 배포 환경에는 다음 값을 별도로 설정한다.
 
