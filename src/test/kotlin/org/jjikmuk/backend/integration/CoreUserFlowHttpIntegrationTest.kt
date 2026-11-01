@@ -227,6 +227,39 @@ class CoreUserFlowHttpIntegrationTest {
         request("GET", "/api/users/me", token = session.token, expected = 401)
     }
 
+    @Test @Order(7) fun `Android active snapshots traverse authenticated HTTP and AI HTTP without changing stored profiles`() {
+        val session = register()
+        val before = request("GET", "/api/users/me", token = session.token)
+        val body = mapOf("message" to "선택한 가족의 표시 정보를 설명해줘",
+            "barcode" to "9900000000004",
+            "profiles" to listOf(
+                mapOf("id" to null, "nickname" to "엄마", "allergies" to "peanut"),
+                mapOf("id" to null, "nickname" to "아빠", "allergies" to "soy"),
+                mapOf("id" to null, "nickname" to "전송제외", "allergies" to "wheat", "isActive" to false)),
+            "product" to mapOf("barcode" to "9900000000004", "productName" to "앱의잘못된상품명",
+                "allergy" to emptyList<String>(), "rawMaterials" to "쌀"),
+            "chat_history" to listOf(mapOf("role" to "user", "content" to "조건을 알려줘")))
+        request("POST", "/api/chat", body, session.token)
+        val sent = lastAiRequest!!
+        assertEquals("chat-analysis-v2", sent.at("/analysisContext/contractVersion").asText())
+        assertEquals("CLIENT_REQUEST", sent.at("/analysisContext/profileSource").asText())
+        assertEquals(listOf("엄마", "아빠"), sent["profiles"].iterator().asSequence().map { it["nickname"].asText() }.toList())
+        assertEquals(listOf("땅콩", "대두"), sent["profiles"].iterator().asSequence().map { it["allergies"].asText() }.toList())
+        assertEquals("검정콩분말, 쌀", sent.at("/product/rawMaterialName").asText())
+        assertEquals(listOf("PASS", "DANGER"), sent.at("/analysisContext/profileAnalyses").iterator().asSequence().map {
+            it.at("/analysis/status").asText()
+        }.toList())
+        assertFalse(sent.toString().contains("전송제외"))
+        samples["chatActiveProfiles"] = sent
+        val after = request("GET", "/api/users/me", token = session.token)
+        assertEquals(before["data"], after["data"])
+        request("POST", "/api/chat", mapOf("message" to "일반 질문", "profiles" to emptyList<Any>(),
+            "barcode" to "9900000000004"), session.token)
+        assertEquals("NOT_EVALUATED", lastAiRequest!!.at("/analysisContext/analysis/status").asText())
+        assertTrue(lastAiRequest!!["profile"].isNull)
+        assertEquals(0, lastAiRequest!!["profiles"].size())
+    }
+
     companion object {
         private val mapper = JsonMapper.builder().findAndAddModules().build()
         private val samples = linkedMapOf<String, JsonNode>()

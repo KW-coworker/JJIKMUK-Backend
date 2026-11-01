@@ -10,7 +10,10 @@ import org.springframework.transaction.annotation.Transactional
 data class AnalysisSelectionResponse(val mode: String, val analysisApplied: Boolean,
     val includeSelf: Boolean, val familyProfileIds: List<Long>)
 
-data class EffectiveAnalysis(val profile: User, val selection: AnalysisSelectionResponse) {
+data class AnalysisSubject(val kind: String, val id: Long, val conditions: User)
+
+data class EffectiveAnalysis(val profile: User, val selection: AnalysisSelectionResponse,
+    val subjects: List<AnalysisSubject> = emptyList()) {
     val applied get() = selection.analysisApplied
     val personalHistoryAllowed get() = selection.mode == "self"
 }
@@ -26,22 +29,27 @@ class AnalysisSelectionService(private val users: UserRepository, private val fa
         if (selectedMode == "none") return EffectiveAnalysis(emptyProfile(), AnalysisSelectionResponse("none", false, false, emptyList()))
         if (ownerId == null) throw CustomException(HttpStatus.UNAUTHORIZED, "분석 대상 선택에는 로그인이 필요합니다.", "AUTHENTICATION_REQUIRED")
         val owner = users.findById(ownerId).orElseThrow { CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", "USER_NOT_FOUND") }
-        if (selectedMode == "self") return EffectiveAnalysis(owner, AnalysisSelectionResponse("self", true, true, emptyList()))
+        if (selectedMode == "self") return EffectiveAnalysis(owner, AnalysisSelectionResponse("self", true, true, emptyList()),
+            listOf(AnalysisSubject("self", ownerId, owner)))
         val self = includeSelf ?: false
         if (!self && ids.isEmpty()) throw invalid("분석 대상을 선택하거나 analysisMode=none을 사용해주세요.")
-        val members = ids.map { families.owned(ownerId, it).asConditions() }
-        val profiles = if (self) listOf(owner) + members else members
-        fun combine(value: (User) -> String?) = profiles.flatMap { DelimitedProfileNormalizer.terms(value(it)) }
-            .distinct().joinToString(",").ifEmpty { null }
+        val members = ids.map { AnalysisSubject("family", it, families.owned(ownerId, it).asConditions()) }
+        val subjects = if (self) listOf(AnalysisSubject("self", ownerId, owner)) + members else members
         // Union of restrictions; ALL dietary constraints must pass. Never overwrite the account.
-        val effective = emptyProfile().apply {
-            allergies = combine { it.allergies }; specialDiet = combine { it.specialDiet }
-            diseases = combine { it.diseases }; dislikedIngredients = combine { it.dislikedIngredients }
-        }
-        return EffectiveAnalysis(effective, AnalysisSelectionResponse("selected", true, self, ids))
+        return EffectiveAnalysis(combineAnalysisConditions(subjects.map { it.conditions }),
+            AnalysisSelectionResponse("selected", true, self, ids), subjects)
     }
     private fun emptyProfile() = User(email = "", password = "", nickname = "분석 대상")
     private fun invalid(message: String) = CustomException(HttpStatus.BAD_REQUEST, message, "ANALYSIS_SELECTION_INVALID")
+}
+
+/** No persistence: used for both owned server profiles and explicitly supplied chat snapshots. */
+fun combineAnalysisConditions(profiles: List<User>): User {
+    fun combine(value: (User) -> String?) = profiles.flatMap { DelimitedProfileNormalizer.terms(value(it)) }
+        .distinct().joinToString(",").ifEmpty { null }
+    return User(email = "", password = "", nickname = "선택한 분석 대상",
+        allergies = combine { it.allergies }, specialDiet = combine { it.specialDiet },
+        diseases = combine { it.diseases }, dislikedIngredients = combine { it.dislikedIngredients })
 }
 
 fun notEvaluatedSafety() = SafetyDecision(SafetyStatus.NOT_EVALUATED, emptyList(), emptyList(),

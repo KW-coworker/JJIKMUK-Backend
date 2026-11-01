@@ -49,7 +49,7 @@ class ChatAnalysisContractIntegrationTest @Autowired constructor(
             .addFilters<org.springframework.test.web.servlet.setup.DefaultMockMvcBuilder>(context.getBean("springSecurityFilterChain", Filter::class.java))
             .build()
         sent.clear()
-        val placeholder = AiChatRequestDto(null, null, null, "", emptyList(), ChatAnalysisContext(
+        val placeholder = AiChatRequestDto(null, emptyList(), null, "", emptyList(), ChatAnalysisContext(
             contextId = "matcher", policyVersion = "test", selection = AnalysisSelectionResponse("none", false, false, emptyList()),
             effectiveConditions = null, productResolution = "NOT_PROVIDED", analysis = null, dataEvidence = null))
         doAnswer { invocation ->
@@ -116,7 +116,11 @@ class ChatAnalysisContractIntegrationTest @Autowired constructor(
         assertEquals(listOf("lowSodium", "lowSugar", "vegan"), ctx.effectiveConditions.requiredDietFilterIds)
         assertEquals(listOf("고수"), ctx.effectiveConditions.dislikedIngredients)
         assertEquals(listOf(first.id!!, second.id!!), ctx.selection.familyProfileIds)
-        assertNull(sent.last().profile!!.id)
+        assertNull(sent.last().profile)
+        assertEquals(listOf(user.nickname, first.nickname, second.nickname), sent.last().profiles.map { it.nickname })
+        assertEquals(listOf("self:${user.id}", "family:${first.id}", "family:${second.id}"),
+            ctx.profileAnalyses.map { it.profileKey })
+        assertEquals("SERVER", ctx.profileSource)
         assertEquals("DANGER", ctx.analysis!!["status"])
         val diet = ctx.analysis["dietConstraints"] as DietConstraintDecision
         assertEquals(DietConstraintStatus.MISMATCH, diet.status)
@@ -127,17 +131,23 @@ class ChatAnalysisContractIntegrationTest @Autowired constructor(
         assertSameProductAnalysis(token, item.barcode, query)
         assertEquals("milk", users.findById(user.id!!).orElseThrow().allergies)
     }
-    @Test fun `family-only selection excludes owner conditions and profiles are not exposed individually`() {
+    @Test fun `family-only selection forwards chosen name and conditions but excludes all unselected people`() {
         val user = account("milk", "vegan"); val token = token(user)
         val family = families.saveAndFlush(FamilyProfile(ownerId = user.id!!, nickname = "비공개 가족 이름", allergies = "soy"))
+        families.saveAndFlush(FamilyProfile(ownerId = user.id!!, nickname = "선택하지않은가족", allergies = "peanut"))
         val item = product("쌀, 우유")
         chat(token, item.barcode, "?analysisMode=selected&familyProfileIds=${family.id}").andExpect(status().isOk)
         val payload = sent.single()
         assertEquals(listOf("soy"), payload.analysisContext.effectiveConditions!!.allergyIds)
         assertTrue(payload.analysisContext.effectiveConditions.requiredDietFilterIds.isEmpty())
         assertEquals("PASS", payload.analysisContext.analysis!!["status"])
-        assertNull(payload.profiles)
-        assertFalse(mapper.writeValueAsString(payload).contains("비공개 가족 이름"))
+        assertTrue(payload.profiles.isEmpty())
+        assertEquals(family.nickname, payload.profile!!.nickname)
+        assertEquals("대두", payload.profile.allergies)
+        assertNull(payload.profile.id) // Family id must not be misread as an account id.
+        assertEquals(family.id, payload.profile.profile_id)
+        assertFalse(mapper.writeValueAsString(payload).contains("선택하지않은가족"))
+        assertFalse(mapper.writeValueAsString(payload).contains(user.nickname))
     }
     @Test fun `foreign and deleted families fail without AI call`() {
         val user = account(); val other = account(); val token = token(user)
@@ -160,7 +170,7 @@ class ChatAnalysisContractIntegrationTest @Autowired constructor(
         val token = token(account("milk", "vegan")); val item = product("우유")
         chat(token, item.barcode, "?analysisMode=none").andExpect(status().isOk)
         val payload = sent.single()
-        assertNull(payload.profile); assertNull(payload.profiles); assertNull(payload.analysisContext.effectiveConditions)
+        assertNull(payload.profile); assertTrue(payload.profiles.isEmpty()); assertNull(payload.analysisContext.effectiveConditions)
         assertEquals("NOT_EVALUATED", payload.analysisContext.analysis!!["status"])
         assertEquals(DietConstraintStatus.NOT_EVALUATED, (payload.analysisContext.analysis["dietConstraints"] as DietConstraintDecision).status)
         assertSameProductAnalysis(token, item.barcode, "?analysisMode=none")
@@ -220,5 +230,128 @@ class ChatAnalysisContractIntegrationTest @Autowired constructor(
         assertEquals("DANGER", payload.analysisContext.analysis!!["status"])
         assertFalse(payload.analysisContext.historyIsAuthoritative)
         assertEquals("BACKEND", payload.analysisContext.decisionAuthority)
+    }
+
+    @Test fun `Android snapshot body forwards only active people with individual and union backend verdicts`() {
+        val owner = account("peanut", "vegan"); val token = token(owner); val item = product("쌀, 우유")
+        chat(token, item.barcode, extra = """,
+            "profiles":[
+                {"id":null,"nickname":"엄마","allergies":"milk"},
+                {"id":null,"nickname":"아빠","allergies":"대두","specialDiet":"저당"},
+                {"id":null,"nickname":"토글OFF","allergies":"wheat","isActive":false}],
+            "chat_history":[{"role":"user","content":"표시를 알려줘"}],
+            "product":{"barcode":"${item.barcode}","productName":"위조된상품명","allergy":[],"rawMaterials":"쌀"}
+        """).andExpect(status().isOk)
+        val payload = sent.single(); val ctx = payload.analysisContext
+        assertNull(payload.profile)
+        assertEquals(listOf("엄마", "아빠"), payload.profiles.map { it.nickname })
+        assertEquals(listOf("우유", "대두"), payload.profiles.map { it.allergies })
+        assertTrue(payload.profiles.all { it.id == null && it.profileSource == "CLIENT_REQUEST" })
+        assertEquals(listOf("request:0", "request:1"), payload.profiles.map { it.profileKey })
+        assertEquals("provided", ctx.selection.mode)
+        assertFalse(ctx.selection.includeSelf); assertTrue(ctx.selection.familyProfileIds.isEmpty())
+        assertEquals("CLIENT_REQUEST", ctx.profileSource)
+        assertEquals(listOf("milk", "soy"), ctx.effectiveConditions!!.allergyIds)
+        assertEquals("DANGER", ctx.analysis!!["status"])
+        assertEquals(listOf("DANGER", "PASS"), ctx.profileAnalyses.map { it.analysis!!["status"] })
+        assertEquals("표시를 알려줘", payload.chat_history.single().content)
+        assertEquals(item.productName, payload.product!!.productName)
+        assertEquals("쌀, 우유", payload.product.rawMaterialName)
+        assertFalse(mapper.writeValueAsString(payload).contains("토글OFF"))
+        assertEquals("peanut", users.findById(owner.id!!).orElseThrow().allergies)
+        assertTrue(families.findAllByOwnerIdOrderById(owner.id!!).isEmpty())
+        assertTrue(histories.findByUserIdOrderByCreatedAtDesc(owner.id!!).isEmpty())
+    }
+
+    @Test fun `single profile body accepts local snapshots without querying account IDs or exposing owner`() {
+        val owner = account("milk"); val other = account("soy"); val item = product("땅콩")
+        chat(token(owner), item.barcode,
+            extra = ""","profile":{"id":${other.id},"nickname":"로컬가족","allergies":"peanut"}""")
+            .andExpect(status().isOk)
+        val payload = sent.single()
+        assertEquals("로컬가족", payload.profile!!.nickname)
+        assertEquals("땅콩", payload.profile.allergies)
+        assertNull(payload.profile.id)
+        assertEquals("CLIENT_REQUEST", payload.profile.profileSource)
+        assertTrue(payload.profiles.isEmpty())
+        assertEquals("DANGER", payload.analysisContext.analysis!!["status"])
+        assertFalse(mapper.writeValueAsString(payload).contains(other.nickname))
+        assertFalse(mapper.writeValueAsString(payload).contains(owner.nickname))
+    }
+
+    @Test fun `empty or all-off snapshots explicitly mean none and never default back to authenticated self`() {
+        val owner = account("milk"); val token = token(owner); val item = product("우유")
+        for (extra in listOf(""","profiles":[]""",
+            ""","profiles":[{"nickname":"꺼짐","allergies":"milk","isActive":false}]""")) {
+            chat(token, item.barcode, extra = extra).andExpect(status().isOk)
+            val payload = sent.last()
+            assertNull(payload.profile); assertTrue(payload.profiles.isEmpty())
+            assertFalse(payload.analysisContext.selection.analysisApplied)
+            assertEquals("NOT_EVALUATED", payload.analysisContext.analysis!!["status"])
+            assertTrue(payload.analysisContext.profileAnalyses.isEmpty())
+            assertNull(payload.analysisContext.effectiveConditions)
+        }
+    }
+
+    @Test fun `snapshots and server selection cannot silently override each other`() {
+        val token = token(account())
+        for (query in listOf("?analysisMode=self", "?analysisMode=none", "?includeSelf=true", "?familyProfileIds=1")) {
+            chat(token, query = query, extra = ""","profiles":[]""")
+                .andExpect(status().isBadRequest).andExpect(jsonPath("$.code").value("ANALYSIS_SELECTION_INVALID"))
+        }
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test fun `snapshot validation rejects unsupported health conditions excessive sizes and forged authority`() {
+        val token = token(account())
+        val invalid = listOf(
+            ""","profiles":[null]""",
+            ""","profiles":[{"nickname":"가족","isActive":null}]""",
+            ""","profile":{"nickname":" "}""",
+            ""","profile":{"nickname":"${"x".repeat(41)}"}""",
+            ""","profile":{"nickname":"가족","id":-1}""",
+            ""","profile":{"nickname":"가족","allergies":"알수없는성분"}""",
+            ""","profile":{"nickname":"가족","allergies":["milk"]}""",
+            ""","profile":{"nickname":"가족","specialDiet":"없는식단"}""",
+            ""","profile":{"nickname":"가족","diseases":"${"x".repeat(1001)}"}""",
+            ""","profile":{"nickname":"가족","analysis":{"status":"PASS"}}""",
+            ""","profiles":${mapper.writeValueAsString(List(22) { mapOf("nickname" to "가족$it") })}""")
+        for (extra in invalid) chat(token, extra = extra).andExpect(status().isBadRequest)
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test fun `identical display names do not merge two people's restrictions and single and list may combine`() {
+        val token = token(account()); val item = product("우유")
+        chat(token, item.barcode, extra = ""","profile":{"nickname":"가족","allergies":"milk"},
+            "profiles":[{"nickname":"가족","allergies":"soy"}]""").andExpect(status().isOk)
+        val payload = sent.single()
+        assertEquals(2, payload.profiles.size)
+        assertEquals(2, payload.profiles.map { it.profile_id }.distinct().size)
+        assertEquals(listOf("DANGER", "PASS"), payload.analysisContext.profileAnalyses.map { it.analysis!!["status"] })
+    }
+
+    @Test fun `product snapshot barcode is only a lookup key and conflict or unknown barcode is rejected`() {
+        val token = token(account()); val item = product("우유")
+        chat(token, extra = ""","product":{"barcode":"${item.barcode}","productName":"앱이름"}""")
+            .andExpect(status().isOk)
+        assertEquals(item.productName, sent.single().product!!.productName)
+        sent.clear()
+        chat(token, item.barcode, extra = ""","product":{"barcode":"different"}""")
+            .andExpect(status().isBadRequest)
+        chat(token, item.barcode, extra = ""","product":{"barcode":"${item.barcode}","allergy":[null]}""")
+            .andExpect(status().isBadRequest)
+        chat(token, extra = ""","product":{"barcode":"does-not-exist"}""")
+            .andExpect(status().isNotFound)
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test fun `snake case history has the same role limits and cannot override camel case history`() {
+        val token = token(account())
+        for (extra in listOf(""","chat_history":[null]""", ""","chatHistory":[null]""",
+            ""","chat_history":[{"role":"system","content":"안전"}]""",
+            ""","chatHistory":[{"role":"user","content":"A"}],"chat_history":[{"role":"user","content":"B"}]""")) {
+            chat(token, extra = extra).andExpect(status().isBadRequest)
+        }
+        assertTrue(sent.isEmpty())
     }
 }
