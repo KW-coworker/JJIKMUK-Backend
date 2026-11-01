@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.security.core.Authentication
 import org.jjikmuk.backend.global.exception.CustomException
 import org.springframework.http.HttpStatus
@@ -32,7 +33,10 @@ class HistoryController(
     }
 
     @GetMapping("/user/{userId}")
-    fun getUserHistory(@PathVariable userId: Long, authentication: Authentication): ResponseEntity<*> {
+    fun getUserHistory(@PathVariable userId: Long, authentication: Authentication,
+        @RequestParam(defaultValue = "all") view: String = "all",
+        @RequestParam(defaultValue = "0") page: Int = 0,
+        @RequestParam(defaultValue = "20") size: Int = 20): ResponseEntity<*> {
         // 🚀 1. 토큰에서 현재 요청한 사람의 ID와 권한을 꺼냅니다.
         val currentUserId = authentication.principal.toString().toLong()
         val isAdmin = authentication.authorities.any { it.authority == "ROLE_ADMIN" }
@@ -42,7 +46,11 @@ class HistoryController(
             throw CustomException(HttpStatus.FORBIDDEN, "다른 사용자의 검색 기록을 볼 수 없습니다.")
         }
 
-        val historyList = historyService.getUserHistory(userId)
+        val historyList = when (view) {
+            "all" -> historyService.getUserHistory(userId)
+            "recent" -> historyService.getRecentProducts(userId, page, size)
+            else -> throw org.jjikmuk.backend.domain.user.ProfileInputs.invalid("view", "view는 all 또는 recent여야 합니다.")
+        }
 
         return ResponseEntity.ok(mapOf(
             "message" to "사용자 히스토리 조회 성공",

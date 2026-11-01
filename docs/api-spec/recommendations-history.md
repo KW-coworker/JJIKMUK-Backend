@@ -368,7 +368,7 @@ GET /api/histories/user/{userId}
 Authorization: Bearer {token}
 ```
 
-로그인 본인 또는 관리자, userId 필수 Long, Query/Body 없음, 성공 200이다. 전체 이력을 최신순으로 반환하고 page·size는 없다. SCAN만 필터링하는 API가 아니며 기록된 여러 행동 유형을 함께 반환한다.
+로그인 본인 또는 관리자, userId 필수 Long, Body 없음, 성공 200이다. view 생략/all은 기존 전체 이력 배열을 반환한다. 2026-11-02 추가한 view=recent는 SCAN/DETAIL_VIEW의 상품별 최신 조회를 data.items/page/size/hasNext로 반환한다. 상세는 [좋아요·최근 본 상품 계약](family-favorites-recent-v1.md)을 따른다.
 
 아래 product는 일부 필드 발췌이다. 전체 구조는 Product이다.
 
@@ -427,4 +427,4 @@ Authorization: Bearer {token}
 
 eventId는 Long, barcode/actionType은 string, createdAt은 LocalDateTime 문자열이다. OTHER는 구형 데이터 해석용이며 신규 요청에서 허용하지 않는다. 400 REQUEST_FAILED(바코드·행동 유형), 404 REQUEST_FAILED(사용자·상품 없음), 공통 401/500이 가능하다.
 
-반복 전송은 별도 이력을 생성한다. 이 API는 행동 기록용이며 즐겨찾기 목록 상태를 생성·해제하는 CRUD API와 동일하지 않다. 별도 idempotency key나 즐겨찾기 취소 API는 현재 없다.
+반복 전송은 별도 이력을 생성한다. 이 API는 행동 기록용이며 현재 좋아요 상태 API와 다르다. 2026-11-02 추가한 `/api/users/me/favorites/{productId}` PUT/DELETE가 상태와 FAVORITE/UNFAVORITE 이력을 함께 처리한다. 새 FE는 이력 POST를 중복 호출하지 않는다. 상세 GET의 자동 SCAN과 중복해서 DETAIL_VIEW/SCAN을 POST하지 않는다.

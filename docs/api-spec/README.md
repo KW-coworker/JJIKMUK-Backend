@@ -4,6 +4,8 @@
 
 ## 문서 구성
 
+- [가족 관계·이모지 / 좋아요 / 최근 본 상품](family-favorites-recent-v1.md) — 2026-11-02 구현·로컬 V16 검증 완료. 가족 표시 필드, 좋아요 4개 API, 기존 이력 view=recent, 가족·none 이력과 개인화 분리. 운영 미적용.
+- [V16 배포·검증 안내](v16-deployment-checklist.md) — 백업·복제 검증·Flyway 적용 순서, MySQL 검증 도구와 FE 연동 주의사항.
 - [상품 ID·속성 이력·카테고리 정책 단계 전환](../catalog-evolution-stage1-3.md) — 2026-10-28 로컬 추가 6개 경로(ID 조회 3개·관리자 3개), 행동 이력 productId 입력, 용도 판정. 위의 기존 40개 집계에 포함되지 않은 추가 계약이다. 운영 DB 적용 전이다.
 - [챗봇 활성 프로필 계약 v2](chat-analysis-contract-v2.md) — 2026-11-01 로컬 변경. JWT 본인 검증·앱의 활성 profile/profiles·서버 가족 선택·개인별 이름/조건/판정·AI v2 확인 헤더. 챗봇 관련 이전 설명보다 우선하며 FE 토글 연결 및 AI 서버 동시 연동이 필요하다.
 - [프론트 인증·프로필 연동 v2](frontend-auth-integration-v2.md) — 신규 13개 API, Refresh/명시적 Google 연결/가족/사진/분석 대상 변경 계약과 미합의 항목. 인증 및 해당 변경사항은 이 문서가 우선이다.
@@ -66,6 +68,10 @@ Notion에는 통합본의 요청주소별 섹션과 해당 공통 응답 모델�
 | GET | `/api/users/me/family-profiles/{id}` | 가족 조회 | 필수 | v2 추가 |
 | PATCH | `/api/users/me/family-profiles/{id}` | 가족 부분 수정 | 필수 | v2 추가 |
 | DELETE | `/api/users/me/family-profiles/{id}` | 가족 삭제 | 필수 | v2 추가 |
+| GET | `/api/users/me/favorites` | 현재 좋아요 목록 | 필수 | 2026-11-02 추가 |
+| GET | `/api/users/me/favorites/{productId}` | 상품 좋아요 상태 | 필수 | 2026-11-02 추가 |
+| PUT | `/api/users/me/favorites/{productId}` | 좋아요 등록 | 필수 | 2026-11-02 추가 |
+| DELETE | `/api/users/me/favorites/{productId}` | 좋아요 해제 | 필수 | 2026-11-02 추가 |
 | GET | `/api/users/me` | 내 프로필 조회 | 필수 | 추가·권장 |
 | PUT | `/api/users/me` | 내 프로필 전체 수정 | 필수 | 추가·권장 |
 | GET | `/api/users/{userId}` | ID로 프로필 조회 | 본인/관리자 | 기존 호환 |
@@ -73,7 +79,7 @@ Notion에는 통합본의 요청주소별 섹션과 해당 공통 응답 모델�
 | PUT | `/api/users/{id}/password` | 로그인 상태에서 비밀번호 변경 | 본인 | 갱신 |
 | DELETE | `/api/users/{id}` | 회원 탈퇴 | 본인/관리자 | 추가 |
 | GET | `/api/users` | 전체 사용자 조회 | 관리자 | 추가 |
-| GET | `/api/histories/user/{userId}` | 사용자 행동·스캔 이력 조회 | 본인/관리자 | 갱신 |
+| GET | `/api/histories/user/{userId}` | 행동 이력 / view=recent 최근 본 상품 | 본인/관리자 | 2026-11-02 갱신 |
 | POST | `/api/histories/events` | 사용자 행동 기록 | 필수 | 추가 |
 | GET | `/api/recommendations/products/{barcode}` | 특정 상품의 대체 상품 추천 | 필수 | 추가 |
 | POST | `/api/recommendations/feedback` | 추천 피드백 기록 | 필수 | 추가 |

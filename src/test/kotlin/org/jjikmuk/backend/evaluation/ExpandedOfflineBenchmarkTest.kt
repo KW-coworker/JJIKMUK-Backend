@@ -82,7 +82,7 @@ class ExpandedOfflineBenchmarkTest {
                 require(call.method.name == "findById"); Optional.of(currentUser)
             }
             val historyRepo = mock(HistoryRepository::class.java) { call ->
-                require(call.method.name == "findTop200ByUserIdOrderByCreatedAtDesc"); emptyList<Any>()
+                require(call.method.name == "findTop200ByUserIdAndPersonalizationAllowedTrueOrderByCreatedAtDescIdDesc"); emptyList<Any>()
             }
             val neighborRepo = mock(ProductNeighborSetRepository::class.java) { call ->
                 require(call.method.name == "findById")

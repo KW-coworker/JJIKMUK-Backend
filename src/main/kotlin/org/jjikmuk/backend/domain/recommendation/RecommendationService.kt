@@ -312,7 +312,20 @@ class RecommendationService(
         allergies: List<String>,
         requiredFilters: Set<ProductFilter>
     ): HistoryProfile {
-        val histories = historyRepository.findTop200ByUserIdOrderByCreatedAtDesc(requireNotNull(user.id))
+        val eligible = historyRepository.findTop200ByUserIdAndPersonalizationAllowedTrueOrderByCreatedAtDescIdDesc(requireNotNull(user.id))
+        // Removing a favorite cancels the previous like signal; repeated on/off cycles never stack likes.
+        val seenFavorites = mutableSetOf<String>()
+        val histories = eligible.filter { event ->
+            when (event.actionType) {
+                org.jjikmuk.backend.domain.history.UserActionType.FAVORITE,
+                org.jjikmuk.backend.domain.history.UserActionType.UNFAVORITE -> {
+                    val key = event.productId?.let { "id:$it" } ?: "barcode:${event.barcode}"
+                    val latest = seenFavorites.add(key)
+                    latest && event.actionType == org.jjikmuk.backend.domain.history.UserActionType.FAVORITE
+                }
+                else -> true
+            }
+        }
         if (histories.isEmpty()) return HistoryProfile(emptyList(), 0)
         val legacyHistories = histories.filter { it.productId == null && !it.barcode.startsWith("NO_BARCODE_ROW_") }
         val historyProducts = productRepository.findAllById(legacyHistories.map { it.barcode }.distinct())

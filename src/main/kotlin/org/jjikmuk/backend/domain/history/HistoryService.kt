@@ -7,11 +7,18 @@ import org.jjikmuk.backend.domain.user.UserRepository
 import org.jjikmuk.backend.global.exception.CustomException
 import org.springframework.http.HttpStatus
 import java.time.LocalDateTime
+import org.jjikmuk.backend.domain.product.Product
+import org.jjikmuk.backend.domain.user.AnalysisSelectionService
+import org.jjikmuk.backend.domain.user.validateListPage
+import org.springframework.data.domain.PageRequest
 
 data class UserActionEventRequest(
     val barcode: String? = null,
     val actionType: String,
-    val productId: Long? = null
+    val productId: Long? = null,
+    val analysisMode: String? = null,
+    val includeSelf: Boolean? = null,
+    val familyProfileIds: List<Long>? = null
 )
 
 data class UserActionEventResponse(
@@ -20,15 +27,20 @@ data class UserActionEventResponse(
     val actionType: String,
     val createdAt: LocalDateTime,
     val productId: Long? = null,
-    val attributeSnapshotId: Long? = null
+    val attributeSnapshotId: Long? = null,
+    val analysisMode: String = "self",
+    val personalizationAllowed: Boolean = true
 )
+
+data class RecentProductPage(val items: List<HistoryResponse>, val page: Int, val size: Int, val hasNext: Boolean)
 
 @Service
 @Transactional(readOnly = true)
 class HistoryService(
     private val historyRepository: HistoryRepository,
     private val productRepository: ProductRepository,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val analysisSelection: AnalysisSelectionService
 ) {
     fun getUserHistory(userId: Long): List<HistoryResponse> {
         // 1. 해당 유저의 기록을 최신순으로 가져옵니다.
@@ -48,9 +60,29 @@ class HistoryService(
                 product = product,
                 productId = history.productId,
                 attributeSnapshotId = history.attributeSnapshotId,
-                identityStatus = if (history.productId == null) "LEGACY_VERSION_UNKNOWN" else if (product == null) "NOT_IN_ACTIVE_DATASET" else "INTERNAL_ID"
+                identityStatus = if (history.productId == null) "LEGACY_VERSION_UNKNOWN" else if (product == null) "NOT_IN_ACTIVE_DATASET" else "INTERNAL_ID",
+                analysisMode = history.analysisMode,
+                personalizationAllowed = history.personalizationAllowed
             )
         }
+    }
+
+    fun getRecentProducts(userId: Long, page: Int, size: Int): RecentProductPage {
+        validateListPage(page, size)
+        val rows = historyRepository.findRecentViews(userId,
+            listOf(UserActionType.SCAN, UserActionType.DETAIL_VIEW), PageRequest.of(page, size))
+        val ids = rows.content.mapNotNull { it.productId }.distinct()
+        val byId = if (ids.isEmpty()) emptyMap() else productRepository.findAllByProductIdIn(ids).associateBy { it.productId }
+        val barcodes = rows.content.filter { it.productId == null && !it.barcode.startsWith("NO_BARCODE_ROW_") }
+            .map { it.barcode }.distinct()
+        val byBarcode = if (barcodes.isEmpty()) emptyMap() else productRepository.findAllById(barcodes).associateBy(Product::barcode)
+        return RecentProductPage(rows.content.map { row ->
+            val product = if (row.productId != null) byId[row.productId] else byBarcode[row.barcode]
+            HistoryResponse(requireNotNull(row.id), row.actionType.name, row.createdAt, product,
+                row.productId, row.attributeSnapshotId,
+                if (row.productId == null) "LEGACY_VERSION_UNKNOWN" else if (product == null) "NOT_IN_ACTIVE_DATASET" else "INTERNAL_ID",
+                row.analysisMode, row.personalizationAllowed)
+        }, page, size, rows.hasNext())
     }
 
     @Transactional
@@ -68,6 +100,7 @@ class HistoryService(
         val user = userRepository.findById(userId).orElseThrow {
             CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.")
         }
+        val analysis = analysisSelection.resolve(userId, request.analysisMode, request.includeSelf, request.familyProfileIds)
         val product = if (request.productId != null) productRepository.findByProductId(request.productId)
             else productRepository.findFirstByBarcode(requireNotNull(barcode))
         if (product == null) throw CustomException(HttpStatus.NOT_FOUND, "해당 제품을 찾을 수 없습니다.")
@@ -75,7 +108,8 @@ class HistoryService(
 
         val saved = historyRepository.save(
             History(user = user, barcode = product.barcode, actionType = actionType,
-                productId = product.productId, attributeSnapshotId = product.attributeSnapshotId)
+                productId = product.productId, attributeSnapshotId = product.attributeSnapshotId,
+                analysisMode = analysis.selection.mode, personalizationAllowed = analysis.personalHistoryAllowed)
         )
         return UserActionEventResponse(
             eventId = requireNotNull(saved.id),
@@ -83,7 +117,9 @@ class HistoryService(
             actionType = saved.actionType.name,
             createdAt = saved.createdAt,
             productId = saved.productId,
-            attributeSnapshotId = saved.attributeSnapshotId
+            attributeSnapshotId = saved.attributeSnapshotId,
+            analysisMode = saved.analysisMode,
+            personalizationAllowed = saved.personalizationAllowed
         )
     }
 }

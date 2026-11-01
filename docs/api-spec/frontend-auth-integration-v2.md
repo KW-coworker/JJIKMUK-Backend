@@ -365,6 +365,8 @@ Content-Type: multipart/form-data; boundary=<클라이언트 생성>
 
 ## 7. 가족: 계정 소유와 동시 수정
 
+2026-11-02 추가: 생성·수정·목록·단건 응답에 nullable `relation`과 `emoji`를 지원한다. 최초 초안의 `relationship`이 아니라 `relation`을 사용한다. 상세 필드 규칙과 즐겨찾기 연동은 [가족·즐겨찾기 추가 계약](family-favorites-recent-v1.md)을 따른다. V16 및 서버 배포가 필요하다.
+
 생성 예:
 
 ```http
@@ -372,13 +374,13 @@ POST /api/users/me/family-profiles
 Authorization: Bearer <access-token>
 Content-Type: application/json
 
-{"nickname":"어머니","allergies":"soy","specialDiet":"lowSodium","diseases":null,"dislikedIngredients":null}
+{"nickname":"어머니","allergies":"soy","specialDiet":"lowSodium","diseases":null,"dislikedIngredients":null,"relation":"어머니","emoji":"👩"}
 ```
 
 201 응답:
 
 ```json
-{"message":"가족 프로필 생성 성공","data":{"id":41,"nickname":"어머니","allergies":"soy","specialDiet":"lowSodium","diseases":null,"dislikedIngredients":null,"version":0}}
+{"message":"가족 프로필 생성 성공","data":{"id":41,"nickname":"어머니","allergies":"soy","specialDiet":"lowSodium","diseases":null,"dislikedIngredients":null,"version":0,"relation":"어머니","emoji":"👩"}}
 ```
 
 - 목록 GET은 `data:[...]`, 단건 GET은 `data:{...}`다. 비밀번호/ownerId를 요청하지 않는다. 서버가 Bearer의 소유자로 한정한다.
@@ -422,7 +424,7 @@ GET /api/products/safe-recommendations?limit=10&analysisMode=selected&familyProf
 - 일반 조회는 `analysis.status=NOT_EVALUATED`, `analysis.analysisApplied=false`, `analysis.selection.mode=none`이다. `isDangerous=false`만 보고 안심 판정을 표시하지 않는다.
 - 상품 응답에는 `analysis.dietConstraints`를 추가했다. 기존 analysis.status는 **알레르기 판정**이다. 알레르기 PASS라도 식단 MISMATCH/UNKNOWN일 수 있다. UI는 두 결과를 분리해서 표시해야 한다.
 - 추천 응답의 대상 정보는 `data.analysisSelection`이다. none이면 홈 recommendationMode 및 대체 resultMode는 GENERAL, 항목의 safety/dietConstraints는 NOT_EVALUATED, 대체 항목의 recommendationTier는 GENERAL이다. 이를 맞춤 안심 추천이라고 표시하지 않는다.
-- 가족/none에서는 본인 행동 이력으로 개인화하지 않는다. 바코드 단건 조회의 자동 SCAN도 본인 모드에서만 기록한다. 기존 POST histories/events는 계정 본인 이력 계약이므로 가족/none 행동을 본인 선호로 전송하지 말아야 한다. 가족별 행동 이력 저장은 별도 후속 범위다.
+- 2026-11-02 변경: 가족/none에서도 로그인 계정에 상세 조회 SCAN을 기록하되 personalizationAllowed=false로 본인 취향 학습에서 제외한다. FE는 상세 GET 이후 이력을 중복 POST하지 않는다. 관계/이모지 및 좋아요·최근 목록은 [추가 계약](family-favorites-recent-v1.md)을 따른다.
 - 같은 용량에 여러 행이 있으면 알레르기와 식단 모두 보수적으로 합친다. 충돌 자료가 대표 행 선택 때문에 사라지지 않는다.
 - 홈 cursor는 계정·선택 대상·조건·카테고리에 묶는다. 이들 변경 시 이전 cursor를 폐기하고 첫 페이지를 다시 조회한다. 이전 버전 cursor도 사용하지 않는다. 기존 excludeBarcodes 중복 제외 계약은 유지한다.
 - 2026-10-28 `/api/chat`에도 같은 분석 대상 query와 공통 상품 판정을 적용했다. [챗봇 공통 분석 판정 계약](chat-analysis-contract-v1.md)을 따른다. AI의 수신·응답 확인 구현과 공동 배포는 필요하며 용량 옵션 집계·가족별 설명·공통 검색 호출 연동은 별도 합의 대상이다.
