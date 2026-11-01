@@ -1,6 +1,6 @@
 # 챗봇 중계 API와 현재 구현의 확인 필요 사항
 
-[전체 목록](README.md). 2026-10-28 챗봇 변경의 상세 계약은 [챗봇 공통 분석 판정 계약](chat-analysis-contract-v1.md)이 우선한다. 아래는 구현된 동작과 아직 보완되지 않은 부분의 요약이다.
+[전체 목록](README.md). 2026-11-01 [챗봇 활성 프로필 계약 v2](chat-analysis-contract-v2.md)가 우선한다. 아래는 구현된 동작과 아직 보완되지 않은 부분의 요약이다.
 
 ## C01. AI 챗봇 중계
 
@@ -16,7 +16,7 @@ Content-Type: application/json
 | 인증 | 서비스 JWT 필요 |
 | Query | analysisMode / includeSelf / familyProfileIds. 상품 API와 동일한 선택 규칙 |
 | 성공 | 200 OK |
-| 배포 의존성 | chat.ai.url의 AI 서비스가 chat-analysis-v1 및 응답 확인 헤더를 지원해야 함 |
+| 배포 의존성 | chat.ai.url의 AI 서비스가 chat-analysis-v2 및 응답 확인 헤더를 지원해야 함 |
 
 ### Body
 
@@ -28,6 +28,9 @@ Content-Type: application/json
 | chatHistory | array | 생략 시 [] |
 | chatHistory[].role | string | user/assistant만 허용 |
 | chatHistory[].content | string | 필수 대화 문자열 |
+| profile / profiles | object / array | 앱의 활성 프로필 스냅샷. Query 선택과 혼용 불가. 빈 profiles는 전원 OFF |
+| chat_history | array | chatHistory 호환 이름. 둘 중 하나만 사용 권장 |
+| product | object | Android 호환. barcode로 DB 조회하며 클라이언트 상품 사실은 사용하지 않음 |
 
 ```json
 {
@@ -44,7 +47,7 @@ Content-Type: application/json
 
 상품 생략 시에만 상품 없는 일반 질문을 전달한다. 입력한 상품이 없거나 선택한 가족에 접근할 수 없으면 404이며 AI 호출을 하지 않는다. AI 연결 실패는 503, 응답·계약 문제는 502다.
 
-**연동 전 확인:** JWT 본인 검증, 가족 합산 조건, 상품 단건과 동일한 판정·근거 전달을 구현했다. 관리자도 타인 userId 지정은 불가하다. AI 서비스의 새 계약 수용과 공동 배포가 필요하며, 구형 AI가 확인 헤더를 주지 않으면 502다. 설명 문장 검증, 개별 가족 판정, 용량 옵션 집계, 검색·추천 API 호출 연동은 별도 합의 대상이다.
+**연동 전 확인:** JWT 본인 검증, 서버 가족 소유권, 상품 단건과 동일한 합산·개인별 판정 근거 전달을 구현했다. 앱 스냅샷은 CLIENT_REQUEST로 구분하고 서버 저장 사실로 인증하지 않는다. 관리자도 타인 userId 지정은 불가하다. AI 서비스의 v2 수용과 공동 배포가 필요하며, 구형 AI 응답은 502다. 설명 문장 검증, 용량 옵션 집계, 검색·추천 API 호출 연동은 별도 합의 대상이다.
 
 ## 목록에 잘못 추가하지 않아야 할 경로
 
@@ -76,4 +79,4 @@ Content-Type: application/json
 | 추천 피드백과 행동 이력 | 다른 저장·사용 목적. 피드백이 행동 이력을 자동 생성하지 않음 |
 | 실서버 반영 | 이 문서는 코드 기준. 서버 담당자는 배포 커밋·Flyway·DB·메일·Google 설정을 별도로 확인 |
 
-사진·가족·갱신·명시적 Google 연결·분석 대상 API는 [프론트 연동 v2](frontend-auth-integration-v2.md), 챗봇은 [공통 분석 판정 계약](chat-analysis-contract-v1.md)을 따른다. 실제 서버 배포는 별도 확인 사항이다.
+사진·가족·갱신·명시적 Google 연결·분석 대상 API는 [프론트 연동 v2](frontend-auth-integration-v2.md), 챗봇은 [활성 프로필 계약 v2](chat-analysis-contract-v2.md)를 따른다. 실제 서버 배포는 별도 확인 사항이다.

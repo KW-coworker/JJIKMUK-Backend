@@ -2,7 +2,7 @@
 
 > 2026-11-01 인증 후속: `403 PROFILE_INCOMPLETE` 서버 제한, `POST /api/auth/logout/refresh`, JWT 본인 제외 닉네임 사전 확인을 추가했다. [인증 v2](frontend-auth-integration-v2.md)의 허용 API/FE 처리 규칙을 따른다. 운영 배포 완료를 의미하지 않는다.
 
-> 최신 계약 우선순위: 아래 기존 상세와 충돌하면 [챗봇 공통 판정 계약](chat-analysis-contract-v1.md), [프론트 인증·프로필 v2](frontend-auth-integration-v2.md), [상품 ID·관측 이력 계약](../catalog-evolution-stage1-3.md)을 따른다. 하단의 과거 챗봇 본인 검증 미구현 설명은 최신 계약으로 대체된다. 실제 서버 배포 여부는 별도로 확인한다.
+> 최신 계약 우선순위: 아래 기존 상세와 충돌하면 [챗봇 활성 프로필 계약 v2](chat-analysis-contract-v2.md), [프론트 인증·프로필 v2](frontend-auth-integration-v2.md), [상품 ID·관측 이력 계약](../catalog-evolution-stage1-3.md)을 따른다. 챗봇은 profile/profiles 앱 스냅샷, chat_history/product 호환과 개인별 근거를 지원하며 AI 확인 헤더는 chat-analysis-v2이다. 실제 서버 배포 여부는 별도로 확인한다.
 
 > 2026-10-28 상품 모델 추가: [내부 상품 ID·관측 이력·카테고리 용도 계약](../catalog-evolution-stage1-3.md)을 함께 확인한다. ID 조회 3개·관리자 3개 경로, 행동 이력 productId 입력, 상품/추천 응답의 용도 근거가 추가되었다. 기존 barcode API와 PK는 유지한다. 원본/운영 DB 적용은 아직 하지 않았다.
 
@@ -511,7 +511,7 @@ Content-Type: application/json
 | 인증 | 서비스 JWT 필요 |
 | Query | analysisMode, includeSelf, familyProfileIds. 상품 API와 같은 선택 규칙 |
 | 성공 | 200 OK, 계약 확인된 AI JSON object |
-| 배포 의존성 | chat.ai.url 및 chat-analysis-v1을 수용하는 AI 서버. [최신 계약](chat-analysis-contract-v1.md) 참조 |
+| 배포 의존성 | chat.ai.url 및 chat-analysis-v2를 수용하는 AI 서버. [최신 계약](chat-analysis-contract-v2.md) 참조 |
 
 ### Body
 
@@ -535,7 +535,7 @@ Content-Type: application/json
 
 ### 현재 응답·제한
 
-백엔드는 AI 응답의 계약 버전/contextId 확인 헤더와 JSON object 형식을 검증한 뒤 application/json으로 본문을 반환한다. answer 등 구체적인 성공 필드명은 AI 담당자와 합의한다. [요청 제한·전달 데이터·응답 확인·오류 명세](chat-analysis-contract-v1.md)가 이 요약보다 우선한다.
+백엔드는 AI 응답의 계약 버전/contextId 확인 헤더와 JSON object 형식을 검증한 뒤 application/json으로 본문을 반환한다. answer 등 구체적인 성공 필드명은 AI 담당자와 합의한다. Body profile/profiles와 chat_history/product 호환 필드도 지원한다. [요청 제한·전달 데이터·응답 확인·오류 명세](chat-analysis-contract-v2.md)가 이 요약보다 우선한다.
 
 상품 바코드를 생략한 경우만 상품 없는 질문으로 전달한다. 지정 상품 없음은 404 PRODUCT_NOT_FOUND, 타인·삭제된 가족은 404 FAMILY_NOT_FOUND다. AI 연결 실패는 503, 계약 확인·응답 오류는 502이며 미인증은 401이다.
 

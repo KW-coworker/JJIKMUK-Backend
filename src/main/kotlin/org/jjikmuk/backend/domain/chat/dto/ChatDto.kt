@@ -4,12 +4,17 @@ import com.fasterxml.jackson.annotation.JsonAnySetter
 import org.jjikmuk.backend.domain.recommendation.ProductDataEvidence
 import org.jjikmuk.backend.domain.user.AnalysisSelectionResponse
 
-// Selection parameters are query parameters, just like the product APIs.
+// Query selects owned server profiles. Body profile(s) explicitly supplies request-only snapshots.
 data class ChatRequestDto(
     val userId: Long? = null, // Compatibility only: must equal the JWT owner, including admins.
     val barcode: String? = null,
     val message: String,
-    val chatHistory: List<ChatHistoryDto> = emptyList()
+    val chatHistory: List<ChatHistoryDto?> = emptyList(),
+    val chat_history: List<ChatHistoryDto?>? = null,
+    val profile: ChatProfileInput? = null,
+    // null/omitted preserves the legacy default; [] explicitly means no selected people.
+    val profiles: List<ChatProfileInput?>? = null,
+    val product: ChatProductInput? = null
 ) {
     // Do not silently ignore body-level selection or forged server decisions.
     @JsonAnySetter
@@ -18,10 +23,32 @@ data class ChatRequestDto(
     }
 }
 
+data class ChatProfileInput(
+    val id: Long? = null, // Client-local reference only. NEVER used for a database lookup.
+    val nickname: String,
+    val allergies: String? = null,
+    val diseases: String? = null,
+    val specialDiet: String? = null,
+    val dislikedIngredients: String? = null,
+    val isActive: Boolean? = true
+) {
+    @JsonAnySetter fun rejectUnknown(name: String, value: Any?) {
+        throw IllegalArgumentException("지원하지 않는 프로필 필드: $name")
+    }
+}
+
+// Android develop compatibility only. Product facts and verdicts always come from the DB.
+data class ChatProductInput(val barcode: String, val productName: String? = null,
+    val allergy: List<String?> = emptyList(), val rawMaterials: String? = null) {
+    @JsonAnySetter fun rejectUnknown(name: String, value: Any?) {
+        throw IllegalArgumentException("지원하지 않는 상품 필드: $name")
+    }
+}
+
 // 💡 성민님 서버가 AI 서버(8000포트)로 보낼 요청
 data class AiChatRequestDto(
     val profile: ProfileDto?,      // 단일 프로필용
-    val profiles: List<ProfileDto>?, // 멀티 프로필용
+    val profiles: List<ProfileDto>, // Multi-profile list; empty when profile is used or none selected.
     val product: ProductDto?,
     val message: String,
     val chat_history: List<ChatHistoryDto>,
@@ -41,10 +68,14 @@ data class ChatAnalysisContext(
     val dataEvidence: ProductDataEvidence?,
     val decisionAuthority: String = "BACKEND",
     val historyIsAuthoritative: Boolean = false,
-    val storedDietFlagsAreAuthoritative: Boolean = false
+    val storedDietFlagsAreAuthoritative: Boolean = false,
+    val profileSource: String = "SERVER",
+    val profileAnalyses: List<ChatProfileAnalysis> = emptyList()
 ) {
-    companion object { const val VERSION = "chat-analysis-v1" }
+    companion object { const val VERSION = "chat-analysis-v2" }
 }
+
+data class ChatProfileAnalysis(val profileKey: String, val analysis: Map<String, Any>?)
 
 data class ChatEffectiveConditions(
     val allergyIds: List<String>,
@@ -67,7 +98,12 @@ data class ProfileDto(
     val allergies: String?,
     val diseases: String?,
     val specialDiet: String?,
-    val dislikedIngredients: String?
+    val dislikedIngredients: String?,
+    val profileKey: String? = null,
+    val profileSource: String = "SERVER",
+    // Separate from account id; permits distinct family/snapshot names even when names coincide.
+    val profile_id: Long? = null,
+    val target_type: String = "self"
 )
 
 data class ProductDto(
