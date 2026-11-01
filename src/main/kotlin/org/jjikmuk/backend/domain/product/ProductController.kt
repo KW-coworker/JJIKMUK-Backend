@@ -38,7 +38,8 @@ class ProductController(
         if (productId <= 0) throw CustomException(HttpStatus.BAD_REQUEST, "productId는 양수여야 합니다.")
         val target = getValidatedUserId(userId, authentication)
         return ResponseEntity.ok(mapOf("message" to "조회 성공", "data" to productService.getProductAnalysisById(
-            productId, target, analysisSelection.resolve(target, analysisMode, includeSelf, familyProfileIds))))
+            productId, target, analysisSelection.resolve(target, analysisMode, includeSelf, familyProfileIds),
+            historyOwnerId = actorId(authentication))))
     }
 
     @GetMapping("/{barcode}/variants")
@@ -261,7 +262,8 @@ class ProductController(
         val targetUserId = getValidatedUserId(userId, authentication)
 
         val responseData = productService.getProductAnalysis(barcode, targetUserId,
-            analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds))
+            analysisSelection.resolve(targetUserId, analysisMode, includeSelf, familyProfileIds),
+            historyOwnerId = actorId(authentication))
             ?: return ResponseEntity.status(404).body(mapOf("message" to "해당 바코드(${barcode})의 제품을 찾을 수 없습니다."))
 
         return ResponseEntity.ok(mapOf("message" to "조회 성공", "data" to responseData))
@@ -302,6 +304,9 @@ class ProductController(
 
         return ResponseEntity.ok(mapOf("message" to "검색 성공", "data" to responseData))
     }
+
+    private fun actorId(authentication: Authentication?): Long? = authentication
+        ?.takeIf { it.principal != "anonymousUser" }?.principal?.toString()?.toLong()
 
     private companion object {
         const val MIN_PAGE_SIZE = 1

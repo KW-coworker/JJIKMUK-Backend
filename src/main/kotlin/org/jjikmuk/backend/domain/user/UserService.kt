@@ -21,7 +21,8 @@ class UserService(
     private val sessions: org.jjikmuk.backend.domain.auth.AuthSessionService,
     private val linkGrants: org.jjikmuk.backend.domain.auth.GoogleLinkGrantRepository,
     private val families: FamilyProfileRepository,
-    private val photos: ProfilePhotoRepository
+    private val photos: ProfilePhotoRepository,
+    private val favorites: ProductFavoriteRepository
 ) {
     @Transactional(readOnly = true)
     fun getAllUsers(): List<User> {
@@ -120,6 +121,7 @@ class UserService(
         families.deleteByOwnerId(id)
         photos.deleteById(id)
         historyRepository.deleteByUserId(id)
+        favorites.deleteByUserId(id)
         recommendationFeedbackService.deleteByUserId(id)
         userRepository.delete(user)
     }

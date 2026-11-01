@@ -37,31 +37,36 @@ class ProductService(
         ?: throw CustomException(HttpStatus.NOT_FOUND, "현재 데이터셋에서 해당 상품 ID를 찾을 수 없습니다.")
 
     @Transactional
-    fun getProductAnalysisById(productId: Long, userId: Long?, analysis: EffectiveAnalysis? = null): Map<String, Any> {
+    fun getProductAnalysisById(productId: Long, userId: Long?, analysis: EffectiveAnalysis? = null,
+        historyOwnerId: Long? = userId): Map<String, Any> {
         val product = productRepository.findByProductId(productId)
             ?: throw CustomException(HttpStatus.NOT_FOUND, "현재 데이터셋에서 해당 상품 ID를 찾을 수 없습니다.")
-        return analyzeAndRecord(product, userId, analysis)
+        return analyzeAndRecord(product, userId, analysis, historyOwnerId)
     }
 
     @Transactional
     // 1. 단건 조회 비즈니스 로직
-    fun getProductAnalysis(barcode: String, userId: Long?, analysis: EffectiveAnalysis? = null): Map<String, Any>? {
+    fun getProductAnalysis(barcode: String, userId: Long?, analysis: EffectiveAnalysis? = null,
+        historyOwnerId: Long? = userId): Map<String, Any>? {
         val product = productRepository.findFirstByBarcode(barcode)
             ?: throw CustomException(HttpStatus.NOT_FOUND, "해당 바코드(${barcode})의 제품을 찾을 수 없습니다.")
-        return analyzeAndRecord(product, userId, analysis)
+        return analyzeAndRecord(product, userId, analysis, historyOwnerId)
     }
 
-    private fun analyzeAndRecord(product: Product, userId: Long?, analysis: EffectiveAnalysis?): Map<String, Any> {
+    private fun analyzeAndRecord(product: Product, userId: Long?, analysis: EffectiveAnalysis?, historyOwnerId: Long?): Map<String, Any> {
         val user = userId?.let { userRepository.findById(it).orElse(null) }
-        // 💡 3. 유저가 로그인 상태(userId 존재)라면 스캔 히스토리를 저장합니다!
-        // Family/general browsing must not become the account holder's personal taste signal.
-        if (user != null && analysis?.personalHistoryAllowed != false) {
+        val owner = if (historyOwnerId == userId) user else historyOwnerId?.let { userRepository.findById(it).orElse(null) }
+        // Viewing history belongs to the actor, independently of who is being analysed.
+        // Family/general/admin-on-behalf views are visible in MY but never personal taste signals.
+        if (owner != null) {
             val history = History(
-                user = user,
+                user = owner,
                 barcode = product.barcode,
                 actionType = UserActionType.SCAN,
                 productId = product.productId,
-                attributeSnapshotId = product.attributeSnapshotId
+                attributeSnapshotId = product.attributeSnapshotId,
+                analysisMode = analysis?.selection?.mode ?: "self",
+                personalizationAllowed = historyOwnerId == userId && analysis?.personalHistoryAllowed != false
             )
             historyRepository.save(history)
         }

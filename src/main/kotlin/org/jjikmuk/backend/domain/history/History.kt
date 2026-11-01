@@ -13,6 +13,7 @@ enum class UserActionType(
     DETAIL_VIEW(0.50, false),
     SEARCH_CLICK(1.00, false),
     FAVORITE(3.00, true),
+    UNFAVORITE(0.0, false, false),
     EAT(2.50, true),
     DISLIKE(-3.00, true),
     OTHER(0.0, false, false);
@@ -61,5 +62,7 @@ class History(
     val createdAt: LocalDateTime = LocalDateTime.now(),
 
     @Column(name = "product_id") val productId: Long? = null,
-    @Column(name = "attribute_snapshot_id") val attributeSnapshotId: Long? = null
+    @Column(name = "attribute_snapshot_id") val attributeSnapshotId: Long? = null,
+    @Column(nullable = false, length = 16) val analysisMode: String = "self",
+    @Column(nullable = false) val personalizationAllowed: Boolean = true
 )
