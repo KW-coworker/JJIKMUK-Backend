@@ -4,6 +4,7 @@
 
 ## 문서 구성
 
+- [OCR 중계 API 및 인증 v2 호환](ocr-proxy.md) — 일반 OCR·계정 제한 실험실, 운영 설정과 JWT/Refresh/로그아웃 호환. 두 경로 추가이며 기존 API 개수 집계와 별도이다.
 - [가족 관계·이모지 / 좋아요 / 최근 본 상품](family-favorites-recent-v1.md) — 2026-11-02 구현·로컬 V16 검증 완료. 가족 표시 필드, 좋아요 4개 API, 기존 이력 view=recent, 가족·none 이력과 개인화 분리. 운영 미적용.
 - [V16 배포·검증 안내](v16-deployment-checklist.md) — 백업·복제 검증·Flyway 적용 순서, MySQL 검증 도구와 FE 연동 주의사항.
 - [상품 ID·속성 이력·카테고리 정책 단계 전환](../catalog-evolution-stage1-3.md) — 2026-10-28 로컬 추가 6개 경로(ID 조회 3개·관리자 3개), 행동 이력 productId 입력, 용도 판정. 위의 기존 40개 집계에 포함되지 않은 추가 계약이다. 운영 DB 적용 전이다.
@@ -84,6 +85,8 @@ Notion에는 통합본의 요청주소별 섹션과 해당 공통 응답 모델�
 | GET | `/api/recommendations/products/{barcode}` | 특정 상품의 대체 상품 추천 | 필수 | 추가 |
 | POST | `/api/recommendations/feedback` | 추천 피드백 기록 | 필수 | 추가 |
 | POST | `/api/chat` | 백엔드를 통한 AI 챗봇 중계 | 필수 | 추가·연동 주의 |
+| POST | `/api/ocr` | 이미지 OCR·검색어 추출 중계 | 필수·프로필 완료 | OCR 추가 |
+| POST | `/api/ocr/debug` | OCR 실험실·모델 선택·snapshot 재사용 | 필수·프로필 완료·허용 계정 | OCR 추가 |
 
 ## 공통 요청 규칙
 
