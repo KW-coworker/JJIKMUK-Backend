@@ -126,7 +126,7 @@ class ChatService(
             )
         )
         // No SCAN writes, and no transaction held across the external AI request.
-        return aiClient.ask(aiRequest)
+        return aiClient.ask(aiRequest, ownerId, request.externalAiConsent)
     }
 
     private fun validate(request: ChatRequestDto) {

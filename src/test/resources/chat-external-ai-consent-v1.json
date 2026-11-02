@@ -1,0 +1,11 @@
+{
+  "secret": "contract-test-only-ssssssssssssssssssssssssssssssssssssssss",
+  "timestamp": 1793232000,
+  "method": "POST",
+  "path": "/chat",
+  "user_id": "42",
+  "consent": "granted",
+  "nonce": "contract-nonce-0123456789abcdef",
+  "body": "{\"message\":\"그럼 칼로리는?\",\"profile\":{\"id\":42,\"nickname\":\"가상 사용자\",\"allergies\":\"새우\"},\"conversation_state\":{\"version\":1,\"last_intent\":\"general_nutrition_guide\"},\"chat_history\":[]}",
+  "signature": "7436850b3ebe3fcabfe7969d98aebd4b390378e279259b4e231f147c0bf17b19"
+}

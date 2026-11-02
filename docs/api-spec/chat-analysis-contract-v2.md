@@ -37,6 +37,7 @@ Content-Type: application/json
 | 필드 | 타입/의미 |
 |---|---|
 | message | 필수 string, 공백만 불가, 최대 4,000자 |
+| externalAiConsent | 선택 JSON boolean. true일 때만 이번 요청의 외부 AI 처리를 허용. 생략/null/false는 거부, 문자열·숫자는 400. 내부 서명은 백엔드가 생성하며 앱이 보내지 않음 |
 | barcode | 선택 string/null. 지정하면 DB에 실제 존재해야 함 |
 | profile | 선택 단일 프로필 object/null |
 | profiles | 선택 프로필 object 배열/null. []는 명시적 전원 OFF |
