@@ -15,12 +15,19 @@ import org.springframework.web.client.ResourceAccessException
 import org.springframework.web.client.RestClient
 import org.springframework.web.client.RestClientException
 import tools.jackson.databind.json.JsonMapper
+import java.net.HttpURLConnection
+import java.net.URI
 
 @Configuration
 class AiChatClientConfig {
     @Bean("aiChatRestClient")
     fun aiChatRestClient(): RestClient {
-        val factory = SimpleClientHttpRequestFactory().apply {
+        val factory = object : SimpleClientHttpRequestFactory() {
+            override fun prepareConnection(connection: HttpURLConnection, httpMethod: String) {
+                super.prepareConnection(connection, httpMethod)
+                connection.instanceFollowRedirects = false
+            }
+        }.apply {
             setConnectTimeout(5000)
             setReadTimeout(30000)
         }
@@ -34,20 +41,39 @@ class AiChatClientConfig {
 @Component
 class AiChatClient(
     @Qualifier("aiChatRestClient") private val restClient: RestClient,
-    @Value("\${chat.ai.url:http://localhost:8000/chat}") private val url: String
+    @Value("\${chat.ai.url:http://localhost:8000/chat}") private val url: String,
+    private val consentSigner: ExternalAiConsentSigner,
+    @Value("\${chatbot.api-token:}") private val apiToken: String
 ) {
-    private val mapper = JsonMapper.builder().build()
+    private val mapper = JsonMapper.builder().findAndAddModules().build()
 
-    fun ask(request: AiChatRequestDto): String {
+    fun ask(request: AiChatRequestDto, ownerId: Long, externalAiConsent: Boolean): String {
+        val endpoint = runCatching { URI(url) }.getOrNull()
+        if (apiToken.isBlank() || apiToken.any { it.code !in 33..126 } || endpoint == null ||
+            endpoint.scheme !in setOf("http", "https") || endpoint.host.isNullOrBlank() ||
+            endpoint.userInfo != null || endpoint.rawPath != "/chat" || endpoint.rawQuery != null || endpoint.rawFragment != null) {
+            throw CustomException(HttpStatus.SERVICE_UNAVAILABLE, "AI 서비스 인증 설정을 확인해주세요.", "AI_AUTH_UNAVAILABLE")
+        }
+        // Serialize once: hashing a DTO and then letting an HTTP converter serialize again can break the proof.
+        val bytes = mapper.writeValueAsBytes(request)
+        if (bytes.size > 1024 * 1024) {
+            throw CustomException(HttpStatus.PAYLOAD_TOO_LARGE, "AI 요청 크기가 너무 큽니다.", "AI_REQUEST_TOO_LARGE")
+        }
+        val proof = consentSigner.headers(bytes, ownerId, externalAiConsent)
         val response = try {
             restClient.post().uri(url).contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON)
                 .header(CONTRACT_HEADER, request.analysisContext.contractVersion)
                 .header(CONTEXT_HEADER, request.analysisContext.contextId)
-                .body(request).retrieve().toEntity(String::class.java)
+                .header("X-Food-Chatbot-Token", apiToken)
+                .headers { headers -> proof.forEach { (name, value) -> headers.set(name, value) } }
+                .body(bytes).retrieve().toEntity(String::class.java)
         } catch (exception: ResourceAccessException) {
             throw CustomException(HttpStatus.SERVICE_UNAVAILABLE, "AI 서비스에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.", "AI_SERVICE_UNAVAILABLE")
         } catch (exception: RestClientException) {
             // Do not expose upstream response bodies, URLs, profiles or credentials.
+            throw CustomException(HttpStatus.BAD_GATEWAY, "AI 서비스 응답을 처리할 수 없습니다.", "AI_UPSTREAM_ERROR")
+        }
+        if (!response.statusCode.is2xxSuccessful) {
             throw CustomException(HttpStatus.BAD_GATEWAY, "AI 서비스 응답을 처리할 수 없습니다.", "AI_UPSTREAM_ERROR")
         }
         if (response.headers.getFirst(CONTRACT_HEADER) != ChatAnalysisContext.VERSION ||

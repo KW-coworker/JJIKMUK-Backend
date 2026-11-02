@@ -14,7 +14,9 @@ data class ChatRequestDto(
     val profile: ChatProfileInput? = null,
     // null/omitted preserves the legacy default; [] explicitly means no selected people.
     val profiles: List<ChatProfileInput?>? = null,
-    val product: ChatProductInput? = null
+    val product: ChatProductInput? = null,
+    @field:tools.jackson.databind.annotation.JsonDeserialize(using = ConsentBooleanDeserializer::class)
+    val externalAiConsent: Boolean = false
 ) {
     // Do not silently ignore body-level selection or forged server decisions.
     @JsonAnySetter

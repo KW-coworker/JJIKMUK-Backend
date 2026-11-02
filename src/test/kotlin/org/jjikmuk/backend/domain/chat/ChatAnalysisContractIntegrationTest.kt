@@ -10,6 +10,8 @@ import org.jjikmuk.backend.domain.recommendation.*
 import org.jjikmuk.backend.domain.user.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.ArgumentMatchers.anyBoolean
+import org.mockito.ArgumentMatchers.anyLong
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.doAnswer
 import org.springframework.beans.factory.annotation.Autowired
@@ -55,7 +57,7 @@ class ChatAnalysisContractIntegrationTest @Autowired constructor(
         doAnswer { invocation ->
             sent += invocation.getArgument<AiChatRequestDto>(0)
             """{"answer":"테스트 설명"}"""
-        }.`when`(ai).ask(any<AiChatRequestDto>() ?: placeholder)
+        }.`when`(ai).ask(any<AiChatRequestDto>() ?: placeholder, anyLong(), anyBoolean())
     }
     private fun account(allergies: String? = "milk", diet: String? = null, role: UserRole = UserRole.USER): User {
         val id = UUID.randomUUID().toString().replace("-", "").take(12)
