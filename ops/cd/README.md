@@ -38,6 +38,8 @@ GitHub에서 검토된 main의 JAR 하나를 기존 Ubuntu/systemd 백엔드에 
 
 Python 실행기는 표준 라이브러리만 사용한다. DB probe는 서버의 별도 승인된 기존 PyMySQL 환경을 사용한다. 백엔드 의존성을 변경하지 않는다. GitHub Actions는 검증한 커밋 SHA로 고정한다.
 
+Gradle wrapper 다운로드 제한은 60초다. 첫 Linux CI에서 기본 10초 다운로드 제한으로 빌드 시작 전에 중단된 것을 반영했다. Gradle 버전·애플리케이션 의존성·검사 기준은 동일하다.
+
 ## 변경 전에 멈추는 조건
 
 - 요청 SHA와 실행 SHA가 다르거나, 승인 대기 중 main이 바뀐 경우.
