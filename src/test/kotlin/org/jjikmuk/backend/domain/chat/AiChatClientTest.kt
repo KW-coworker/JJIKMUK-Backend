@@ -115,6 +115,17 @@ class AiChatClientTest {
         server.verify()
     }
 
+    @Test fun `developer grant does not bypass service token or signing key validation`() {
+        for ((token, secret) in listOf("" to "public-consent-test-secret-not-production", "public-test-token" to "")) {
+            val broken = AiChatClient(builder.build(), "http://ai.invalid/chat",
+                ExternalAiConsentSigner(secret), token, true)
+            assertEquals("AI_AUTH_UNAVAILABLE", assertFailsWith<CustomException> {
+                broken.ask(request, 42, false)
+            }.code)
+        }
+        server.verify()
+    }
+
     @Test fun `request exceeding AI one MiB limit never reaches HTTP`() {
         assertEquals("AI_REQUEST_TOO_LARGE",assertFailsWith<CustomException> {
             client.ask(request.copy(message="가".repeat(400000)),42,true)
