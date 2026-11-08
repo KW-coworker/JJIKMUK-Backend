@@ -1,0 +1,99 @@
+name: Backend CD
+run-name: Backend CD ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: 'Reviewed full main commit SHA (40 characters)'
+        required: true
+        type: string
+      snapshot_id:
+        description: 'Approved available encrypted RDS snapshot, at most 24 hours old'
+        required: true
+        type: string
+      confirm_deploy:
+        description: 'Authorize this JAR-only deployment and bounded application rollback'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-production-deployment
+  cancel-in-progress: false
+
+env:
+  EXPECTED_SHA: ${{ inputs.expected_sha }}
+  CONFIRM_DEPLOY: ${{ inputs.confirm_deploy }}
+  CD_ENABLED: ${{ vars.BACKEND_CD_ENABLED }}
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' && inputs.confirm_deploy && vars.BACKEND_CD_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+      - name: Validate deployment logic
+        run: PYTHONPATH=ops/cd python3 -m unittest discover -s ops/cd/tests -v
+      - name: Test and build the exact commit
+        run: ./gradlew test bootJar
+      - name: Package immutable release
+        run: python3 ops/cd/release.py package
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: backend-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/cd-release/
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && vars.BACKEND_CD_ENABLED == 'true'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_ACCOUNT_ID: ${{ vars.BACKEND_AWS_ACCOUNT_ID }}
+      CD_BUCKET: ${{ vars.BACKEND_CD_BUCKET }}
+      CD_PREFIX: ${{ vars.BACKEND_CD_PREFIX }}
+      CD_INSTANCE_ID: ${{ vars.BACKEND_INSTANCE_ID }}
+      CD_DOCUMENT: ${{ vars.BACKEND_CD_DOCUMENT }}
+      CD_DOCUMENT_VERSION: ${{ vars.BACKEND_CD_DOCUMENT_VERSION }}
+      CD_DATABASE_ID: ${{ vars.BACKEND_DATABASE_ID }}
+      SNAPSHOT_ID: ${{ inputs.snapshot_id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: backend-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release
+      - name: Obtain deployment-only temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.BACKEND_CD_ROLE_ARN }}
+          aws-region: ap-northeast-2
+          allowed-account-ids: ${{ vars.BACKEND_AWS_ACCOUNT_ID }}
+          role-duration-seconds: 3600
+          role-session-name: backend-cd-${{ github.run_id }}
+          retry-max-attempts: 1
+          mask-aws-account-id: true
+      - name: Verify backup, publish, dispatch once and wait
+        run: python3 ops/cd/release.py dispatch

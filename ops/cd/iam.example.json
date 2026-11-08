@@ -1,0 +1,31 @@
+{
+  "notice": "Templates only. Replace placeholders and review exact resources before separately approved setup. Do not reuse a human migration/admin role.",
+  "trust": {
+    "Version":"2012-10-17",
+    "Statement":[{
+      "Effect":"Allow",
+      "Principal":{"Federated":"arn:aws:iam::ACCOUNT_ID:oidc-provider/token.actions.githubusercontent.com"},
+      "Action":"sts:AssumeRoleWithWebIdentity",
+      "Condition":{"StringEquals":{
+        "token.actions.githubusercontent.com:aud":"sts.amazonaws.com",
+        "token.actions.githubusercontent.com:sub":"REPLACE_WITH_VERIFIED_EXACT_REPOSITORY_PRODUCTION_SUBJECT"
+      }}
+    }]
+  },
+  "deployment_role": {
+    "Version":"2012-10-17",
+    "Statement":[
+      {"Effect":"Allow","Action":"s3:PutObject","Resource":"arn:aws:s3:::BUCKET/backend-releases/*"},
+      {"Effect":"Allow","Action":"s3:GetBucketVersioning","Resource":"arn:aws:s3:::BUCKET"},
+      {"Effect":"Allow","Action":"ssm:SendCommand","Resource":[
+        "arn:aws:ssm:ap-northeast-2:ACCOUNT_ID:document/APPROVED_DOCUMENT_NAME",
+        "arn:aws:ec2:ap-northeast-2:ACCOUNT_ID:instance/APPROVED_BACKEND_INSTANCE_ID"
+      ]},
+      {"Effect":"Allow","Action":["ssm:GetCommandInvocation","rds:DescribeDBSnapshots"],"Resource":"*"}
+    ]
+  },
+  "instance_profile_addition": {
+    "Version":"2012-10-17",
+    "Statement":[{"Effect":"Allow","Action":"s3:GetObjectVersion","Resource":"arn:aws:s3:::BUCKET/backend-releases/*"}]
+  }
+}
