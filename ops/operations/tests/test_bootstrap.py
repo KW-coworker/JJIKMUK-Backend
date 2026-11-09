@@ -5,9 +5,18 @@ import unittest
 from unittest.mock import MagicMock,patch
 from bootstrap import create_connection,check_github
 from connection import canonical,sha,REPO_ID
+from connection import template
+from build_bootstrap import build
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_single_file_has_identical_template_and_does_not_execute_on_import(self):
+        source=build(Path(__file__).resolve().parents[1]);namespace={'__name__':'offline_check'}
+        exec(compile(source,'connect_once.py','exec'),namespace)
+        self.assertEqual(template(),namespace['template']())
+        self.assertNotIn('aws_access_key_id',source)
+        self.assertNotIn('export_session',source)
+
     def fixture(self):
         clients={'cloudformation':MagicMock(),'s3':MagicMock()}
         clients['cloudformation'].create_stack.return_value={'StackId':'known-stack'}
@@ -49,10 +58,24 @@ class BootstrapTests(unittest.TestCase):
         responses={'git/ref/heads/main':{'object':{'sha':'a'*40}},'':{'id':REPO_ID},
             'actions/oidc/customization/sub':{'use_default':True,'use_immutable_subject':False},
             'actions/workflows/server-operations.yml':{'state':'active'},
-            'environments/production':{'can_admins_bypass':False,'protection_rules':[{'type':'required_reviewers','reviewers':[{'id':1}]}]},
-            'environments/production/deployment-branch-policies':{'branch_policies':[{'name':'main','type':'branch'}]}}
+            'environments/production':{'can_admins_bypass':False,
+                'deployment_branch_policy':{'protected_branches':False,'custom_branch_policies':True},
+                'protection_rules':[{'type':'required_reviewers',
+                'prevent_self_review':False,'reviewers':[{'reviewer':{'id':166599710}}]}]},
+            'environments/production/deployment-branch-policies':{'branch_policies':[{'name':'main','type':'branch'}]},
+            'actions/workflows/server-operations.yml/runs?event=workflow_dispatch&per_page=30':{'workflow_runs':[{
+                'id':123,'head_sha':'a'*40,'conclusion':'success','display_title':'Server operations precheck at '+'a'*40+' [test]'}]},
+            'actions/runs/123/jobs':{'jobs':[{'name':'precheck','conclusion':'success','steps':[{
+                'name':'Verify actual OIDC identity without AWS','conclusion':'success'}]}]}}
         with patch('bootstrap.github',side_effect=lambda x:responses[x]):
             self.assertTrue(check_github('a'*40)['production_reviewers_configured'])
+            responses['environments/production']['deployment_branch_policy']['custom_branch_policies']=False
+            with self.assertRaisesRegex(ValueError,'PRODUCTION_BRANCH_POLICY_NOT_ACTIVE'):check_github('a'*40)
+            responses['environments/production']['deployment_branch_policy']['custom_branch_policies']=True
+            runs=responses['actions/workflows/server-operations.yml/runs?event=workflow_dispatch&per_page=30']['workflow_runs']
+            runs[0]['conclusion']='failure'
+            with self.assertRaisesRegex(ValueError,'REAL_GITHUB_PRECHECK_REQUIRED_BEFORE_CLOUDSHELL'):check_github('a'*40)
+            runs[0]['conclusion']='success'
             responses['environments/production']['protection_rules']=[]
             with self.assertRaisesRegex(ValueError,'PRODUCTION_REVIEWER_REQUIRED'):check_github('a'*40)
 

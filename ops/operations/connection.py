@@ -56,7 +56,7 @@ def permissions(write=False):
                'rds:DescribeDBSnapshots', 'cloudformation:DescribeStacks',
                'cloudformation:DescribeStackEvents', 'cloudformation:ListStackResources'],
               '*', Condition=regional),
-        allow(['s3:GetBucketVersioning', 's3:GetBucketEncryption', 's3:GetBucketPublicAccessBlock'],
+        allow(['s3:GetBucketVersioning', 's3:GetEncryptionConfiguration', 's3:GetBucketPublicAccessBlock'],
               f'arn:aws:s3:::{BUCKET}'),
         allow(['s3:GetObject', 's3:GetObjectVersion'], [f'arn:aws:s3:::{BUCKET}/connection/*',
                                                      f'arn:aws:s3:::{BUCKET}/receipts/*']),
@@ -75,9 +75,10 @@ def permissions(write=False):
             allow(['ssm:GetDocument', 'ssm:DescribeDocument'], docs + DEPLOY_DOCUMENT, Condition=regional),
             allow('ssm:SendCommand', [docs + DEPLOY_DOCUMENT,
                   f'arn:aws:ec2:{REGION}:{ACCOUNT}:instance/{HOSTS["backend"]}'], Condition=regional),
-            allow(['rds:CreateDBSnapshot', 'rds:AddTagsToResource'],
+            allow('rds:CreateDBSnapshot',
                   [f'arn:aws:rds:{REGION}:{ACCOUNT}:db:jjikmuk-dev-db',
                    f'arn:aws:rds:{REGION}:{ACCOUNT}:snapshot:jjikmuk-ops-*'], Condition=regional),
+            allow('rds:AddTagsToResource', f'arn:aws:rds:{REGION}:{ACCOUNT}:snapshot:jjikmuk-ops-*', Condition=regional),
         ]
     # This managed policy is also the role's permissions boundary. No IAM writes,
     # EC2 lifecycle/network changes, data API, secret retrieval or resource deletion.

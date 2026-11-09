@@ -36,11 +36,24 @@ def check_github(commit):
     environment=github('environments/production')
     rules=environment.get('protection_rules',[])
     need(any(r.get('type')=='required_reviewers' and r.get('reviewers') for r in rules),'PRODUCTION_REVIEWER_REQUIRED')
+    need(any(r.get('type')=='required_reviewers' and r.get('prevent_self_review') is False
+        and any(x.get('reviewer',{}).get('id')==166599710 for x in r.get('reviewers',[])) for r in rules),
+        'SAME_IDENTITY_USER_APPROVAL_PATH_REQUIRED')
     need(environment.get('can_admins_bypass') is False,'PRODUCTION_ADMIN_BYPASS')
+    need(environment.get('deployment_branch_policy')=={'protected_branches':False,'custom_branch_policies':True},
+         'PRODUCTION_BRANCH_POLICY_NOT_ACTIVE')
     branches=github('environments/production/deployment-branch-policies')['branch_policies']
     need(len(branches)==1 and branches[0]['name']=='main' and branches[0].get('type','branch')=='branch',
          'PRODUCTION_MAIN_ONLY_REQUIRED')
-    return {'repository_id':REPO_ID,'main':commit,'production_reviewers_configured':True}
+    runs=github('actions/workflows/server-operations.yml/runs?event=workflow_dispatch&per_page=30')['workflow_runs']
+    matching=[r for r in runs if r.get('head_sha')==commit and r.get('conclusion')=='success'
+              and r.get('display_title','').startswith('Server operations precheck at '+commit+' [')]
+    need(bool(matching),'REAL_GITHUB_PRECHECK_REQUIRED_BEFORE_CLOUDSHELL')
+    jobs=github('actions/runs/'+str(matching[0]['id'])+'/jobs')['jobs']
+    need(any(j['name']=='precheck' and j.get('conclusion')=='success' and any(
+        s['name']=='Verify actual OIDC identity without AWS' and s.get('conclusion')=='success'
+        for s in j.get('steps',[])) for j in jobs),'REAL_OIDC_STEP_REQUIRED')
+    return {'repository_id':REPO_ID,'main':commit,'production_reviewers_configured':True,'precheck_run_id':matching[0]['id']}
 
 
 def aws_clients():
@@ -50,7 +63,10 @@ def aws_clients():
     from botocore.config import Config
     sdk=boto3.Session(region_name=REGION)
     config=Config(connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1})
-    return {s:sdk.client(s,region_name=REGION,config=config) for s in ('sts','iam','ssm','ec2','s3','cloudformation')}
+    result={s:sdk.client(s,region_name=REGION,config=config) for s in ('sts','iam','ssm','ec2','s3','cloudformation')}
+    need('IfNoneMatch' in result['s3'].meta.service_model.operation_model('PutObject').input_shape.members,
+         'CLOUDSHELL_SDK_CONDITIONAL_WRITE_REQUIRED')
+    return result
 
 
 def absent(call,**kwargs):
@@ -78,6 +94,7 @@ def preflight(clients,commit):
     absent(clients['s3'].head_bucket,Bucket=BUCKET,ExpectedBucketOwner=ACCOUNT)
     profiles=iam.get_instance_profile(InstanceProfileName=HOST_ROLE)['InstanceProfile']
     need([r['RoleName'] for r in profiles['Roles']]==[HOST_ROLE],'HOST_ROLE_CHANGED')
+    need(not iam.get_role(RoleName=HOST_ROLE)['Role'].get('PermissionsBoundary'),'HOST_BOUNDARY_REQUIRES_REVIEW')
     response=ec2.describe_instances(InstanceIds=list(HOSTS.values()))
     instances=[i for r in response['Reservations'] for i in r['Instances']]
     need({i['InstanceId'] for i in instances}==set(HOSTS.values()),'HOST_SET_CHANGED')

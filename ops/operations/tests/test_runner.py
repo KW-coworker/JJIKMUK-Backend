@@ -23,7 +23,7 @@ class RunnerTests(unittest.TestCase):
     def test_github_context_rejects_other_account_branch_main_and_rerun(self):
         env={'GITHUB_ACTIONS':'true','GITHUB_REPOSITORY':'KW-coworker/JJIKMUK-Backend','GITHUB_REPOSITORY_ID':'1300060655',
              'GITHUB_REF':'refs/heads/main','GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_SHA':'a'*40,
-             'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1','OPERATIONS_CONFIRM':'true'}
+             'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'1','OPERATIONS_CONFIRM':'true','OPERATIONS_REQUEST_ID':'c'*32}
         with patch.dict(os.environ,env,clear=True),patch('run.github',return_value={'object':{'sha':'a'*40}}):
             self.assertEqual('a'*40,context('a'*40,True)['commit'])
             for key,bad in [('GITHUB_REF','refs/heads/evil'),('GITHUB_REPOSITORY_ID','1'),

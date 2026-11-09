@@ -15,10 +15,12 @@ def context(expected,write=False):
          and e.get('GITHUB_REPOSITORY_ID')==str(REPO_ID) and e.get('GITHUB_REF')=='refs/heads/main'
          and e.get('GITHUB_EVENT_NAME')=='workflow_dispatch','GITHUB_MAIN_DISPATCH_REQUIRED')
     need(re.fullmatch('[0-9a-f]{40}',expected) and e.get('GITHUB_SHA')==expected,'EXACT_MAIN_REQUIRED')
+    need(re.fullmatch('[0-9a-f]{32}',e.get('OPERATIONS_REQUEST_ID','')),'REQUEST_ID_REQUIRED')
     need(github('git/ref/heads/main')['object']['sha']==expected,'MAIN_CHANGED')
     if write:
         need(e.get('OPERATIONS_CONFIRM')=='true' and e.get('GITHUB_RUN_ATTEMPT')=='1','WRITE_APPROVAL_OR_FRESH_RUN_REQUIRED')
-    return {'commit':expected,'run_id':e['GITHUB_RUN_ID'],'attempt':e['GITHUB_RUN_ATTEMPT']}
+    return {'commit':expected,'run_id':e['GITHUB_RUN_ID'],'attempt':e['GITHUB_RUN_ATTEMPT'],
+            'request_id':e['OPERATIONS_REQUEST_ID']}
 
 
 def clients(write=False):
