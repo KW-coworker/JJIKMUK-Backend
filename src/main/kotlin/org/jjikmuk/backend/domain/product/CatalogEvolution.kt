@@ -158,7 +158,7 @@ class CatalogEvolutionService(
         // Preserve raw fields + derived flags + provenance; no computed classification overwrites the source.
         val FIELDS = listOf("product_name", "clean_product_name", "manufacturer", "source", "report_no", "image_url",
             "total_weight", "food_type", "raw_materials", "allergy", "allergy_warning", "allergy_classification", "food_categories",
-            "energy_kcal", "carbs_g", "protein_g", "fat_g", "sugar_g", "sodium_mg", "cholesterol_mg",
+            "energy_kcal", "carbs_g", "protein_g", "fat_g", "sugar_g", "sodium_mg", "cholesterol_mg", "nutrition_basis_raw",
             "allergy_evidence_level", "allergy_data_confidence", "nutrition_data_origin", "nutrition_data_confidence",
             "dietary_data_origin", "dietary_data_confidence", "is_vegan", "is_lacto_vegetarian", "is_ovo_vegetarian",
             "is_lacto_ovo_vegetarian", "is_pescatarian", "is_pollotarian", "is_low_sugar", "is_low_sodium", "is_gluten_free",

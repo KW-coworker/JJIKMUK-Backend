@@ -89,7 +89,8 @@ class ChatService(
                 glutenFree = it.glutenFree,
                 lowCalorie = it.lowCalorie,
                 lowFat = it.lowFat,
-                highProtein = it.highProtein
+                highProtein = it.highProtein,
+                nutrition = it.nutrition
             )
         }
 

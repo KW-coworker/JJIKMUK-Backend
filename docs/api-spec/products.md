@@ -1,5 +1,7 @@
 # 상품·필터·분류 API 명세
 
+2026-11-09 추가: [영양성분 기준량 계약](nutrition-basis-v1.md). 상품 전체 열량은 `product.nutrition.perPackage.values.energyKcal`을 사용한다. 기존 `energyKcal`과 `nutrientPercents`는 원본 기준 수치이므로 전체 용량의 값으로 해석하지 않는다.
+
 [공통 규칙과 전체 목록](README.md). 아래 응답 예시는 정적 목록을 제외하면 설명용 데이터이다.
 
 2026-10-28 추가: [내부 ID 조회·용량 조회, 관측 이력, categoryAssessment 계약](../catalog-evolution-stage1-3.md#5-추가확장-api).

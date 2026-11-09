@@ -165,7 +165,11 @@ class Product(
     val productId: Long? = null,
 
     @Column(name = "attribute_snapshot_id")
-    val attributeSnapshotId: Long? = null
+    val attributeSnapshotId: Long? = null,
+
+    /** Basis of the stored nutrient numbers, NOT the package weight. Null on legacy rows until backfill. */
+    @Column(name = "nutrition_basis_raw", length = 255)
+    val nutritionBasisRaw: String? = null
 ) {
     init {
         allergyDataConfidence?.let { confidence ->
@@ -197,4 +201,9 @@ class Product(
 
     val allergyClassificationState: String
         get() = ProductClassificationCatalog.parseAllergyClassification(allergyClassification).state.id
+
+    /** Shared projection for detail, search, variants, recommendations, favorites and history. */
+    @get:jakarta.persistence.Transient
+    val nutrition: ProductNutrition
+        get() = ProductNutrition.from(this)
 }

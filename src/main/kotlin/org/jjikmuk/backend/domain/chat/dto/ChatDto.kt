@@ -142,5 +142,7 @@ data class ProductDto(
     val glutenFree: Boolean,
     val lowCalorie: Boolean,
     val lowFat: Boolean,
-    val highProtein: Boolean
+    val highProtein: Boolean,
+    // Raw scalar nutrients above remain source-basis legacy fields, never assumed package totals.
+    val nutrition: org.jjikmuk.backend.domain.product.ProductNutrition? = null
 )

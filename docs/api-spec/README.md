@@ -4,6 +4,8 @@
 
 ## 문서 구성
 
+- [영양성분 기준량 계약](nutrition-basis-v1.md) — 원본 기준량, 100g/100ml/전체 용량 환산, FE·AI 표시 규칙.
+- [V17 배포·기존 상품 기준량 백필](v17-deployment-checklist.md) — 마이그레이션과 데이터 보정 분리, 대상 검증·백업·복구 절차.
 - [OCR 중계 API 및 인증 v2 호환](ocr-proxy.md) — 일반 OCR·계정 제한 실험실, 운영 설정과 JWT/Refresh/로그아웃 호환. 두 경로 추가이며 기존 API 개수 집계와 별도이다.
 - [가족 관계·이모지 / 좋아요 / 최근 본 상품](family-favorites-recent-v1.md) — 2026-11-02 구현·로컬 V16 검증 완료. 가족 표시 필드, 좋아요 4개 API, 기존 이력 view=recent, 가족·none 이력과 개인화 분리. 운영 미적용.
 - [V16 배포·검증 안내](v16-deployment-checklist.md) — 백업·복제 검증·Flyway 적용 순서, MySQL 검증 도구와 FE 연동 주의사항.
