@@ -43,6 +43,38 @@ class SchemaDetailTests(unittest.TestCase):
                         [(first[0], first[1], first[2], 0, 'SQL')] + self.history[1:]):
             self.assertFalse(self.report(history=history)['checks']['exact_unapplied_v18_v19_v20_shape'])
 
+    def test_missing_version_script_and_checksum_differences_are_separated(self):
+        first = self.history[0]
+        missing = self.report(history=self.history[1:])
+        self.assertFalse(missing['checks']['v' + first[0] + '.history_present'])
+        changed = self.report(history=[(first[0], 'different.sql', first[2], 1, 'SQL')] + self.history[1:])
+        self.assertTrue(changed['checks']['v' + first[0] + '.history_present'])
+        self.assertFalse(changed['checks']['v' + first[0] + '.script_matches'])
+        self.assertTrue(changed['checks']['v' + first[0] + '.checksum_matches'])
+        changed = self.report(history=[(first[0], first[1], first[2] + 1, 1, 'SQL')] + self.history[1:])
+        self.assertTrue(changed['checks']['v' + first[0] + '.script_matches'])
+        self.assertFalse(changed['checks']['v' + first[0] + '.checksum_matches'])
+        self.assertEqual((first[2] + 1) & 0xffffffff, changed['counts']['v' + first[0] + '.checksum_u32'])
+        self.assertEqual(detail.digest(first[1].encode()), changed['hashes']['v' + first[0] + '.script'])
+        self.assertEqual(changed, safe_report(json.dumps(changed)))
+
+    def test_unknown_history_and_v17_schema_are_reported_without_row_values(self):
+        result = self.report(self.columns + [('products', 'nutrition_basis_raw', 1, 'varchar(255)', 'YES', 255)],
+                             self.history + [('123', 'SYNTHETIC_PRIVATE_SCRIPT', 99, 1, 'SQL')])
+        self.assertEqual(1, result['counts']['history_unknown_versions'])
+        self.assertTrue(result['checks']['products.nutrition_basis_raw_present'])
+        self.assertFalse(result['checks']['products_staging.present'])
+        self.assertNotIn('SYNTHETIC_PRIVATE_SCRIPT', json.dumps(result))
+        self.assertEqual(result, safe_report(json.dumps(result)))
+
+    def test_signed_history_checksum_is_bounded_unsigned_metadata(self):
+        first = self.history[0]
+        result = self.report(history=[(first[0], first[1], -1, 1, 'SQL')] + self.history[1:])
+        self.assertEqual(4294967295, result['counts']['v' + first[0] + '.checksum_u32'])
+        self.assertEqual(result, safe_report(json.dumps(result)))
+        with self.assertRaisesRegex(ValueError, 'HISTORY_CHECKSUM_RANGE'):
+            self.report(history=[(first[0], first[1], 2**31, 1, 'SQL')] + self.history[1:])
+
     def test_metadata_limits_and_no_unknown_contract(self):
         with self.assertRaises(ValueError): self.report(self.columns * 2049)
         bad = dict(self.contract, migrations=self.contract['migrations'][:-1])
