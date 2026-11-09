@@ -1,8 +1,12 @@
-# Initial commissioning observation (pending approval)
+# Commissioning observation: TLS compatibility correction (pending approval)
 
 The basic `inspect` workflow has already succeeded. It checks service activity and a Python source digest; it does not establish DB compatibility or installation readiness. This separate, fixed plan collects the next observations through the existing GitHub OIDC connection. No new CloudShell setup or IAM expansion is needed.
 
-`plans/commissioning-readiness.json` is deliberately **`approved: false`** with a `PENDING_` approval ID. Merging these files alone cannot execute this plan or enable CD. After explicit user approval, only its `approved` and `approval_id` fields may change. Its document hash must stay unchanged; repeat CI and verify the exact main before dispatch. Do not fabricate approval or dispatch a pending plan.
+The first approved observation ran once in [run 42683718598](https://github.com/KW-coworker/JJIKMUK-Backend/actions/runs/42683718598). It returned `PREFLIGHT_FAILED / JDBC_OPTIONS_REQUIRES_REVIEW` before the DB child or service-metadata collection. Its SSM transport succeeded, while the workflow correctly failed on the report status. The old plan `plans/commissioning-readiness.json`, approval, S3 receipts and stage directory remain preserved; that approval is consumed and must not be replayed.
+
+The institution migration code configured Java trust-store options that the first probe omitted from its JDBC allowlist. Those documented options reproduce the failure locally. The live report did not expose which option names failed, so the exact current options remain unverified. The correction recognizes only the known institution profile: `sslMode=VERIFY_IDENTITY`, the fixed local institution trust-store URL, `PKCS12`, disabled system-store fallback, and a nonempty bounded store password kept in memory. Unknown/duplicate options or a different trust profile still stop. The probe's PyMySQL connection independently retains its fixed PEM CA and certificate/hostname verification. No production JDBC configuration is changed. [Connector/J server-authentication documentation](https://dev.mysql.com/doc/connector-j/en/connector-j-server-authentication.html).
+
+The new `plans/commissioning-readiness-tls.json` is deliberately **`approved: false`** with a `PENDING_` approval ID. It has a new content-derived stage directory and requires a new explicit one-run approval. Merging these files alone cannot execute it or enable CD. After approval, only its `approved` and `approval_id` fields may change. Its document hash must stay unchanged; repeat CI and verify the exact main before dispatch. The generator verifies the consumed original plan's exact hash instead of regenerating or overwriting it. Do not fabricate approval or dispatch a pending plan.
 
 ## Exact scope to approve
 

@@ -146,6 +146,24 @@ def properties(raw):
     return values
 
 
+def jdbc_options(query):
+    pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True)
+    options = dict(pairs)
+    trust = {'trustCertificateKeyStoreUrl', 'trustCertificateKeyStoreType',
+             'trustCertificateKeyStorePassword', 'fallbackToSystemTrustStore'}
+    need(len(pairs) == len(options) and set(options) <= trust |
+         {'serverTimezone', 'useSSL', 'allowPublicKeyRetrieval', 'characterEncoding', 'useUnicode',
+          'sslMode', 'requireSSL', 'verifyServerCertificate'}, 'JDBC_OPTIONS_REQUIRES_REVIEW')
+    # Recognize only the institution's existing Java trust profile. PyMySQL below
+    # independently verifies its fixed PEM CA and hostname; it never uses this store.
+    need(options.get('sslMode') == 'VERIFY_IDENTITY' and
+         options.get('trustCertificateKeyStoreUrl') == 'file:/opt/food-chatbot/rds-institution-trust.p12' and
+         options.get('trustCertificateKeyStoreType') == 'PKCS12' and
+         options.get('fallbackToSystemTrustStore') == 'false' and
+         0 < len(options.get('trustCertificateKeyStorePassword', '')) <= 1024,
+         'JDBC_TRUST_PROFILE_REQUIRES_REVIEW')
+
+
 def database_inputs():
     before = backend_identity()
     raw_env, values = environment(before[0])
@@ -165,10 +183,7 @@ def database_inputs():
     need(url.startswith('jdbc:mysql://') and target.hostname == DB_HOST and (target.port or 3306) == 3306
          and target.path == '/jjikmuk' and not target.username and not target.password and not target.fragment,
          'DATABASE_TARGET_REJECTED')
-    query_keys = [k for k, _ in parse_qsl(target.query, keep_blank_values=True, strict_parsing=True)]
-    need(len(query_keys) == len(set(query_keys)) and set(query_keys) <=
-         {'serverTimezone', 'useSSL', 'allowPublicKeyRetrieval', 'characterEncoding', 'useUnicode',
-          'sslMode', 'requireSSL', 'verifyServerCertificate'}, 'JDBC_OPTIONS_REQUIRES_REVIEW')
+    jdbc_options(target.query)
     need(bool(props.get('spring.datasource.username')) and bool(props.get('spring.datasource.password')),
          'DATABASE_CREDENTIALS_MISSING')
     return before, raw_env, raw_props, values, props

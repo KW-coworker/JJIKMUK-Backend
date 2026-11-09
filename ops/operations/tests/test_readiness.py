@@ -20,7 +20,8 @@ SECRET = 'NEVER_EXPORT_DB_PASSWORD_001'
 class ReadinessTests(unittest.TestCase):
     def test_pending_plan_cannot_execute_and_document_has_no_parameters(self):
         expected = builder.plan(ROOT)
-        path = ROOT / 'ops/operations/plans/commissioning-readiness.json'
+        builder.verify_archive(ROOT)
+        path = ROOT / 'ops/operations/plans' / builder.PLAN_NAME
         builder.verify_record(json.loads(path.read_bytes()), expected)
         self.assertFalse(expected['approved'])
         self.assertEqual({}, expected['document']['parameters'])
@@ -29,7 +30,7 @@ class ReadinessTests(unittest.TestCase):
             pending = Path(td) / 'pending.json'
             pending.write_bytes(builder.canonical(expected))
             with patch('run.Path', return_value=pending), self.assertRaisesRegex(ValueError, 'PLAN_NOT_APPROVED'):
-                load_plan('ops/operations/plans/commissioning-readiness.json', builder.sha(pending.read_bytes()))
+                load_plan('ops/operations/plans/' + builder.PLAN_NAME, builder.sha(pending.read_bytes()))
         approved = dict(expected, approved=True, approval_id='EXPLICIT_USER_APPROVAL_001')
         self.assertEqual(builder.sha(builder.canonical(expected['document'])),
                          builder.sha(builder.canonical(approved['document'])))
