@@ -19,6 +19,8 @@ class FakeS3:
     def __init__(self):
         self.objects={}
         self.writes=[]
+    def list_objects_v2(self,**args):
+        return {'Contents':[{'Key':key} for key in self.objects if key.startswith(args['Prefix'])][:args['MaxKeys']]}
     def get_object(self,**args):
         if args['Key'] not in self.objects:raise ServiceError('NoSuchKey')
         return {'Body':io.BytesIO(self.objects[args['Key']])}
@@ -41,7 +43,7 @@ def release_fixture():
             Path('release').mkdir();fixture_jar('release/backend.jar')
             m=make_manifest('release/backend.jar','a'*40,'12','1')
             Path('release/manifest.json').write_text(json.dumps(m))
-            with patch('release.guard'),patch('release.identity',return_value=('a'*40,'12','1')),patch('sys.stdout',new_callable=io.StringIO):
+            with patch('release.guard'),patch('release.identity',return_value=('a'*40,'12','1')),patch('sys.stdout',new_callable=io.StringIO),patch('release.time.sleep'):
                 yield
         finally:os.chdir(old)
 
@@ -49,9 +51,13 @@ class ReleaseTests(unittest.TestCase):
     def setup_clients(self):
         self.s3=FakeS3();self.ssm=Mock();self.sts=Mock();self.rds=Mock()
         self.sts.get_caller_identity.return_value={'Account':ACCOUNT,'Arn':f'arn:aws:sts::{ACCOUNT}:assumed-role/JjikmukBackendAutoDeploy/test'}
-        self.ssm.send_command.return_value={'Command':{'CommandId':'command'}}
+        self.commands=[]
+        def send(**args):
+            self.commands.append({**args,'CommandId':'11111111-2222-4333-8444-555555555555'})
+            return {'Command':self.commands[-1]}
+        self.ssm.send_command.side_effect=send
         self.ssm.get_command_invocation.return_value={'Status':'Success','ResponseCode':0,'StandardOutputContent':'{"status":"SUCCEEDED"}'}
-        self.ssm.list_commands.return_value={'Commands':[]}
+        self.ssm.list_commands.side_effect=lambda **_: {'Commands':self.commands}
         return {'s3':self.s3,'ssm':self.ssm,'sts':self.sts,'rds':self.rds}
 
     def test_success_uses_fixed_target_versions_and_rerun_only_collects(self):
@@ -96,9 +102,10 @@ class ReleaseTests(unittest.TestCase):
 
     def test_lost_send_response_collects_without_duplicate(self):
         c=self.setup_clients();self.ssm.send_command.side_effect=TimeoutError('hidden')
-        comment='backend-auto:'+'a'*40+':12-1'
-        self.ssm.list_commands.return_value={'Commands':[{'CommandId':'command','Comment':comment,
-            'DocumentName':DOCUMENT,'DocumentVersion':'1','InstanceIds':[INSTANCE]}]}
+        def lost(**args):
+            self.commands.append({**args,'CommandId':'11111111-2222-4333-8444-555555555555'})
+            raise TimeoutError('hidden')
+        self.ssm.send_command.side_effect=lost
         with release_fixture(),patch('release.clients',return_value=c),patch('release.select_snapshot',return_value={'arn':'backup'}):
             self.assertEqual('SUCCEEDED',dispatch()['status'])
             dispatch()
@@ -127,3 +134,21 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'MAIN_MOVED'):dispatch()
         self.ssm.send_command.assert_not_called()
 
+
+    def test_cached_success_for_another_commit_is_rejected(self):
+        c=self.setup_clients()
+        with release_fixture(),patch('release.clients',return_value=c),patch('release.select_snapshot',return_value={'arn':'backup'}):
+            dispatch()
+            key='receipts/backend-cd/'+'a'*40+'/result.json'
+            bad=json.loads(self.s3.objects[key]);bad['commit']='b'*40
+            self.s3.objects[key]=json.dumps(bad).encode()
+            with self.assertRaisesRegex(ValueError,'CACHED_RESULT_MISMATCH'):dispatch()
+        self.ssm.send_command.assert_called_once()
+
+    def test_command_receipt_for_another_run_is_rejected(self):
+        c=self.setup_clients()
+        with release_fixture(),patch('release.clients',return_value=c),patch('release.select_snapshot',return_value={'arn':'backup'}):
+            dispatch()
+            self.commands[0]['Parameters']['RunId']=['99']
+            with self.assertRaisesRegex(ValueError,'COMMAND_PARAMETERS_MISMATCH'):dispatch()
+        self.ssm.send_command.assert_called_once()

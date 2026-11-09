@@ -1,28 +1,10 @@
 name: Backend CD
-run-name: Backend CD ${{ inputs.expected_sha }}
+run-name: Backend CD ${{ github.sha }}
 
 on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        description: 'verify builds only; deploy additionally requires production approval'
-        required: true
-        default: verify
-        type: choice
-        options: [verify, deploy]
-      expected_sha:
-        description: 'Reviewed full main commit SHA (40 characters)'
-        required: true
-        type: string
-      snapshot_id:
-        description: 'Approved available encrypted RDS snapshot, at most 24 hours old'
-        required: false
-        type: string
-      confirm_deploy:
-        description: 'Authorize this JAR-only deployment and bounded application rollback'
-        required: true
-        default: false
-        type: boolean
+  push:
+    branches: [main]
+  workflow_dispatch: {} # Tests/build only; never dispatches a server deployment.
 
 permissions:
   contents: read
@@ -32,16 +14,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CD_MODE: ${{ inputs.mode }}
-  EXPECTED_SHA: ${{ inputs.expected_sha }}
-  CONFIRM_DEPLOY: ${{ inputs.confirm_deploy }}
   CD_ENABLED: ${{ vars.BACKEND_CD_ENABLED }}
+  AWS_EC2_METADATA_DISABLED: 'true'
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/main' && (inputs.mode == 'verify' || (inputs.mode == 'deploy' && inputs.confirm_deploy && vars.BACKEND_CD_ENABLED == 'true'))
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -52,37 +32,45 @@ jobs:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+      - name: Install locked SDK for offline request validation
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/cd/requirements-sdk.lock
       - name: Validate deployment logic
         run: PYTHONPATH=ops/cd python3 -m unittest discover -s ops/cd/tests -v
-      - name: Test and build the exact commit
+      - name: Test and build the exact main commit
         run: ./gradlew test bootJar
       - name: Package immutable release
-        run: python3 ops/cd/release.py package
+        if: github.event_name == 'push' && vars.BACKEND_CD_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B ops/cd/release.py package
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: github.event_name == 'push' && vars.BACKEND_CD_ENABLED == 'true'
         with:
           name: backend-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/cd-release/
           if-no-files-found: error
           retention-days: 14
+      - name: Explain build-only result
+        if: github.event_name != 'push' || vars.BACKEND_CD_ENABLED != 'true'
+        run: echo 'Tests and build only. No server deployment. Initial activation is still required.' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: failure()
+        with:
+          name: backend-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/reports/tests/test/
+          if-no-files-found: ignore
+          retention-days: 14
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main' && inputs.mode == 'deploy' && inputs.confirm_deploy && vars.BACKEND_CD_ENABLED == 'true'
-    environment: production
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.BACKEND_CD_ENABLED == 'true'
+    environment: backend-production
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
       contents: read
       id-token: write
-    env:
-      AWS_ACCOUNT_ID: ${{ vars.BACKEND_AWS_ACCOUNT_ID }}
-      CD_BUCKET: ${{ vars.BACKEND_CD_BUCKET }}
-      CD_PREFIX: ${{ vars.BACKEND_CD_PREFIX }}
-      CD_INSTANCE_ID: ${{ vars.BACKEND_INSTANCE_ID }}
-      CD_DOCUMENT: ${{ vars.BACKEND_CD_DOCUMENT }}
-      CD_DOCUMENT_VERSION: ${{ vars.BACKEND_CD_DOCUMENT_VERSION }}
-      CD_DATABASE_ID: ${{ vars.BACKEND_DATABASE_ID }}
-      SNAPSHOT_ID: ${{ inputs.snapshot_id }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -92,15 +80,26 @@ jobs:
         with:
           name: backend-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: release
-      - name: Obtain deployment-only temporary AWS credentials
+      - name: Install locked AWS SDK
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/cd/requirements-sdk.lock
+      - name: Obtain automatic-backend-only temporary AWS credentials
         uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
-          role-to-assume: ${{ vars.BACKEND_CD_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukBackendAutoDeploy
           aws-region: ap-northeast-2
-          allowed-account-ids: ${{ vars.BACKEND_AWS_ACCOUNT_ID }}
+          allowed-account-ids: '076767081522'
           role-duration-seconds: 3600
           role-session-name: backend-cd-${{ github.run_id }}
           retry-max-attempts: 1
-          mask-aws-account-id: true
       - name: Verify backup, publish, dispatch once and wait
-        run: python3 ops/cd/release.py dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B ops/cd/release.py dispatch
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: deployment-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deployment-results/
+          if-no-files-found: ignore
+          retention-days: 14

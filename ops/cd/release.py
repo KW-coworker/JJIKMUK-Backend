@@ -37,6 +37,10 @@ def error_code(error):
 
 
 def get_receipt(s3, key):
+    # With prefix-limited ListBucket, a direct missing GetObject may return 403.
+    # Strongly consistent listing distinguishes absent keys without treating 403 as absent.
+    listed = s3.list_objects_v2(Bucket=BUCKET, Prefix=key, MaxKeys=2, ExpectedBucketOwner=ACCOUNT)
+    if not any(item['Key'] == key for item in listed.get('Contents', [])): return None
     try: response = s3.get_object(Bucket=BUCKET, Key=key, ExpectedBucketOwner=ACCOUNT)
     except Exception as error:
         if error_code(error) in ('NoSuchKey', '404'): return None
@@ -64,16 +68,28 @@ def report(value):
     print(json.dumps(value), flush=True)
 
 
-def find_command(ssm, intent):
+def find_command(ssm, intent, command_id=None):
     # SendCommand has no client idempotency token: collect a lost response, never resend.
     found, token = [], None
     for _ in range(100):
         args = {'InstanceId': INSTANCE, 'MaxResults': 50}
+        if command_id: args['CommandId'] = command_id
         if token: args['NextToken'] = token
         response = ssm.list_commands(**args)
-        found.extend(c['CommandId'] for c in response.get('Commands', [])
-                     if c.get('Comment') == intent['comment'] and c.get('DocumentName') == DOCUMENT
-                     and c.get('DocumentVersion') == '1' and c.get('InstanceIds') == [INSTANCE])
+        for command in response.get('Commands', []):
+            if command.get('Comment') != intent['comment']: continue
+            require(command.get('DocumentName') == DOCUMENT and command.get('DocumentVersion') == '1'
+                    and command.get('InstanceIds') == [INSTANCE] and not command.get('Targets'), 'COMMAND_TARGET_MISMATCH')
+            parameters = command.get('Parameters', {})
+            expected = {'ReleaseCommit': [intent['commit']], 'RunId': [intent['run_id']],
+                        'RunAttempt': [intent['attempt']], 'JarSha256': [intent['jar_sha256']]}
+            require(all(parameters.get(k) == v for k, v in expected.items()) and
+                    set(parameters) == set(expected) | {'JarVersion','ManifestVersion'}, 'COMMAND_PARAMETERS_MISMATCH')
+            for key in ('JarVersion','ManifestVersion'):
+                values = parameters[key]
+                require(isinstance(values,list) and len(values)==1 and isinstance(values[0],str) and
+                        re.fullmatch(r'[A-Za-z0-9._~+/-]{1,1024}', values[0]) and values[0]!='null', 'COMMAND_VERSION_MISMATCH')
+            found.append(command['CommandId'])
         token = response.get('NextToken')
         if not token: break
     else: raise ValueError('COMMAND_HISTORY_LIMIT')
@@ -103,13 +119,27 @@ def wait_result(ssm, command_id, intent):
 def collect(c, intent, root):
     require(intent.get('commit') == identity()[0] and intent.get('instance') == INSTANCE and
             intent.get('document') == DOCUMENT and intent.get('document_version') == '1', 'RECEIPT_TARGET_MISMATCH')
-    result = get_receipt(c['s3'], root + '/result.json')
-    if result: return result
+    for name, pattern in [('run_id',r'[1-9][0-9]{0,19}'),('attempt',r'[1-9][0-9]{0,3}'),('jar_sha256',r'[0-9a-f]{64}')]:
+        require(isinstance(intent.get(name),str) and re.fullmatch(pattern,intent[name]), 'RECEIPT_IDENTITY_MISMATCH')
+    require(intent.get('comment') == 'backend-auto:'+intent['commit']+':'+intent['run_id']+'-'+intent['attempt'], 'RECEIPT_COMMENT_MISMATCH')
+    cached = get_receipt(c['s3'], root + '/result.json')
     sent = get_receipt(c['s3'], root + '/sent.json')
-    command_id = sent['command_id'] if sent else find_command(c['ssm'], intent)
+    if sent:
+        require(isinstance(sent,dict) and set(sent)=={'command_id'} and isinstance(sent['command_id'],str) and
+                re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',sent['command_id']), 'COMMAND_ID_MISMATCH')
+    if cached:
+        require(isinstance(cached,dict) and set(cached)=={'commit','run_id','attempt','command_id','status'} and
+                all(cached.get(k)==intent[k] for k in ('commit','run_id','attempt')), 'CACHED_RESULT_MISMATCH')
+    command_id = None
+    for _ in range(12):
+        command_id = find_command(c['ssm'], intent, sent['command_id'] if sent else None)
+        if command_id: break
+        time.sleep(5)  # SSM is eventually consistent; retry reads, never SendCommand.
     require(bool(command_id), 'SEND_OUTCOME_UNKNOWN_NO_REDISPATCH')
+    require(not sent or command_id==sent['command_id'], 'COMMAND_ID_MISMATCH')
     result = wait_result(c['ssm'], command_id, intent)
-    put_receipt(c['s3'], root + '/result.json', result)
+    if cached: require(cached == result, 'CACHED_RESULT_MISMATCH')
+    else: put_receipt(c['s3'], root + '/result.json', result)
     return result
 
 

@@ -4,8 +4,8 @@
   "root": "/opt/jjikmuk-cd",
   "service": "jjikmuk-backend.service",
   "region": "ap-northeast-2",
-  "bucket": "REPLACE_WITH_APPROVED_PRIVATE_BUCKET",
-  "prefix": "backend-releases",
+  "bucket": "jjikmuk-operations-076767081522-apne2",
+  "prefix": "artifacts/backend",
   "aws": "/opt/jjikmuk-cd/tools/aws-cli/aws",
   "working_directory": "/home/ubuntu/JJIKMUK-Backend",
   "initial_runtime": {

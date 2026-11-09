@@ -52,3 +52,13 @@ class StabilityTests(unittest.TestCase):
                 host.preflight({'manifest':{'run_id':'9'}},{'manifest':{'run_id':run}})
         host.runtime.assert_not_called();host.database.assert_not_called()
 
+    def test_restart_inside_final_probe_does_not_claim_sixty_seconds(self):
+        host=self.host();clock=Clock();state={'identity':'new'}
+        host.identity.side_effect=lambda:state['identity']
+        def database(_):
+            if clock.now==60:state['identity']='restarted'
+        host.database.side_effect=database
+        with patch('host.time.monotonic',side_effect=clock.time),patch('host.time.sleep',side_effect=clock.sleep),patch('host.http_check'):
+            host.verify({'manifest':{}},'old')
+        self.assertEqual(125,clock.now)
+

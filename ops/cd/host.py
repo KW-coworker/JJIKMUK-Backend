@@ -241,6 +241,7 @@ class Host:
                 self.runtime(release)
                 for check in self.config['health_checks']: http_check(check)
                 self.database(release['manifest'])
+                require(self.identity() == current_identity, 'PROCESS_CHANGED_DURING_PROBES')
                 now = time.monotonic()
                 require(now < deadline, 'HEALTH_DEADLINE')
                 if healthy_since is None: healthy_since = now

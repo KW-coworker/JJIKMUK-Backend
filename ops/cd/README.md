@@ -1,114 +1,79 @@
-# 승인 후 사용하는 백엔드 CD
+# main 병합 후 백엔드 자동 배포
 
-GitHub에서 검토된 main의 JAR 하나를 기존 Ubuntu/systemd 백엔드에 반영한다. 개발자 시험용 AI 일괄 허용을 유지하며, OCR 서버·챗봇 Python 코드·DB 구조·운영 설정은 이 배포기의 변경 대상이 아니다.
+main에 반영된 원본 백엔드를 GitHub가 테스트·빌드하고 서버까지 자동 반영한다. 평소 배포에는 사용자/Codex 승인, 수동 SHA 입력, 백업 번호 입력이 없다. APK의 API 주소가 같고 API 계약이 호환되면 기존 APK에서 새 서버 동작을 시험할 수 있다.
 
-**이 PR은 실행기를 구현한다. AWS/서버/GitHub 운영 설정을 설치하거나 배포하지 않는다.** 기본 `mode=verify`는 CD가 꺼져 있어도 main의 테스트·JAR 빌드만 수행한다. `mode=deploy`는 `BACKEND_CD_ENABLED=true`, 명시적 배포 동의, production 승인이 모두 필요하다. `config.example.json`도 기본 `enabled:false`다. 예제의 `REPLACE_…`와 `REQUIRES_OBSERVATION`은 실제 설정이 아니다. main 병합, 운영 설정, 최초 배포는 각각 담당자 검토와 사용자 승인이 필요하다.
+**구현 준비본이며 현재 서버에는 설치·활성화하지 않았다.** 최초 AWS 연결·설치·초기 전환은 구체적인 적용안 승인 후 수행한다. `BACKEND_CD_ENABLED`가 없거나 false이면 main push도 검사·빌드만 한다.
 
-## 사용 흐름
+## 일상 흐름
 
-```text
-담당자 PR 검토 → main 병합
-  → 사용자가 정확한 main SHA와 백업을 지정해 수동 실행
-  → 전체 테스트 + 원본 JAR 빌드
-  → GitHub production 환경 승인
-  → main SHA 재확인 / 백업 상태 확인
-  → 임시 AWS 권한으로 S3에 버전 고정 업로드
-  → 고정 SSM 문서가 미리 설치된 배포기 실행
-  → 현재 상태·DB 이력·파일 해시 확인
-  → JAR 연결 변경 + 백엔드 재시작
-  → 새 프로세스·API·OCR·챗봇 확인
-  → 성공 기록 또는 이전 JAR 복구
-```
+1. 담당자가 PR을 올리면 기존 필수 `build`에서 CD 실행기 검사와 백엔드 전체 테스트·bootJar를 실행한다. 실패하면 병합 조건을 충족하지 못한다. PR 리뷰 인원 0명 설정은 유지할 수 있다.
+2. main 병합 시 `Backend CD`가 해당 커밋을 다시 테스트·빌드한다. 수동 Run workflow는 검사·빌드만 하며 배포하지 않는다.
+3. 활성화된 경우 main이 여전히 해당 커밋인지 확인하고 실제 JAR SHA256·내부 설정·SQL 목록을 기록한다.
+4. `backend-production` 환경에서 자동 배포 전용 OIDC 역할을 받는다. **이 환경의 승인자는 0명**, 대기 시간은 0이며 branch main만 허용한다.
+5. 동일 DB의 최근 24시간 안에 생성된 available·암호화 백업을 자동 선택한다. 없으면 배포를 차단한다. 이 역할은 백업을 만들거나 DB를 복원하지 않는다.
+6. 조건부 S3 실행 기록을 남기고 JAR·manifest를 버전 고정 업로드한다. 백엔드 1대에 고정 SSM 문서 1개만 실행한다.
+7. 서버가 현재 JAR/설정/DB 이력/후보 파일을 대조한다. SQL 또는 properties/yaml 변경, 미완료 작업, 설정 차이가 있으면 전환 전 중단한다.
+8. JAR 연결을 바꾸고 백엔드만 재시작한다. 새 프로세스·상태 API·상품 조회·OCR health·챗봇 readiness·익명 인증 거부·DB 이력을 검사한다.
+9. 모든 검사가 같은 새 프로세스에서 최소 60초 연속 정상이어야 성공이다. 검증 제한은 240초다. 실패하면 조건이 맞는 경우 이전 JAR로 한 번 복귀하고 배포는 실패로 표시한다.
 
-단일 인스턴스를 재시작하므로 잠깐의 서비스 중단이 발생한다. 무중단 배포를 제공하지 않는다. 운영 중 사용자 데이터 쓰기를 되돌리는 기능도 아니다.
+main 병합 이후의 실패는 **서버 반영 거부**다. main의 커밋을 자동 삭제하거나 PR 병합을 취소하지 않는다. 빠르게 여러 번 병합되면 실행 중 배포를 중간 취소하지 않고, 대기 중에는 최신 요청을 우선한다. 업로드 후 main 재확인과 서버 run 순서 검사가 오래된 요청의 덮어쓰기를 막는다.
 
-## 구현 파일
+## 범위와 자동 검증의 한계
 
-| 파일 | 역할 |
-|---|---|
-| `.github/workflows/backend-cd.yml` | main에서만 수동 배포, 승인·동시 실행 제어·OIDC |
-| `.github/workflows/backend-cd-checks.yml` | PR의 Python 회귀 검사와 백엔드 test/bootJar |
-| `release.py` | JAR 포장, 동일 파일 대조, 백업 검사, S3 업로드, SSM 1회 요청·결과 조회 |
-| `manifest.py` | SHA256·JAR 내부 설정·Flyway SQL/체크섬 비교 |
-| `engine.py`, `host.py` | 의도 기록, 원자적 연결 변경, 검증, 제한된 복구 |
-| `database_probe.py` | 백엔드 실행 계정으로 Flyway 이력 SELECT만 수행 |
-| `deploy.py`, `deploy.ssm.json` | 정해진 인자만 받는 서버 진입점·SSM 문서 |
-| `commission.py` | 별도 승인으로 설치·검증된 첫 정상 버전 등록 |
-| `runtime_contract.py` | 관측한 Spring 환경변수의 제한된 지원과 초기화 설정 대조 |
-| `package_install.py`, `bootstrap_document.py` | 정식 main 설치 묶음·고정 다운로드/설치 SSM 문서 생성 |
-| `install_disabled.py`, `preflight.py` | 신규 전용 경로에 OFF 설치·재시작 없는 DB/HTTP 사전검사 |
-| `config.example.json`, `iam.example.json` | 검토·값 확정이 필요한 비활성 설정·권한 예제 |
+자동 대상은 백엔드 JAR다. DB 구조/데이터 갱신, Python 챗봇, OCR 코드/모델, 운영 설정은 별도 작업이다. SQL과 설정이 바뀌는 PR은 main에 병합되어도 CD에서 차단될 수 있으므로 담당자가 변경 범위를 알려야 한다.
 
-Python 실행기는 표준 라이브러리만 사용한다. DB probe는 시스템 Python3.12와 CD 전용 PyMySQL1.2.3 wheel을 `-I -S -B`로 읽는다. wheel의 해시·소유권·경로를 대조하고 챗봇 가상환경을 사용하지 않는다. AWS CLI2.39.6도 CD 전용 경로에 설치한다. 출처·고정 해시는 `tools.lock.json`과 `requirements-db.lock`에 있다. 백엔드 의존성을 변경하지 않는다. GitHub Actions는 검증한 커밋 SHA로 고정한다.
+개발자 AI 일괄 허용은 유지한다. PR10이 정식 main에 먼저 반영되어야 해당 기능이 있는 원본 JAR를 만들 수 있다. 서버에서 임의 패치하거나 이 PR에 앱 코드를 끼워 넣지 않는다. 닫힌 PR11을 재사용하지 않는다.
 
-`package_install.py`는 clean HEAD와 갱신·검토된 origin/main이 정확히 같은 커밋이어야 한다. 설정에 미확정 값이 남으면 묶지 않는다. 설치 archive·manifest·installer SHA와 main SHA를 승인한 뒤 고정 SSM 문서를 생성한다. 초기 다운로드는 SSM의 `aws:downloadContent`를 사용하므로 서버의 기존 AWS CLI에 의존하지 않는다. 실제 SSM agent 지원 여부와 정확한 S3 bootstrap 권한은 적용 전에 별도 확인한다.
+자동 테스트는 모든 기능 오류를 증명해 없애는 도구가 아니다. 기존 APK와의 API 호환성·새 기능의 기대 동작은 백엔드 담당자가 테스트로 보강해야 한다. UI/응답 계약이 달라지면 새 APK가 필요할 수 있다. 기본 상태 검사는 유료 AI 호출·실제 OCR 추론·사용자 로그인/개인정보 요청을 실행하지 않는다.
 
-비활성 설치는 신규 `/opt/jjikmuk-cd`와 `/etc/jjikmuk-cd`만 만들고 current·baseline·systemd 설정을 만들지 않는다. 기존 경로가 있으면 중단한다. 실패한 파일과 journal은 보존한다. `preflight.py`는 OFF 상태에서 기존 JAR/argv/설정과 후보의 SQL·설정이 같은지 대조하고 DB 이력·상태 API를 확인한다. `initial_runtime` 예제는 2026-11-09 관측한 구버전 기준이므로 최종 승인 때 다시 확인해야 한다.
+단일 서버를 재시작하므로 잠깐의 중단이 있다. 애플리케이션 데이터 쓰기나 DB 변경은 JAR 복귀로 되돌리지 않는다. Flyway 이력 비교는 수동 DDL 전체 fingerprint가 아니며 앱의 임의 SQL 실행을 정적으로 차단하지 않는다.
 
-Flyway 활성화 값은 실제 관측값과 일치해야 하고 SQL 초기화는 `never`, DDL은 `validate`만 허용한다. 메일 환경변수는 기존 전체 환경 해시로 보존한다. 읽기 전용 DB 트랜잭션은 Flyway 이력 최대101행, 쿼리10초·자식 프로세스35초 제한을 사용한다. 이 검사는 DB 배포 자동화가 아니다.
+## 권한과 최초 활성화
 
-설치된 bin 디렉터리는 변경 검출 대상이므로 서버 진입점은 로컬 모듈을 읽기 전에 Python bytecode 쓰기를 끈다. SSM도 `python3 -B -E -s`로 실행한다. 최초 기준 등록에서 database_probe를 처음 읽으며 캐시를 만들어 스스로 변경 감지에 걸리는 문제를 방지한다. 빈 bin 사본과 새 Python 프로세스로 이 조건을 회귀 검사한다.
+PR13의 한 번 연결 도구가 다음 통로를 함께 준비한다.
 
-서버 설치 묶음에는 검토한 `.py` 원본만 넣고 `__pycache__`·`.pyc`는 포함하지 않는다. `-B`는 기존 캐시 읽기를 막지 않으므로, 설치 위치에 기존 캐시가 발견되면 그대로 덮어 설치하지 않고 중단해 검토한다.
+| 경로 | 환경/역할 | 평소 승인 |
+|---|---|---|
+| 백엔드 자동 CD | backend-production / JjikmukBackendAutoDeploy | 없음 |
+| 상태 조회 | main / JjikmukOperationsRead | 발급·다운로드 없음 |
+| 초기 설치·별도 서버 작업 | production / JjikmukOperationsExecute | 사용자 승인 유지 |
 
-Gradle wrapper 다운로드 제한은 60초다. 첫 Linux CI에서 기본 10초 다운로드 제한으로 빌드 시작 전에 중단된 것을 반영했다. Gradle 버전·애플리케이션 의존성·검사 기준은 동일하다.
+자동 역할은 백엔드 고정 문서·인스턴스, S3 artifacts/backend 및 receipts/backend-cd, 백업 메타데이터 조회에 한정한다. OCR 서버 명령·문서 생성·스냅샷 생성·IAM 변경 권한을 주지 않는다. 넓은 관리용 역할을 자동 CD에 연결하지 않는다.
 
-## 변경 전에 멈추는 조건
+연결 전에 GitHub 관리자에게 두 환경 설정을 요청하고 실제 OIDC 사전검사를 완료한다. 그 뒤 최종 해시가 고정된 연결안을 승인받아 기관 관리자 CloudShell 한 번으로 연결한다. operator 계정 이동이나 임시 인증 다운로드는 정상 절차에 없다.
 
-- 요청 SHA와 실행 SHA가 다르거나, 승인 대기 중 main이 바뀐 경우.
-- 같은 계정/서울/DB의 암호화된 available 스냅샷이 없거나 생성된 지 24시간이 지난 경우. 이 검사는 복원 시험이나 RPO 보장을 대신하지 않는다. 스냅샷 생성 권한은 CD에 없다.
-- S3 versioning이 꺼져 있거나, 파일 버전·크기·해시·커밋이 일치하지 않는 경우. JAR는 256MiB 이하이고 다운로드 전 2GiB 여유 공간을 요구한다.
-- 실행 중 JAR·명령행·작업 폴더·환경·보호 파일이 등록된 기준과 다른 경우. 변경하려면 별도 설정 검토가 필요하다.
-- SQL 파일 목록/내용 또는 JAR 내부 properties/yaml이 달라진 경우. 초기 도입 시 OFF 기본값의 개발자 AI 환경변수 별칭 한 줄만 비교에서 정규화한다.
-- 실제 Flyway 이력에 실패/누락/추가/체크섬 차이가 있는 경우. DB 구조가 달라지는 릴리스는 별도 계획으로 처리하며 JAR만 되돌려 해결하지 않는다.
-- 데이터 import/backfill이 켜져 있거나 DDL 모드가 validate가 아닌 경우, 지원하지 않는 datasource/JPA/Flyway/config override가 있는 경우.
-- 미완료 전환 기록이나 같은 실행의 불확실한 임시 파일이 남은 경우. 삭제하고 재실행하지 않는다.
+서버 설치 전에는 정확한 JDBC 대상, 모든 systemd 참조 파일, 실제 무료 health URL/응답, 백업의 자동 생성 상태를 최종 확인한다. `config.example.json`의 미확정 값은 설치용 설정이 아니다. 같은 DB 백업을 자동 확보할 기존 정책이 없다면 최초 적용안에 필요한 백업 설정을 포함한다.
 
-이 검사들은 검토된 코드의 배포를 보조한다. 애플리케이션의 임의 SQL/새 startup 코드까지 정적으로 증명하거나 격리하지 않는다. migration 파일이 같아도 새 코드의 데이터 쓰기는 리뷰해야 한다.
+검토된 main에서 `package_install.py`로 설치 묶음을 만들고, OFF 설치→재시작 없는 사전검사→원본 main의 최초 전환/복구 준비→기준 등록→GitHub 변수 활성화 순서로 진행한다. 초깃값은 `BACKEND_CD_ENABLED=false`. 최초 사용자 승인에는 이후 main 자동 배포와 조건부 JAR 복귀를 켠다는 내용을 포함한다. 각 배포마다 다시 승인받는 변수가 아니다.
 
-DB 검사는 Flyway 이력을 비교하며 전체 실제 스키마를 fingerprint하지 않는다. 이력에 남지 않는 수동 DDL을 모두 감지한다고 가정하면 안 된다. DB/운영 설정을 수동 갱신할 때는 CD를 먼저 보류하고, 담당자 변경 내역·구/신 앱 호환성과 기준 전환 계획을 별도 승인받는다. SQL 이력이나 baseline을 수정해 검사를 우회하지 않는다.
+## 실패 결과와 재실행
 
-## 별도 승인 후 확정할 운영 설정
+GitHub Actions의 Backend CD 실행과 deployment-result artifact에서 커밋/명령 ID/결과를 확인한다.
 
-1. 현재 서버/프로세스/설정/DB 이력을 새로 조회하고, 예제와 맞는지 확인한다. 현재 인증정보를 GitHub나 작업 로그에 복사하지 않는다. 다른 Spring 설정 방식이 쓰이면 실행기를 우회하지 말고 지원 범위를 PR로 보완한다.
-2. repository `production` 환경에 **승인자, 자기 승인 금지, main 배포 제한**을 설정한다. 실제 요금제에서 사용 가능한 보호 기능인지 확인한다. main 규칙에는 `Backend CI / build`와 실제 생성되는 CD 검사 이름을 필수 상태 검사로 연결한다. 이 코드만으로 환경 보호가 생기지 않는다.
-3. OIDC 전용 역할을 만든다. 실제 발급되는 repository/production subject와 audience를 확인하여 `iam.example.json`의 정확한 값으로 제한한다. 관리자/이전 작업 역할을 재사용하지 않는다. subject가 environment 기반이면 main 제한은 production 환경 정책으로도 강제한다.
-4. 전용 비공개 S3 저장 위치를 준비한다. Public Access Block·versioning·암호화·TLS 정책을 적용하고, 예제 prefix와 역할 권한을 일치시킨다. 예제는 SSE-S3를 전제한다. SSE-KMS를 쓰려면 해당 키의 권한을 별도 검토한다. 과거 릴리스/백업 삭제·자동 수명 정책은 별도 승인 대상이다.
-5. 기존 SSM 관리 경로와 EC2 역할에 릴리스 prefix의 `GetObjectVersion`을 추가한다. 최초 설치 archive에 대한 정확한 key의 임시 `GetObject` 권한은 별도로 고정한다. 최신 호환 SSM agent가 ENV_VAR 전달과 downloadContent를 지원하는지 확인한다. SSH 포트나 일반 원격 셸 권한은 새로 열지 않는다.
-6. 고정 SSM 문서를 설치하고 문서 **숫자 버전**을 고정한다. GitHub 역할에 문서 생성·수정·임의 문서 실행 권한을 주지 않는다. `SendCommand`는 문서와 백엔드 인스턴스 모두로 제한한다.
-7. `/opt/jjikmuk-cd/bin`에 검토된 Python 파일만 root 소유로 설치한다. 부모/실행기/릴리스는 group/world 쓰기를 금지한다. bin은 앱 계정의 probe 실행을 위해 읽기/진입 가능하게 한다(디렉터리 755, Python 644). `/etc/jjikmuk-cd/config.json`, 상태 파일은 root 전용으로 관리한다. releases/runs 디렉터리도 미리 만들고 불확실한 파일을 지우지 않는다.
-8. `config.example.json`에 실제 argv, 작업 폴더, JDBC 대상, DB probe 계정/인터프리터, CA, 검증된 health URL을 채운다. `protected_paths`에는 모든 systemd unit/drop-in/EnvironmentFile, 설정·CA·실행기 파일을 포함한다. 일반 설정 파일은 변경 검출용 해시만 상태에 저장하고 값을 출력하지 않는다.
-9. 첫 기준 버전은 **병합된 GitHub main의 원본**으로 별도 승인된 최초 배포를 한다. 검토한 commit/JAR SHA256을 고정하고 `/opt/jjikmuk-cd/releases/<commit>-1-1/backend.jar`에 설치한다. 기존 운영 JAR·unit/drop-in을 보존한 뒤 정확한 `ExecStart`와 `current` 연결을 설정한다. `-Dchatbot.developer-test-auto-consent=true`를 유지한다. 새 설정·재시작은 이번 PR 작업에 포함되지 않는다.
-10. 최초 배포가 정상임을 확인한 뒤 명시적 `commission.py --commit <40자리SHA> --expected-jar-sha256 <64자리SHA> --approve-baseline-enrollment`로 기준을 등록한다. 이 도구는 파일 복사·unit 수정·재시작을 하지 않고 상태 검사 후 기준만 기록한다. 기존 baseline이 있으면 덮어쓰지 않는다. 중간 실패 시 남은 manifest/임시 파일을 자동 삭제하지 말고 원인을 검토한다.
-11. 아래 변수와 환경 보호를 대조하고 승인된 최초 전환 검사를 통과한 뒤 `BACKEND_CD_ENABLED=true`로 활성화해 실제 GitHub CD1회를 확인한다. 이번 계획에는 운영 고의 장애 주입이 없다. 복구는 Linux 모의 실패·프로세스 중단 검사와 실제 장애 발생 시의 조건부 복구를 구분한다. 설정만 했다고 실서버 복구 검증 완료로 보지 않는다.
+- SUCCEEDED: 그 실행의 배포 및 검증 성공.
+- ROLLED_BACK: 새 버전 검사 실패 후 이전 JAR 복귀. 해당 배포는 실패다.
+- STOP_REVIEW_REQUIRED / MANUAL_RECOVERY_REQUIRED: 불일치 또는 복구 조건 미충족. 변경을 계속하지 않고 원인을 확인한다.
+- SEND_OUTCOME_UNKNOWN_NO_REDISPATCH / STATUS_UNKNOWN_DO_NOT_REDISPATCH: 응답 불확실. 재전송하지 않고 기존 명령/서버 기록을 조회한다.
 
-| GitHub 변수 | 설정 위치/내용 |
-|---|---|
-| `BACKEND_CD_ENABLED` | repository 변수. 초기에는 없거나 false |
-| `BACKEND_AWS_ACCOUNT_ID`, `BACKEND_CD_ROLE_ARN` | production 환경. 전용 역할/대상 계정 |
-| `BACKEND_CD_BUCKET`, `BACKEND_CD_PREFIX` | production 환경. S3 위치 |
-| `BACKEND_INSTANCE_ID`, `BACKEND_DATABASE_ID` | production 환경. 실제 백엔드·DB |
-| `BACKEND_CD_DOCUMENT`, `BACKEND_CD_DOCUMENT_VERSION` | production 환경. 고정 문서/숫자 버전 |
+동일 커밋의 실행 의도가 있으면 새 SendCommand를 보내지 않는다. 결과 수집 시도만 하며 commit/run/문서/인스턴스/명령 인자를 재확인한다. 통신 실패 뒤 기존 기록을 삭제해 재실행하지 않는다. 전체 workflow 재실행은 기존 결과를 수집할 수 있지만, deploy job만 재실행하면 attempt가 다른 빌드 artifact 때문에 배포 전 중단될 수 있다.
 
-상태 확인 URL은 local filters, public filters, DB를 쓰는 고정 상품 조회, OCR health, chatbot readiness, 익명 인증 거부를 모두 포함한다. URL/status/응답 구조를 최초 설정 시 실제 확인한다. 이 기본 검사는 유료 AI/OCR 추론이나 사용자의 로그인·개인 데이터 요청을 실행하지 않으며, 그 기능의 종단 검증을 대체하지 않는다.
+DB/운영 설정이 변경되거나 불확실한 서버 전환이 남으면 다음 자동 배포도 멈춘다. 이는 매번 승인받는 정상 경로가 아니라 장애 대응이다. Codex가 연결된 조회 통로로 원인을 확인할 수 있으며 필요 변경은 승인받는다. 백업/과거 릴리스 자동 삭제는 하지 않고 디스크 부족 시 중단한다.
 
-## 실패·복구 규칙
+## 구현과 검사
 
-- 연결 변경 전에 실패하면 실행 중인 서비스를 바꾸지 않는다. 다운로드된 후보는 보존한다.
-- 변경 의도를 디스크에 기록한 뒤 연결을 바꾸고 재시작한다. 새 systemd InvocationID를 요구하므로 기존 JVM이 살아 있다는 이유만으로 성공 판정하지 않는다.
-- 재시작/검증 실패 시 보호 설정·이전 JAR·DB 이력을 다시 확인하고 이전 JAR로 한 번 복구한다. 복구 성공도 해당 배포는 실패로 보고한다.
-- 전환 기록에는 이전/후보 manifest와 해시가 모두 남는다. 기준 파일을 교체한 직후 프로세스가 죽어도 이전 버전 식별자는 사라지지 않는다.
-- `SWITCH_INTENT`, `ROLLBACK_INTENT`, `MANUAL_RECOVERY_REQUIRED`가 남으면 다음 배포를 차단한다. SSM 시간 초과/통신 단절도 재요청하지 않는다. command ID, run 기록, current, baseline, 실제 JVM을 함께 확인한 뒤 별도 승인으로 복구한다. journal/lock을 지워 재시도하지 않는다.
-- 성공한 같은 run은 현재 실행 버전까지 같은 경우에만 재시작 없이 결과를 반환한다. 과거 run을 새 배포로 재사용하지 않는다.
-- 스냅샷 DB 복원, 데이터 삭제, 인프라 생성, 자동 정리는 구현 범위에 없다. DB 복원은 별도 승인·복구 계획이 필요하다.
+- `auto_context.py`: main push 신원, 최신 커밋, 자동 백업 선택.
+- `release.py`: 고정 SDK, 정확한 JAR, S3 의도/결과, SSM 1회 전송·수집.
+- `manifest.py`, `runtime_contract.py`: 원본 JAR/SQL/설정과 관측한 환경 계약.
+- `engine.py`, `host.py`: 원자적 전환·상태 검증·한 번 복귀·중단 기록.
+- `install_disabled.py`, `preflight.py`, `commission.py`: 최초 승인된 설치/기준 등록.
+- `requirements-sdk.lock`, `requirements-db.lock`, `tools.lock.json`: GitHub SDK·독립 DB probe wheel·서버 AWS CLI 해시 고정.
 
-GitHub의 `Re-run failed jobs`를 배포 재시도 버튼으로 사용하지 않는다. artifact는 run attempt까지 고정되므로 build 없이 deploy job만 다시 실행하면 원본 artifact 이름과 맞지 않는다. 실패/통신 단절 뒤에는 먼저 SSM command 및 서버 journal의 실제 결과를 확인한다. 불확실한 작업을 해소하고 새 배포가 승인된 경우에만 새 workflow_dispatch로 전체 빌드·승인을 다시 수행한다.
-
-## 개발 검증
+DB probe는 시스템 Python3.12와 CD 전용 PyMySQL wheel을 격리 실행한다. 챗봇 가상환경을 변경하지 않는다. 서버 실행기/도구/운영 설정은 root 소유·해시 보호하며 자동 JAR 배포로 바꾸지 않는다.
 
 ```bash
+python3 -m pip install --require-hashes --only-binary=:all: -r ops/cd/requirements-sdk.lock
 PYTHONPATH=ops/cd python3 -m unittest discover -s ops/cd/tests -v
 ./gradlew test bootJar
 ```
 
-테스트는 로컬 파일/가짜 명령 경계를 사용하며 AWS 인증·운영 DB·유료 AI를 호출하지 않는다. Linux에서는 실제 자식 프로세스를 전환의 여러 단계에서 종료하여 디스크 기록과 재실행 차단을 확인한다. Windows에서는 해당 POSIX 검사만 skip한다. 실서버 SSM/IAM/서비스 검증은 별도 승인 후 남아 있다.
+로컬/CI 실패 주입은 가짜 AWS·임시 Linux 파일을 사용한다. 실서버 설치·실제 OIDC 역할·SSM·최초 전환·운영 롤백 성공은 별도 적용 후 검증해야 하며 로컬 검사를 그 증거로 대체하지 않는다.
