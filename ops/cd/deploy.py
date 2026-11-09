@@ -65,9 +65,16 @@ def main():
             guard.record('VERIFIED')
             print(json.dumps({'status': 'CURRENT_VERIFIED', 'commit': host.baseline['manifest']['commit']}))
             return
-        result = deploy(host, request)
+        try:
+            result = deploy(host, request)
+        except Exception as error:
+            if guard.status != 'PREPARING': raise
+            from notices import REASONS
+            guard.record('REJECTED')
+            result = {'status':'REJECTED'}
+            host.failure_reason = str(error) if str(error) in REASONS else 'REVIEW_REQUIRED'
         if guard.status == 'PREPARING': guard.record(result['status'])
-        print(json.dumps({'status': result['status']}))
+        print(json.dumps({'status': result['status'], 'reason':getattr(host,'failure_reason','REVIEW_REQUIRED')}))
         if result['status'] != 'SUCCEEDED': raise SystemExit(1)
 
 
