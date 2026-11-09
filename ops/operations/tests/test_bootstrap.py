@@ -63,12 +63,23 @@ class BootstrapTests(unittest.TestCase):
                 'protection_rules':[{'type':'required_reviewers',
                 'prevent_self_review':False,'reviewers':[{'reviewer':{'id':166599710}}]}]},
             'environments/production/deployment-branch-policies':{'branch_policies':[{'name':'main','type':'branch'}]},
+            'environments/backend-production':{'deployment_branch_policy':{'protected_branches':False,'custom_branch_policies':True},
+                'protection_rules':[{'type':'branch_policy'}]},
+            'environments/backend-production/deployment-branch-policies':{'branch_policies':[{'name':'main','type':'branch'}]},
             'actions/workflows/server-operations.yml/runs?event=workflow_dispatch&per_page=30':{'workflow_runs':[{
                 'id':123,'head_sha':'a'*40,'conclusion':'success','display_title':'Server operations precheck at '+'a'*40+' [test]'}]},
             'actions/runs/123/jobs':{'jobs':[{'name':'precheck','conclusion':'success','steps':[{
-                'name':'Verify actual OIDC identity without AWS','conclusion':'success'}]}]}}
+                'name':'Verify actual OIDC identity without AWS','conclusion':'success'}]},
+                {'name':'backend-auto-precheck','conclusion':'success','steps':[{
+                'name':'Verify automatic backend OIDC without AWS','conclusion':'success'}]}]}}
         with patch('bootstrap.github',side_effect=lambda x:responses[x]):
             self.assertTrue(check_github('a'*40)['production_reviewers_configured'])
+            auto=responses['environments/backend-production']
+            for rule in ({'type':'required_reviewers','reviewers':[{}]}, {'type':'wait_timer','wait_timer':5}, {'type':'custom'}):
+                auto['protection_rules']=[rule]
+                with self.assertRaisesRegex(ValueError,'AUTOMATIC_BACKEND_MUST_NOT_WAIT_FOR_APPROVAL'):check_github('a'*40)
+            auto['protection_rules']=[]
+            self.assertTrue(check_github('a'*40)['backend_automatic_without_reviewers'])
             responses['environments/production']['deployment_branch_policy']['custom_branch_policies']=False
             with self.assertRaisesRegex(ValueError,'PRODUCTION_BRANCH_POLICY_NOT_ACTIVE'):check_github('a'*40)
             responses['environments/production']['deployment_branch_policy']['custom_branch_policies']=True

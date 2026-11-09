@@ -72,6 +72,30 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  backend-auto-precheck:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'precheck'
+    environment: backend-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      OIDC_ENVIRONMENT: backend-production
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify automatic backend OIDC without AWS
+        run: python3 -B ops/operations/oidc_precheck.py
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: backend-auto-precheck-${{ github.run_id }}-${{ github.run_attempt }}
+          path: operation-results/
+          if-no-files-found: error
+          retention-days: 14
+
   observe:
     if: github.ref == 'refs/heads/main' && (inputs.mode == 'inspect' || inputs.mode == 'collect')
     runs-on: ubuntu-latest

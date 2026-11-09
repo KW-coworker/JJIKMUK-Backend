@@ -9,7 +9,7 @@ import sys
 import time
 import urllib.request
 from connection import (ACCOUNT, REGION, REPO, REPO_ID, HOSTS, HOST_ROLE, BUCKET, STACK,
-                        READ_ROLE, WRITE_ROLE, READ_DOCUMENT, DEPLOY_DOCUMENT, template, canonical, sha)
+                        READ_ROLE, WRITE_ROLE, AUTO_ROLE, READ_DOCUMENT, DEPLOY_DOCUMENT, template, canonical, sha)
 
 
 def need(value, code):
@@ -45,6 +45,14 @@ def check_github(commit):
     branches=github('environments/production/deployment-branch-policies')['branch_policies']
     need(len(branches)==1 and branches[0]['name']=='main' and branches[0].get('type','branch')=='branch',
          'PRODUCTION_MAIN_ONLY_REQUIRED')
+    auto = github('environments/backend-production')
+    need(all(r.get('type') == 'branch_policy' or (r.get('type') == 'wait_timer' and r.get('wait_timer') == 0)
+             for r in auto.get('protection_rules', [])), 'AUTOMATIC_BACKEND_MUST_NOT_WAIT_FOR_APPROVAL')
+    need(auto.get('deployment_branch_policy') == {'protected_branches':False,'custom_branch_policies':True},
+         'BACKEND_MAIN_POLICY_REQUIRED')
+    auto_branches = github('environments/backend-production/deployment-branch-policies')['branch_policies']
+    need(len(auto_branches) == 1 and auto_branches[0]['name'] == 'main' and
+         auto_branches[0].get('type','branch') == 'branch', 'BACKEND_MAIN_ONLY_REQUIRED')
     runs=github('actions/workflows/server-operations.yml/runs?event=workflow_dispatch&per_page=30')['workflow_runs']
     matching=[r for r in runs if r.get('head_sha')==commit and r.get('conclusion')=='success'
               and r.get('display_title','').startswith('Server operations precheck at '+commit+' [')]
@@ -53,7 +61,11 @@ def check_github(commit):
     need(any(j['name']=='precheck' and j.get('conclusion')=='success' and any(
         s['name']=='Verify actual OIDC identity without AWS' and s.get('conclusion')=='success'
         for s in j.get('steps',[])) for j in jobs),'REAL_OIDC_STEP_REQUIRED')
-    return {'repository_id':REPO_ID,'main':commit,'production_reviewers_configured':True,'precheck_run_id':matching[0]['id']}
+    need(any(j['name']=='backend-auto-precheck' and j.get('conclusion')=='success' and any(
+        s['name']=='Verify automatic backend OIDC without AWS' and s.get('conclusion')=='success'
+        for s in j.get('steps',[])) for j in jobs),'REAL_BACKEND_OIDC_STEP_REQUIRED')
+    return {'repository_id':REPO_ID,'main':commit,'production_reviewers_configured':True,
+            'backend_automatic_without_reviewers':True,'precheck_run_id':matching[0]['id']}
 
 
 def aws_clients():
@@ -85,7 +97,7 @@ def preflight(clients,commit):
     # All required APIs must be usable by the human's administrator, without changing users.
     iam=clients['iam']; ec2=clients['ec2']; ssm=clients['ssm']; cf=clients['cloudformation']
     absent(cf.describe_stacks,StackName=STACK)
-    for name in (READ_ROLE,WRITE_ROLE):
+    for name in (READ_ROLE,WRITE_ROLE,AUTO_ROLE):
         absent(iam.get_role,RoleName=name)
         absent(iam.get_policy,PolicyArn=f'arn:aws:iam::{ACCOUNT}:policy/{name}Policy')
     absent(iam.get_role_policy,RoleName=HOST_ROLE,PolicyName='JjikmukOperationsArtifactRead')

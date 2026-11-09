@@ -12,15 +12,16 @@
 |---|---|
 | `JjikmukOperationsRead` | 계정/서울의 인프라 메타데이터, 두 서버의 고정 비밀 제외 상태 점검, 기존 실행 결과·연결 보고서 조회 |
 | `JjikmukOperationsExecute` | production 승인 후 두 서버에서 검토한 작업 문서 실행, 전용 S3 파일 업로드/조회, 지정 DB의 새 snapshot 생성·조회 |
+| `JjikmukBackendAutoDeploy` | backend-production에서 승인 없이 백엔드 한 대의 고정 CD 문서만 실행, backend 전용 artifact/receipt와 백업 메타데이터 |
 | 서버의 기존 역할 | 새 S3의 operations/artifacts prefix 읽기. 기존 정책·다른 bucket 권한 유지 |
 
-두 GitHub 역할은 같은 제한 managed policy를 권한과 permissions boundary에 함께 사용한다. IAM 수정·계정 로그인 관리·네트워크/인스턴스 생성·삭제·DB 복원·Secret Manager 조회 권한은 주지 않는다. 접속 가능한 서버는 두 개지만 EC2/RDS의 Describe 메타데이터 권한은 API 제약상 계정/리전 단위다.
+세 GitHub 역할은 같은 제한 managed policy를 권한과 permissions boundary에 함께 사용한다. IAM 수정·계정 로그인 관리·네트워크/인스턴스 생성·삭제·DB 복원·Secret Manager 조회 권한은 주지 않는다. 접속 가능한 서버는 두 개지만 EC2/RDS의 Describe 메타데이터 권한은 API 제약상 계정/리전 단위다.
 
 **변경 역할은 두 서버에서 SSM을 통한 root 프로그램 실행이 가능한 강한 권한이다.** IAM만으로 프로그램의 모든 동작을 “JAR 교체만”으로 강제하지 않는다. 실제 범위는 main에 검토된 작업 문서·해시·사용자 승인·GitHub 보호 설정으로 제한한다. 애플리케이션이 가진 DB 접근도 고려해야 하므로 DB 데이터 수정은 별도 승인 없이 수행하지 않는다. 아직 OCR·챗봇 배포 구현과 운영 검증이 끝난 것은 아니며, 이후 각 작업을 준비·승인하되 새 AWS 인증 교환은 필요 없게 만드는 통로다.
 
 ## 한 번의 연결에서 만드는 것
 
-CloudFormation stack `Jjikmuk-ServerOperations`에 GitHub OIDC provider(없을 때만1개), 조회·변경 역할과 각 policy, private/versioned/AES256 S3 bucket과 TLS 정책, 고정 조회·백엔드 CD SSM 문서2개, 기존 host role의 새 S3 읽기 policy를 만든다. 기존 OIDC provider는 audience/URL이 맞으면 재사용하고 수정하지 않는다. 최대10개 stack resource, provider 재사용 시9개다. 대상 bucket은 `jjikmuk-operations-076767081522-apne2`다.
+CloudFormation stack `Jjikmuk-ServerOperations`에 GitHub OIDC provider(없을 때만1개), 조회·변경·백엔드 자동 배포 역할과 각 policy, private/versioned/AES256 S3 bucket과 TLS 정책, 고정 조회·백엔드 CD SSM 문서2개, 기존 host role의 새 S3 읽기 policy를 만든다. 기존 OIDC provider는 audience/URL이 맞으면 재사용하고 수정하지 않는다. 최대12개 stack resource, provider 재사용 시11개다. 대상 bucket은 `jjikmuk-operations-076767081522-apne2`다.
 
 앱 설정·서비스·DB 데이터는 이 연결 과정에서 변경하지 않는다. CloudFormation `DisableRollback=True`로 부분 실패의 기록·리소스를 보존하고 setup을 반복해 덮어쓰지 않는다. 정상 완료 시 비밀 없는 결과를 S3 `connection/setup.json`에 남기므로 Codex가 직접 확인할 수 있다. IAM 전체관리자 역할을 Codex에게 넘기거나 장기 access key를 만들지 않는다.
 
@@ -29,10 +30,11 @@ CloudFormation stack `Jjikmuk-ServerOperations`에 GitHub OIDC provider(없을 �
 1. 이 workflow/도구를 검토해 main에 반영한다. 사용자 정책대로 앱 배포도 GitHub main 원본만 사용한다. 개발자 AI 허용 기능은 별도 PR10 검토가 필요하며 PR11은 닫힌 채 유지한다.
 2. 저장소 관리자가 `production` 환경을 만들고 custom branch policy를 **branch `main` 하나**로 제한하고 관리자 우회를 끈다.
 3. 현재 Codex와 사용자의 GitHub 연결 신원은 `fisfin`(ID166599710) 하나다. 채팅의 명시 승인을 Codex가 같은 신원으로 GitHub에 제출하려면 required reviewer에 fisfin을 넣고 `prevent_self_review=false`로 설정해야 한다. 이는 두 사람의 독립 승인 방식이 아니다. 같은 계정에서 자기승인금지를 켜면 승인 단계가 막히므로 이 설정을 숨기거나 동작한다고 가정하지 않는다. 독립 검토를 원한다면 별도 실행자/승인자 연결 설계를 확정해야 하며 사용자의 AWS 계정 왕복으로 해결하지 않는다.
-4. `control.py check`에서 기존 GitHub 로그인·push 권한·환경을 확인한다. 현재 연결 계정은 repo admin이 아니어서 위 설정을 직접 적용할 수 없다.
-5. Codex가 `precheck` workflow를 실행하고 사용자의 승인에 따라 production 승인 API를 제출한다. 이 작업은 AWS에 접속하지 않고 실제 GitHub OIDC 토큰의 저장소·main·production·run 신원을 검사한다. 토큰 자체는 기록하지 않는다. 이 정확한 main에서 성공한 이력이 있어야 CloudShell 도구가 진행된다. 이 단계가 성공하기 전에 사용자에게 CloudShell 작업을 요청하지 않는다.
+4. `backend-production` 환경은 **branch main만, required reviewers 없음, 대기 0**으로 준비한다. 자동 백엔드 배포에는 production 승인 규칙을 연결하지 않는다.
+5. `control.py check`에서 기존 GitHub 로그인·push 권한·환경을 확인한다. 현재 연결 계정은 repo admin이 아니어서 위 설정을 직접 적용할 수 없다.
+6. Codex가 `precheck` workflow를 실행하고 사용자의 승인에 따라 production 승인 API를 제출한다. 이 작업은 AWS에 접속하지 않고 실제 GitHub OIDC 토큰의 저장소·main·production 및 backend-production·run 신원을 검사한다. 토큰 자체는 기록하지 않는다. 이 정확한 main에서 성공한 이력이 있어야 CloudShell 도구가 진행된다. 이 단계가 성공하기 전에 사용자에게 CloudShell 작업을 요청하지 않는다.
 
-CloudShell 도구는 main SHA·repository ID·OIDC subject 설정·production reviewer/main 제한/관리자 우회를 먼저 대조한다. GitHub 준비가 안 된 상태에서 사용자에게 명령을 먼저 실행시키지 않는다. 아직 배포되지 않은 준비 파일을 곧바로 실행할 명령은 제공하지 않는다. 최종 고정 main URL·helper SHA·template SHA가 포함된 단일 명령은 선행조건 완료 후 확정한다.
+CloudShell 도구는 main SHA·repository ID·OIDC subject 설정·production reviewer/main 제한/관리자 우회와 backend-production 무승인/main 제한을 먼저 대조한다. GitHub 준비가 안 된 상태에서 사용자에게 명령을 먼저 실행시키지 않는다. 아직 배포되지 않은 준비 파일을 곧바로 실행할 명령은 제공하지 않는다. 최종 고정 main URL·helper SHA·template SHA가 포함된 단일 명령은 선행조건 완료 후 확정한다.
 
 ## 실행과 승인
 
@@ -45,9 +47,11 @@ CloudShell 도구는 main SHA·repository ID·OIDC subject 설정·production re
 
 배포별 계획은 변경과 필요한 복구를 하나의 승인 범위로 묶는다. 기존 backend CD의 JAR 복귀를 재사용하되 최초 설치/전환·OCR·챗봇의 실제 작업과 복구 프로그램은 각각 검증한 뒤 추가한다. access setup 성공이 모든 배포의 성공이나 모든 데이터의 복원 가능성을 의미하지 않는다.
 
-## 기존 백엔드 CD와 연결할 값
+## 백엔드 자동 CD와 연결
 
-`BACKEND_CD_ROLE_ARN=arn:aws:iam::076767081522:role/JjikmukOperationsExecute`, bucket=`jjikmuk-operations-076767081522-apne2`, prefix=`artifacts/backend`, document=`Jjikmuk-BackendDeploy-v1`, version=`1`을 사용한다. 백엔드 config의 S3 값도 반드시 같아야 한다. `BACKEND_CD_ENABLED=false`를 유지하고 설치·초기 전환은 별도 승인한다. 기존 CD schema/config/backup 보호를 완화하지 않는다.
+자동 CD는 backend-production 환경과 `arn:aws:iam::076767081522:role/JjikmukBackendAutoDeploy`를 사용한다. 이 역할은 OCR 서버, 임의 SSM 문서, 문서 생성, 스냅샷 생성, IAM 변경 권한이 없다. bucket=`jjikmuk-operations-076767081522-apne2`, prefix=`artifacts/backend`, document=`Jjikmuk-BackendDeploy-v1`, version=`1`은 배포 코드와 서버 config가 같아야 한다. 기존 수동 관리용 JjikmukOperationsExecute 역할을 자동 workflow에 사용하지 않는다.
+
+`BACKEND_CD_ENABLED=false`를 유지하고 설치·초기 전환·최초 자동화 활성화는 별도 승인한다. 활성화 이후 main 병합의 일반 JAR 배포는 승인 없이 검사→배포→검증→조건부 JAR 복귀한다. DB·챗봇·OCR는 별도 승인 작업으로 유지한다. 실제 앱 코드가 가진 DB 접근까지 IAM이 제한하는 것은 아니다.
 
 ## 검증 및 한계
 

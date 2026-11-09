@@ -14,6 +14,7 @@ BUCKET = 'jjikmuk-operations-076767081522-apne2'
 STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
+AUTO_ROLE = 'JjikmukBackendAutoDeploy'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
 DEPLOY_DOCUMENT = 'Jjikmuk-BackendDeploy-v1'
 DOCUMENT_PREFIX = 'JjikmukOperationsApproved-'
@@ -86,6 +87,21 @@ def permissions(write=False):
     return policy(statements)
 
 
+def automatic_backend_permissions():
+    regional = {'StringEquals': {'aws:RequestedRegion': REGION}}
+    doc = f'arn:aws:ssm:{REGION}:{ACCOUNT}:document/' + DEPLOY_DOCUMENT
+    return policy([
+        allow('sts:GetCallerIdentity', '*'),
+        allow(['rds:DescribeDBSnapshots', 'ssm:GetCommandInvocation', 'ssm:ListCommands'], '*', Condition=regional),
+        allow('s3:GetBucketVersioning', f'arn:aws:s3:::{BUCKET}'),
+        allow(['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject'],
+              [f'arn:aws:s3:::{BUCKET}/artifacts/backend/*', f'arn:aws:s3:::{BUCKET}/receipts/backend-cd/*']),
+        allow('s3:ListBucket', f'arn:aws:s3:::{BUCKET}', Condition={
+            'StringLike': {'s3:prefix': ['receipts/backend-cd/*']}}),
+        allow('ssm:SendCommand', [doc, f'arn:aws:ec2:{REGION}:{ACCOUNT}:instance/{HOSTS["backend"]}'], Condition=regional),
+    ])
+
+
 def template():
     probe = '"""Fixed host metadata only. No environment, credentials, file contents or HTTP/SQL."""\nimport json\nimport shutil\nimport subprocess\nimport sys\nfrom pathlib import Path\n\nSERVICES = (\'jjikmuk-backend.service\', \'food-chatbot.service\', \'jjikmuk-ocr.service\', \'nginx.service\')\nSTATES = {\'active\', \'inactive\', \'failed\', \'activating\', \'deactivating\', \'reloading\', \'maintenance\', \'not-found\'}\n\n\ndef inspect():\n    services = {}\n    for service in SERVICES:\n        result = subprocess.run([\'/usr/bin/systemctl\', \'show\', service, \'--property=ActiveState\', \'--value\'],\n                                capture_output=True, timeout=4, env={\'PATH\': \'/usr/bin:/bin\', \'LANG\': \'C\'})\n        state = result.stdout.decode().strip()\n        services[service] = state if state in STATES else \'unknown\'\n    paths = {}\n    for name in (\'/opt/jjikmuk-cd\', \'/etc/jjikmuk-cd/config.json\', \'/opt/food-chatbot\', \'/opt/ocr-service\'):\n        p = Path(name)\n        if p.is_symlink():\n            paths[name] = {\'symlink\': True}\n        elif p.exists():\n            s = p.lstat(); paths[name] = {\'uid\': s.st_uid, \'gid\': s.st_gid, \'mode\': s.st_mode & 0o777}\n        else:\n            paths[name] = {\'exists\': False}\n    return {\'status\': \'OBSERVED\', \'services\': services, \'paths\': paths,\n            \'free_bytes\': shutil.disk_usage(\'/\').free, \'python\': list(sys.version_info[:3]),\n            \'database_queries\': 0, \'service_restarts\': 0, \'app_writes\': 0}\n\n\nif __name__ == \'__main__\':\n    try:\n        print(json.dumps(inspect()))\n    except Exception:\n        print(\'{"status":"INSPECTION_FAILED"}\')\n        raise SystemExit(1)\n'
     document = {'schemaVersion': '2.2', 'description': 'Fixed metadata inspection; no secrets or changes',
@@ -119,10 +135,12 @@ def template():
             'Name': DEPLOY_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON',
             'Content': json.loads('{\n  "schemaVersion": "2.2",\n  "description": "Deploy one approved immutable JJIKMUK backend JAR using an installed root-owned executor",\n  "parameters": {\n    "ReleaseCommit": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{40}$"},\n    "RunId": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,19}$"},\n    "RunAttempt": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,3}$"},\n    "JarSha256": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{64}$"},\n    "JarVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"},\n    "ManifestVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"}\n  },\n  "mainSteps": [{\n    "action":"aws:runShellScript",\n    "name":"deployBackend",\n    "precondition":{"StringEquals":["platformType","Linux"]},\n    "inputs": {\n      "timeoutSeconds":"1500",\n      "runCommand":["exec /usr/bin/python3 -B -E -s /opt/jjikmuk-cd/bin/deploy.py deploy"]\n    }\n  }]\n}\n')}},
     }
-    for key, name, write, subject in [('Read', READ_ROLE, False, PREFIX + ':ref:refs/heads/main'),
-                                    ('Execute', WRITE_ROLE, True, PREFIX + ':environment:production')]:
+    for key, name, document_policy, subject in [
+            ('Read', READ_ROLE, permissions(False), PREFIX + ':ref:refs/heads/main'),
+            ('Execute', WRITE_ROLE, permissions(True), PREFIX + ':environment:production'),
+            ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production')]:
         resources[key+'Policy'] = {'Type': 'AWS::IAM::ManagedPolicy', 'Properties': {
-            'ManagedPolicyName': name+'Policy', 'PolicyDocument': permissions(write)}}
+            'ManagedPolicyName': name+'Policy', 'PolicyDocument': document_policy}}
         resources[key+'Role'] = {'Type': 'AWS::IAM::Role', 'Properties': {
             'RoleName': name, 'MaxSessionDuration': 3600, 'AssumeRolePolicyDocument': trust(subject),
             'ManagedPolicyArns': [{'Ref': key+'Policy'}], 'PermissionsBoundary': {'Ref': key+'Policy'}}}
@@ -133,6 +151,7 @@ def template():
         'Resources': resources, 'Outputs': {
             'ReadRoleArn': {'Value': {'Fn::GetAtt': ['ReadRole', 'Arn']}},
             'ExecuteRoleArn': {'Value': {'Fn::GetAtt': ['ExecuteRole', 'Arn']}},
+            'BackendAutoRoleArn': {'Value': {'Fn::GetAtt': ['BackendAutoRole', 'Arn']}},
             'Bucket': {'Value': {'Ref': 'OperationsBucket'}}}}
 
 
@@ -181,6 +200,14 @@ def check_github(commit):
     branches=github('environments/production/deployment-branch-policies')['branch_policies']
     need(len(branches)==1 and branches[0]['name']=='main' and branches[0].get('type','branch')=='branch',
          'PRODUCTION_MAIN_ONLY_REQUIRED')
+    auto = github('environments/backend-production')
+    need(all(r.get('type') == 'branch_policy' or (r.get('type') == 'wait_timer' and r.get('wait_timer') == 0)
+             for r in auto.get('protection_rules', [])), 'AUTOMATIC_BACKEND_MUST_NOT_WAIT_FOR_APPROVAL')
+    need(auto.get('deployment_branch_policy') == {'protected_branches':False,'custom_branch_policies':True},
+         'BACKEND_MAIN_POLICY_REQUIRED')
+    auto_branches = github('environments/backend-production/deployment-branch-policies')['branch_policies']
+    need(len(auto_branches) == 1 and auto_branches[0]['name'] == 'main' and
+         auto_branches[0].get('type','branch') == 'branch', 'BACKEND_MAIN_ONLY_REQUIRED')
     runs=github('actions/workflows/server-operations.yml/runs?event=workflow_dispatch&per_page=30')['workflow_runs']
     matching=[r for r in runs if r.get('head_sha')==commit and r.get('conclusion')=='success'
               and r.get('display_title','').startswith('Server operations precheck at '+commit+' [')]
@@ -189,7 +216,11 @@ def check_github(commit):
     need(any(j['name']=='precheck' and j.get('conclusion')=='success' and any(
         s['name']=='Verify actual OIDC identity without AWS' and s.get('conclusion')=='success'
         for s in j.get('steps',[])) for j in jobs),'REAL_OIDC_STEP_REQUIRED')
-    return {'repository_id':REPO_ID,'main':commit,'production_reviewers_configured':True,'precheck_run_id':matching[0]['id']}
+    need(any(j['name']=='backend-auto-precheck' and j.get('conclusion')=='success' and any(
+        s['name']=='Verify automatic backend OIDC without AWS' and s.get('conclusion')=='success'
+        for s in j.get('steps',[])) for j in jobs),'REAL_BACKEND_OIDC_STEP_REQUIRED')
+    return {'repository_id':REPO_ID,'main':commit,'production_reviewers_configured':True,
+            'backend_automatic_without_reviewers':True,'precheck_run_id':matching[0]['id']}
 
 
 def aws_clients():
@@ -221,7 +252,7 @@ def preflight(clients,commit):
     # All required APIs must be usable by the human's administrator, without changing users.
     iam=clients['iam']; ec2=clients['ec2']; ssm=clients['ssm']; cf=clients['cloudformation']
     absent(cf.describe_stacks,StackName=STACK)
-    for name in (READ_ROLE,WRITE_ROLE):
+    for name in (READ_ROLE,WRITE_ROLE,AUTO_ROLE):
         absent(iam.get_role,RoleName=name)
         absent(iam.get_policy,PolicyArn=f'arn:aws:iam::{ACCOUNT}:policy/{name}Policy')
     absent(iam.get_role_policy,RoleName=HOST_ROLE,PolicyName='JjikmukOperationsArtifactRead')

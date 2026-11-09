@@ -11,9 +11,11 @@ from control import NoRedirect
 
 
 def validate_claims(claims,env):
+    environment = env.get('OIDC_ENVIRONMENT', 'production')
+    need(environment in ('production', 'backend-production'), 'UNSUPPORTED_OIDC_ENVIRONMENT')
     need(claims.get('iss')=='https://token.actions.githubusercontent.com' and claims.get('aud')=='sts.amazonaws.com',
          'OIDC_ISSUER_OR_AUDIENCE')
-    need(claims.get('sub')=='repo:'+REPO+':environment:production' and str(claims.get('repository_id'))==str(REPO_ID),
+    need(claims.get('sub')=='repo:'+REPO+':environment:'+environment and str(claims.get('repository_id'))==str(REPO_ID),
          'OIDC_SUBJECT_OR_REPOSITORY')
     need(claims.get('ref')=='refs/heads/main' and claims.get('sha')==env['GITHUB_SHA']
          and str(claims.get('run_id'))==env['GITHUB_RUN_ID'],'OIDC_RUN_CONTEXT')

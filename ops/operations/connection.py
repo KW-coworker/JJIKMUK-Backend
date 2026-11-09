@@ -13,6 +13,7 @@ BUCKET = 'jjikmuk-operations-076767081522-apne2'
 STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
+AUTO_ROLE = 'JjikmukBackendAutoDeploy'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
 DEPLOY_DOCUMENT = 'Jjikmuk-BackendDeploy-v1'
 DOCUMENT_PREFIX = 'JjikmukOperationsApproved-'
@@ -85,6 +86,21 @@ def permissions(write=False):
     return policy(statements)
 
 
+def automatic_backend_permissions():
+    regional = {'StringEquals': {'aws:RequestedRegion': REGION}}
+    doc = f'arn:aws:ssm:{REGION}:{ACCOUNT}:document/' + DEPLOY_DOCUMENT
+    return policy([
+        allow('sts:GetCallerIdentity', '*'),
+        allow(['rds:DescribeDBSnapshots', 'ssm:GetCommandInvocation', 'ssm:ListCommands'], '*', Condition=regional),
+        allow('s3:GetBucketVersioning', f'arn:aws:s3:::{BUCKET}'),
+        allow(['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject'],
+              [f'arn:aws:s3:::{BUCKET}/artifacts/backend/*', f'arn:aws:s3:::{BUCKET}/receipts/backend-cd/*']),
+        allow('s3:ListBucket', f'arn:aws:s3:::{BUCKET}', Condition={
+            'StringLike': {'s3:prefix': ['receipts/backend-cd/*']}}),
+        allow('ssm:SendCommand', [doc, f'arn:aws:ec2:{REGION}:{ACCOUNT}:instance/{HOSTS["backend"]}'], Condition=regional),
+    ])
+
+
 def template():
     probe = (Path(__file__).parent / 'inspect_host.py').read_text(encoding='utf-8')
     document = {'schemaVersion': '2.2', 'description': 'Fixed metadata inspection; no secrets or changes',
@@ -118,10 +134,12 @@ def template():
             'Name': DEPLOY_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON',
             'Content': json.loads((Path(__file__).parent/'backend-deploy.ssm.json').read_bytes())}},
     }
-    for key, name, write, subject in [('Read', READ_ROLE, False, PREFIX + ':ref:refs/heads/main'),
-                                    ('Execute', WRITE_ROLE, True, PREFIX + ':environment:production')]:
+    for key, name, document_policy, subject in [
+            ('Read', READ_ROLE, permissions(False), PREFIX + ':ref:refs/heads/main'),
+            ('Execute', WRITE_ROLE, permissions(True), PREFIX + ':environment:production'),
+            ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production')]:
         resources[key+'Policy'] = {'Type': 'AWS::IAM::ManagedPolicy', 'Properties': {
-            'ManagedPolicyName': name+'Policy', 'PolicyDocument': permissions(write)}}
+            'ManagedPolicyName': name+'Policy', 'PolicyDocument': document_policy}}
         resources[key+'Role'] = {'Type': 'AWS::IAM::Role', 'Properties': {
             'RoleName': name, 'MaxSessionDuration': 3600, 'AssumeRolePolicyDocument': trust(subject),
             'ManagedPolicyArns': [{'Ref': key+'Policy'}], 'PermissionsBoundary': {'Ref': key+'Policy'}}}
@@ -132,6 +150,7 @@ def template():
         'Resources': resources, 'Outputs': {
             'ReadRoleArn': {'Value': {'Fn::GetAtt': ['ReadRole', 'Arn']}},
             'ExecuteRoleArn': {'Value': {'Fn::GetAtt': ['ExecuteRole', 'Arn']}},
+            'BackendAutoRoleArn': {'Value': {'Fn::GetAtt': ['BackendAutoRole', 'Arn']}},
             'Bucket': {'Value': {'Ref': 'OperationsBucket'}}}}
 
 

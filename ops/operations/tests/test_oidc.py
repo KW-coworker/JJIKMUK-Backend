@@ -3,6 +3,14 @@ from oidc_precheck import validate_claims
 
 
 class OidcTests(unittest.TestCase):
+    def test_automatic_environment_uses_its_own_subject(self):
+        claims={'iss':'https://token.actions.githubusercontent.com','aud':'sts.amazonaws.com',
+            'sub':'repo:KW-coworker/JJIKMUK-Backend:environment:backend-production','repository_id':'1300060655',
+            'ref':'refs/heads/main','sha':'a'*40,'run_id':'123'}
+        env={'GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'123','OIDC_ENVIRONMENT':'backend-production'}
+        validate_claims(claims,env)
+        with self.assertRaises(ValueError):validate_claims(claims,{**env,'OIDC_ENVIRONMENT':'production'})
+
     def test_exact_identity_and_context_without_exposing_token(self):
         claims={'iss':'https://token.actions.githubusercontent.com','aud':'sts.amazonaws.com',
             'sub':'repo:KW-coworker/JJIKMUK-Backend:environment:production','repository_id':'1300060655',
