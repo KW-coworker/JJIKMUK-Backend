@@ -143,7 +143,7 @@ def template():
             'Name': READ_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON', 'Content': document}},
         'BackendDeployDocument': {'Type': 'AWS::SSM::Document', 'Properties': {
             'Name': DEPLOY_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON',
-            'Content': json.loads('{\n  "schemaVersion": "2.2",\n  "description": "Deploy one approved immutable JJIKMUK backend JAR using an installed root-owned executor",\n  "parameters": {\n    "ReleaseCommit": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{40}$"},\n    "RunId": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,19}$"},\n    "RunAttempt": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,3}$"},\n    "JarSha256": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{64}$"},\n    "JarVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"},\n    "ManifestVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"}\n  },\n  "mainSteps": [{\n    "action":"aws:runShellScript",\n    "name":"deployBackend",\n    "precondition":{"StringEquals":["platformType","Linux"]},\n    "inputs": {\n      "timeoutSeconds":"1500",\n      "runCommand":["exec /usr/bin/python3 -B -E -s /opt/jjikmuk-cd/bin/deploy.py deploy"]\n    }\n  }]\n}\n')}},
+            'Content': json.loads('{\n  "schemaVersion": "2.2",\n  "description": "Deploy one approved immutable JJIKMUK backend JAR using an installed root-owned executor",\n  "parameters": {\n    "ReleaseCommit": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{40}$"},\n    "RunId": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,19}$"},\n    "RunAttempt": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,3}$"},\n    "JarSha256": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{64}$"},\n    "JarVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1000}[A-Za-z0-9._~+/-]{0,24}$"},\n    "ManifestVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1000}[A-Za-z0-9._~+/-]{0,24}$"}\n  },\n  "mainSteps": [{\n    "action":"aws:runShellScript",\n    "name":"deployBackend",\n    "precondition":{"StringEquals":["platformType","Linux"]},\n    "inputs": {\n      "timeoutSeconds":"1500",\n      "runCommand":["exec /usr/bin/python3 -B -E -s /opt/jjikmuk-cd/bin/deploy.py deploy"]\n    }\n  }]\n}\n')}},
         'ChatbotDeployDocument': {'Type':'AWS::SSM::Document','Properties':{
             'Name':CHATBOT_DOCUMENT,'DocumentType':'Command','DocumentFormat':'JSON',
             'Content':chatbot_document()}},
@@ -171,8 +171,10 @@ def template():
 
 
 def chatbot_document():
+    # Go/SSM rejects a single repetition bound above 1000; retain the 1..1024 contract.
+    version_pattern='[A-Za-z0-9._~+/-]{1,1000}[A-Za-z0-9._~+/-]{0,24}'
     fields={'ReleaseCommit':'[a-f0-9]{40}','RunId':'[1-9][0-9]{0,19}','RunAttempt':'[1-9][0-9]{0,3}',
-        'ArchiveSha256':'[a-f0-9]{64}','ArchiveVersion':'[A-Za-z0-9._~+/-]{1,1024}','ManifestVersion':'[A-Za-z0-9._~+/-]{1,1024}'}
+        'ArchiveSha256':'[a-f0-9]{64}','ArchiveVersion':version_pattern,'ManifestVersion':version_pattern}
     return {'schemaVersion':'2.2','description':'Fixed reviewed chatbot code deployment',
         'parameters':{k:{'type':'String','allowedPattern':v,'interpolationType':'ENV_VAR'} for k,v in fields.items()},
         'mainSteps':[{'action':'aws:runShellScript','name':'deployChatbot','inputs':{
