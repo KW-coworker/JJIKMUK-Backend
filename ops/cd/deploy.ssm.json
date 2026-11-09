@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "2.2",
+  "description": "Deploy one approved immutable JJIKMUK backend JAR using an installed root-owned executor",
+  "parameters": {
+    "ReleaseCommit": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{40}$"},
+    "RunId": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,19}$"},
+    "RunAttempt": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,3}$"},
+    "JarSha256": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{64}$"},
+    "JarVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"},
+    "ManifestVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"}
+  },
+  "mainSteps": [{
+    "action":"aws:runShellScript",
+    "name":"deployBackend",
+    "precondition":{"StringEquals":["platformType","Linux"]},
+    "inputs": {
+      "timeoutSeconds":"1500",
+      "runCommand":["exec /usr/bin/python3 -B -E -s /opt/jjikmuk-cd/bin/deploy.py deploy"]
+    }
+  }]
+}

@@ -1,0 +1,45 @@
+{
+  "enabled": false,
+  "runtime_contract": {"flyway_enabled": "REQUIRES_OBSERVATION", "sql_init_mode": "never"},
+  "root": "/opt/jjikmuk-cd",
+  "service": "jjikmuk-backend.service",
+  "region": "ap-northeast-2",
+  "bucket": "REPLACE_WITH_APPROVED_PRIVATE_BUCKET",
+  "prefix": "backend-releases",
+  "aws": "/opt/jjikmuk-cd/tools/aws-cli/aws",
+  "working_directory": "/home/ubuntu/JJIKMUK-Backend",
+  "initial_runtime": {
+    "jar": "/opt/jjikmuk-github/releases/20261103-developer-test-consent/backend.jar",
+    "jar_sha256": "e3dc8ec36dca14dd7d9edfde1c6ed5e5a083073d7b6f00e62159af7f8382f2f1",
+    "argv": ["/usr/bin/java", "-Xms128m", "-Xmx768m", "-Dchatbot.developer-test-auto-consent=true", "-jar", "/opt/jjikmuk-github/releases/20261103-developer-test-consent/backend.jar"]
+  },
+  "expected_argv": ["/usr/bin/java", "-Xms128m", "-Xmx768m", "-Dchatbot.developer-test-auto-consent=true", "-jar", "/opt/jjikmuk-cd/current/backend.jar"],
+  "db_python": "/usr/bin/python3.12",
+  "db_user": "ubuntu",
+  "database": {
+    "properties_file": "/home/ubuntu/JJIKMUK-Backend/application-local.properties",
+    "expected_jdbc_url": "REPLACE_WITH_EXACT_EXISTING_JDBC_URL",
+    "host": "REPLACE_WITH_CURRENT_RDS_HOST",
+    "name": "jjikmuk",
+    "ca_file": "/opt/food-chatbot/rds-global-bundle.pem"
+  },
+  "protected_paths": [
+    "/etc/jjikmuk-cd/config.json",
+    "/opt/jjikmuk-cd/bin",
+    "/opt/jjikmuk-cd/vendor",
+    "/opt/jjikmuk-cd/tools",
+    "/etc/systemd/system/jjikmuk-backend.service",
+    "/etc/systemd/system/jjikmuk-backend.service.d",
+    "/home/ubuntu/JJIKMUK-Backend/application-local.properties",
+    "/REPLACE_WITH_EVERY_REFERENCED_ENVIRONMENT_FILE",
+    "/opt/food-chatbot/rds-global-bundle.pem"
+  ],
+  "health_checks": [
+    {"kind":"local","url":"http://127.0.0.1:8080/api/products/filters","status":200,"json_data":true},
+    {"kind":"chatbot","url":"http://127.0.0.1:8000/ready","status":200},
+    {"kind":"public","url":"https://REPLACE_WITH_CURRENT_API_HOST/api/products/filters","status":200,"json_data":true},
+    {"kind":"product","url":"https://REPLACE_WITH_CURRENT_API_HOST/api/products/search?keyword=REPLACE_WITH_FIXED_QUERY","status":200,"json_data":true},
+    {"kind":"ocr","url":"http://REPLACE_WITH_OCR_PRIVATE_HOST:8081/health","status":200},
+    {"kind":"anonymous","url":"https://REPLACE_WITH_CURRENT_API_HOST/api/chat","status":401}
+  ]
+}
