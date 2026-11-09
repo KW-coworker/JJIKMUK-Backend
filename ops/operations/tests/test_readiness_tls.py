@@ -31,6 +31,18 @@ class ReadinessTlsTests(unittest.TestCase):
         result = self.inputs(self.options())
         self.assertEqual('fixture', result[4]['spring.datasource.username'])
 
+    def test_observed_batch_option_accepts_only_boolean_values(self):
+        # Names match the live diagnostic; every value here is synthetic.
+        for value in ('true', 'false', 'TRUE', 'False'):
+            with self.subTest(value=value):
+                self.inputs(dict(self.options(), rewriteBatchedStatements=value))
+        for value in ('', 'arbitrary', 'true;SQL', ' true', '1'):
+            with self.subTest(value=value), self.assertRaises(probe.ProbeStop):
+                self.inputs(dict(self.options(), rewriteBatchedStatements=value))
+        with self.assertRaises(probe.ProbeStop):
+            self.inputs(dict(self.options(), rewriteBatchedStatements='true'),
+                        '&rewriteBatchedStatements=false')
+
     def test_unknown_and_duplicate_options_still_stop(self):
         for options, extra in [(dict(self.options(), socketFactory='unreviewed'), ''),
                                (self.options(), '&sslMode=VERIFY_IDENTITY'),

@@ -1,5 +1,7 @@
 # Read the option names that blocked commissioning
 
+**Completed:** the one approved observation succeeded in [run 42690400943](https://github.com/KW-coworker/JJIKMUK-Backend/actions/runs/42690400943). It observed eight names with no duplicates, invalid names or case variants; `rewriteBatchedStatements` was the one name absent from the TLS probe's allowlist. Values were not exported, and no DB connection was opened. This plan is consumed and preserved at its approved hash. `--check` verifies that archive; do not re-execute it or regenerate it from subsequently changed helper sources. The pending-plan instructions below describe its original preparation and do not grant another execution.
+
 Both fixed commissioning attempts stopped before opening a DB connection with `JDBC_OPTIONS_REQUIRES_REVIEW`. The second attempt supports the historical institution trust-store profile, so the current file still has an unrecognized name or duplicate decoded key. The reports intentionally did not export the names. Do not guess another allowlist expansion or rerun either consumed plan.
 
 `plans/commissioning-jdbc-option-names.json` is a separate **pending** plan for one backend-host observation through the existing operations connection. It creates a content-addressed SSM document and private execution receipts. It uses isolated system Python to load the hash-bound probe helpers and diagnostic from the SSM command into memory. It does not create a new staging directory, download a library, install anything, connect to a database, run SQL, restart services or deploy.
