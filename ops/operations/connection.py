@@ -170,8 +170,10 @@ def template():
 
 
 def chatbot_document():
+    # Go/SSM rejects a single repetition bound above 1000; retain the 1..1024 contract.
+    version_pattern='[A-Za-z0-9._~+/-]{1,1000}[A-Za-z0-9._~+/-]{0,24}'
     fields={'ReleaseCommit':'[a-f0-9]{40}','RunId':'[1-9][0-9]{0,19}','RunAttempt':'[1-9][0-9]{0,3}',
-        'ArchiveSha256':'[a-f0-9]{64}','ArchiveVersion':'[A-Za-z0-9._~+/-]{1,1024}','ManifestVersion':'[A-Za-z0-9._~+/-]{1,1024}'}
+        'ArchiveSha256':'[a-f0-9]{64}','ArchiveVersion':version_pattern,'ManifestVersion':version_pattern}
     return {'schemaVersion':'2.2','description':'Fixed reviewed chatbot code deployment',
         'parameters':{k:{'type':'String','allowedPattern':v,'interpolationType':'ENV_VAR'} for k,v in fields.items()},
         'mainSteps':[{'action':'aws:runShellScript','name':'deployChatbot','inputs':{

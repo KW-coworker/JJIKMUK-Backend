@@ -17,5 +17,7 @@ jobs:
           python-version: '3.12'
       - run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements-private.lock
+      - name: Require native Go regex validation
+        run: go version
       - run: PYTHONPATH=ops/operations:ops/cd python3 -B -m unittest discover -s ops/operations/tests -v
       - run: PYTHONPATH=ops/chatbot:ops/cd python3 -B -m unittest discover -s ops/chatbot/tests -v
