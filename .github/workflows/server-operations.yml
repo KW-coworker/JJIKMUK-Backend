@@ -1,0 +1,118 @@
+name: Server Operations
+run-name: Server operations ${{ inputs.mode }} at ${{ inputs.expected_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Fixed inspection, approved operation, or collect an existing result
+        type: choice
+        options: [inspect, execute, collect]
+        default: inspect
+        required: true
+      expected_sha:
+        description: Reviewed full main commit SHA
+        type: string
+        required: true
+      plan:
+        description: Reviewed ops/operations/plans/*.json path (execute only)
+        type: string
+      plan_sha256:
+        description: Approved exact plan SHA256 (execute only)
+        type: string
+      operation_id:
+        description: Existing operation ID; collect never sends a command
+        type: string
+      confirm:
+        description: User approved this exact operation and its recovery scope
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jjikmuk-server-operations
+  cancel-in-progress: false
+
+env:
+  EXPECTED_SHA: ${{ inputs.expected_sha }}
+  OPERATION_MODE: ${{ inputs.mode }}
+  OPERATION_PLAN: ${{ inputs.plan }}
+  OPERATION_PLAN_SHA: ${{ inputs.plan_sha256 }}
+  OPERATION_ID: ${{ inputs.operation_id }}
+  OPERATIONS_CONFIRM: ${{ inputs.confirm }}
+  AWS_EC2_METADATA_DISABLED: 'true'
+
+jobs:
+  observe:
+    if: github.ref == 'refs/heads/main' && (inputs.mode == 'inspect' || inputs.mode == 'collect')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install locked SDK
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements.lock
+      - name: Validate GitHub context before AWS credentials
+        run: PYTHONPATH=ops/operations python3 -c 'import os; from run import context; context(os.environ["EXPECTED_SHA"])'
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsRead
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 3600
+          role-session-name: jjikmuk-read-${{ github.run_id }}
+          retry-max-attempts: 1
+      - name: Inspect or collect without asking for a session file
+        run: python3 -B ops/operations/run.py "$OPERATION_MODE" --expected-sha "$EXPECTED_SHA" --operation-id "$OPERATION_ID"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: operations-observe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: operation-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  execute:
+    if: github.ref == 'refs/heads/main' && inputs.mode == 'execute' && inputs.confirm
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install locked SDK
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements.lock
+      - name: Validate exact plan and approval before AWS credentials
+        run: |
+          PYTHONPATH=ops/operations python3 -c 'import os; from run import context,load_plan; context(os.environ["EXPECTED_SHA"],True); load_plan(os.environ["OPERATION_PLAN"],os.environ["OPERATION_PLAN_SHA"])'
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 3600
+          role-session-name: jjikmuk-execute-${{ github.run_id }}
+          retry-max-attempts: 1
+      - name: Execute approved plan once
+        run: python3 -B ops/operations/run.py execute --expected-sha "$EXPECTED_SHA" --plan "$OPERATION_PLAN" --plan-sha256 "$OPERATION_PLAN_SHA"
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        if: always()
+        with:
+          name: operations-execute-${{ github.run_id }}-${{ github.run_attempt }}
+          path: operation-results/
+          if-no-files-found: ignore
+          retention-days: 14

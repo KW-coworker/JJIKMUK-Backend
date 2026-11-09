@@ -14,6 +14,7 @@ STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
+DEPLOY_DOCUMENT = 'Jjikmuk-BackendDeploy-v1'
 DOCUMENT_PREFIX = 'JjikmukOperationsApproved-'
 PREFIX = 'repo:' + REPO
 
@@ -71,6 +72,9 @@ def permissions(write=False):
             allow(['ssm:CreateDocument', 'ssm:GetDocument', 'ssm:DescribeDocument'],
                   docs + DOCUMENT_PREFIX + '*', Condition=regional),
             allow('ssm:SendCommand', [docs + DOCUMENT_PREFIX + '*', *instances], Condition=regional),
+            allow(['ssm:GetDocument', 'ssm:DescribeDocument'], docs + DEPLOY_DOCUMENT, Condition=regional),
+            allow('ssm:SendCommand', [docs + DEPLOY_DOCUMENT,
+                  f'arn:aws:ec2:{REGION}:{ACCOUNT}:instance/{HOSTS["backend"]}'], Condition=regional),
             allow(['rds:CreateDBSnapshot', 'rds:AddTagsToResource'],
                   [f'arn:aws:rds:{REGION}:{ACCOUNT}:db:jjikmuk-dev-db',
                    f'arn:aws:rds:{REGION}:{ACCOUNT}:snapshot:jjikmuk-ops-*'], Condition=regional),
@@ -109,6 +113,9 @@ def template():
                 [f'arn:aws:s3:::{BUCKET}/operations/*', f'arn:aws:s3:::{BUCKET}/artifacts/*'])])}},
         'InspectDocument': {'Type': 'AWS::SSM::Document', 'Properties': {
             'Name': READ_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON', 'Content': document}},
+        'BackendDeployDocument': {'Type': 'AWS::SSM::Document', 'Properties': {
+            'Name': DEPLOY_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON',
+            'Content': json.loads((Path(__file__).parent/'backend-deploy.ssm.json').read_bytes())}},
     }
     for key, name, write, subject in [('Read', READ_ROLE, False, PREFIX + ':ref:refs/heads/main'),
                                     ('Execute', WRITE_ROLE, True, PREFIX + ':environment:production')]:
