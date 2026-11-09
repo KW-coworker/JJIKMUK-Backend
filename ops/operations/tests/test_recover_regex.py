@@ -51,7 +51,8 @@ class RegexRecoveryTests(unittest.TestCase):
         def stack(**kwargs):
             return {'Stacks': [{'StackId': recovery.STACK,
                 'StackStatus': 'UPDATE_COMPLETE' if state['updated'] else 'CREATE_FAILED',
-                'DisableRollback': True, 'Parameters': [{'ParameterKey': 'ExistingGitHubProvider',
+                'DisableRollback': True, 'Tags': [{'Key': 'Project', 'Value': 'JJIKMUK'}],
+                'Parameters': [{'ParameterKey': 'ExistingGitHubProvider',
                                                        'ParameterValue': str(existing_provider).lower()}]}]}
         cf.describe_stacks.side_effect = stack
         cf.get_template.side_effect = lambda **kwargs: {'TemplateBody': new if state['updated'] else original}
@@ -73,7 +74,7 @@ class RegexRecoveryTests(unittest.TestCase):
                     'ResourceType': 'AWS::SSM::Document', 'Action': 'Modify',
                     'Replacement': 'True', 'Scope': ['Properties']}} for k in recovery.FIELDS]
         cf.describe_change_set.return_value = {'StackId': recovery.STACK, 'Status': 'CREATE_COMPLETE',
-                                               'ExecutionStatus': 'AVAILABLE', 'Changes': changes}
+            'ExecutionStatus': 'AVAILABLE', 'Changes': changes, 'Tags': copy.deepcopy(recovery.STACK_TAGS)}
         cf.execute_change_set.side_effect = lambda **kwargs: state.update(updated=True)
         old = {'status': 'STOPPED_KEEP_RECORDS_NO_RETRY', 'template_sha256': recovery.OLD_SHA,
                'stack_id': recovery.STACK}
@@ -113,6 +114,13 @@ class RegexRecoveryTests(unittest.TestCase):
                 self.assertEqual('RECOVERED_VERIFIED', json.loads(path.read_bytes())['status'])
                 with self.assertRaisesRegex(ValueError, 'KEEP_RECOVERY_JOURNAL'):
                     self.run_repair(api, old, path)
+
+    def test_preview_explicitly_preserves_the_original_stack_tag(self):
+        api, old, _, _ = self.fixture()
+        with tempfile.TemporaryDirectory() as td:
+            self.run_repair(api, old, Path(td) / 'repair.json')
+        self.assertEqual([{'Key': 'Project', 'Value': 'JJIKMUK'}],
+                         api['cloudformation'].create_change_set.call_args.kwargs.get('Tags'))
 
     def test_preview_rejects_iam_delete_extra_resources_and_unknown_replacement(self):
         for mutation in ('iam', 'delete', 'extra', 'conditional'):

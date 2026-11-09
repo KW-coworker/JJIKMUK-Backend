@@ -1,0 +1,28 @@
+{
+  "source": "User's 2026-11-10 describe-change-set projection; Tags and full response metadata were not included",
+  "Status": "CREATE_COMPLETE",
+  "ExecutionStatus": "AVAILABLE",
+  "unchanged_physical_resources_with_tag_only_changes": {
+    "BackendAutoPolicy": ["AWS::IAM::ManagedPolicy", "arn:aws:iam::076767081522:policy/JjikmukBackendAutoDeployPolicy"],
+    "BackendAutoRole": ["AWS::IAM::Role", "JjikmukBackendAutoDeploy"],
+    "BucketPolicy": ["AWS::S3::BucketPolicy", "jjikmuk-operations-076767081522-apne2"],
+    "ChatbotAutoPolicy": ["AWS::IAM::ManagedPolicy", "arn:aws:iam::076767081522:policy/JjikmukChatbotAutoDeployPolicy"],
+    "ChatbotAutoRole": ["AWS::IAM::Role", "JjikmukChatbotAutoDeploy"],
+    "ExecutePolicy": ["AWS::IAM::ManagedPolicy", "arn:aws:iam::076767081522:policy/JjikmukOperationsExecutePolicy"],
+    "ExecuteRole": ["AWS::IAM::Role", "JjikmukOperationsExecute"],
+    "GitHubProvider": ["AWS::IAM::OIDCProvider", "arn:aws:iam::076767081522:oidc-provider/token.actions.githubusercontent.com"],
+    "HostArtifactRead": ["AWS::IAM::Policy", "Jjikm-HostA-eH7RO3Aq2MLM"],
+    "InspectDocument": ["AWS::SSM::Document", "JjikmukOperationsInspect-v1"],
+    "OperationsBucket": ["AWS::S3::Bucket", "jjikmuk-operations-076767081522-apne2"],
+    "ReadPolicy": ["AWS::IAM::ManagedPolicy", "arn:aws:iam::076767081522:policy/JjikmukOperationsReadPolicy"],
+    "ReadRole": ["AWS::IAM::Role", "JjikmukOperationsRead"]
+  },
+  "common_tag_change": {
+    "Action": "Modify", "Replacement": "False", "Scope": ["Tags"],
+    "Details": [{"Target": {"Attribute": "Tags", "RequiresRecreation": "Never"}, "Evaluation": "Static"}]
+  },
+  "document_changes": [
+    {"Action": "Modify", "LogicalResourceId": "BackendDeployDocument", "ResourceType": "AWS::SSM::Document", "Replacement": "True", "Scope": [], "Details": []},
+    {"Action": "Modify", "LogicalResourceId": "ChatbotDeployDocument", "ResourceType": "AWS::SSM::Document", "Replacement": "True", "Scope": [], "Details": []}
+  ]
+}

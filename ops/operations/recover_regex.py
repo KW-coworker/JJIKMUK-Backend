@@ -26,6 +26,9 @@ FIELDS = {'BackendDeployDocument': ('JarVersion', 'ManifestVersion'),
           'ChatbotDeployDocument': ('ArchiveVersion', 'ManifestVersion')}
 OLD_PATTERN = '[A-Za-z0-9._~+/-]{1,1024}'
 NEW_PATTERN = '[A-Za-z0-9._~+/-]{1,1000}[A-Za-z0-9._~+/-]{0,24}'
+STACK_TAGS = [{'Key': 'Project', 'Value': 'JJIKMUK'}]
+PREVIOUS_MAIN = '1b302ed6d0aa5b3f5a1abf4ef593f8651bb783bd'
+PREVIOUS_CHANGE_SET = 'ssm-regex-repair-' + NEW_SHA[:20]
 
 
 def need(condition, code):
@@ -106,6 +109,7 @@ def absent_documents(ssm, template):
 def verify_change_set(response):
     need(response.get('StackId') == STACK and response.get('Status') == 'CREATE_COMPLETE'
          and response.get('ExecutionStatus') == 'AVAILABLE', 'CHANGE_SET_NOT_READY')
+    need(response.get('Tags') == STACK_TAGS, 'CHANGE_SET_TAGS_CHANGED')
     changes = response.get('Changes', [])
     need(len(changes) == 2, 'UNEXPECTED_CHANGE_COUNT')
     need({x.get('ResourceChange', {}).get('LogicalResourceId') for x in changes} == set(FIELDS),
@@ -120,6 +124,44 @@ def verify_change_set(response):
         # verified absent immediately before execution. Existing resources are never replaced.
 
 
+def verify_stopped_tag_preview(cf, previous, preserved, new):
+    """Only supersede the known unexecuted tag-omitting preview; never replay it."""
+    need(previous.get('status') == 'STOPPED_KEEP_RECORDS_NO_RETRY'
+         and previous.get('last_stage') == 'CHANGE_SET_CREATED'
+         and previous.get('stack_id') == STACK and previous.get('old_sha256') == OLD_SHA
+         and previous.get('new_sha256') == NEW_SHA and previous.get('main') == PREVIOUS_MAIN
+         and previous.get('preserved') == preserved, 'PREVIOUS_RECOVERY_MISMATCH')
+    change_id = previous.get('change_set_id')
+    prefix = f'arn:aws:cloudformation:{REGION}:{ACCOUNT}:changeSet/{PREVIOUS_CHANGE_SET}/'
+    need(isinstance(change_id, str) and change_id.startswith(prefix)
+         and re.fullmatch('[0-9a-f-]{36}', change_id[len(prefix):]), 'PREVIOUS_CHANGE_SET_ID')
+    preview = cf.describe_change_set(ChangeSetName=change_id, StackName=STACK)
+    need(preview.get('StackId') == STACK and preview.get('ChangeSetId') == change_id
+         and preview.get('ChangeSetName') == PREVIOUS_CHANGE_SET
+         and preview.get('Status') == 'CREATE_COMPLETE'
+         and preview.get('ExecutionStatus') == 'AVAILABLE'
+         and not preview.get('Tags'), 'PREVIOUS_PREVIEW_CHANGED')
+    changes = pages(cf.describe_change_set, 'Changes', ChangeSetName=change_id, StackName=STACK)
+    need(len(changes) == len(preserved) + len(FIELDS), 'PREVIOUS_CHANGE_COUNT')
+    expected = {}
+    for key, physical in preserved.items():
+        expected[key] = {'Action': 'Modify', 'LogicalResourceId': key,
+            'PhysicalResourceId': physical, 'ResourceType': new['Resources'][key]['Type'],
+            'Replacement': 'False', 'Scope': ['Tags'],
+            'Details': [{'Target': {'Attribute': 'Tags', 'RequiresRecreation': 'Never'},
+                         'Evaluation': 'Static'}]}
+    for key in FIELDS:
+        expected[key] = {'Action': 'Modify', 'LogicalResourceId': key,
+            'ResourceType': 'AWS::SSM::Document', 'Replacement': 'True', 'Scope': [], 'Details': []}
+    actual = {x.get('ResourceChange', {}).get('LogicalResourceId'): x.get('ResourceChange') for x in changes}
+    need(all(x.get('Type') == 'Resource' for x in changes) and actual == expected,
+         'PREVIOUS_CHANGE_SCOPE_CHANGED')
+    body = cf.get_template(StackName=STACK, ChangeSetName=change_id, TemplateStage='Original')['TemplateBody']
+    if isinstance(body, str): body = json.loads(body)
+    need(digest(body) == NEW_SHA, 'PREVIOUS_TEMPLATE_CHANGED')
+    return {'change_set_id': change_id, 'changes': changes, 'tags': preview.get('Tags', [])}
+
+
 def preflight(clients, old_journal):
     cf = clients['cloudformation']
     need(clients['sts'].get_caller_identity()['Account'] == ACCOUNT, 'WRONG_ACCOUNT')
@@ -130,6 +172,7 @@ def preflight(clients, old_journal):
     need(stack['StackId'] == STACK and stack['StackStatus'] == 'CREATE_FAILED'
          and stack.get('DisableRollback') is True and not stack.get('RoleARN'),
          'STACK_STATE_CHANGED')
+    need(stack.get('Tags') == STACK_TAGS, 'STACK_TAGS_CHANGED')
     params = stack.get('Parameters', [])
     need(len(params) == 1 and params[0]['ParameterKey'] == 'ExistingGitHubProvider'
          and params[0]['ParameterValue'] in ('true', 'false'), 'STACK_PARAMETERS_CHANGED')
@@ -155,8 +198,9 @@ def preflight(clients, old_journal):
 
 def verify_complete(clients, new, preserved):
     cf = clients['cloudformation']
-    need(cf.describe_stacks(StackName=STACK)['Stacks'][0]['StackStatus'] == 'UPDATE_COMPLETE',
-         'UPDATE_NOT_COMPLETE')
+    stack = cf.describe_stacks(StackName=STACK)['Stacks'][0]
+    need(stack['StackStatus'] == 'UPDATE_COMPLETE', 'UPDATE_NOT_COMPLETE')
+    need(stack.get('Tags') == STACK_TAGS, 'FINAL_STACK_TAGS_CHANGED')
     actual = cf.get_template(StackName=STACK, TemplateStage='Original')['TemplateBody']
     if isinstance(actual, str):
         actual = json.loads(actual)
@@ -176,13 +220,19 @@ def verify_complete(clients, new, preserved):
              'DOCUMENT_CONTENT_CHANGED')
 
 
-def repair(clients, old_journal, journal, main, confirm=input, sleep=time.sleep):
+def repair(clients, old_journal, journal, main, confirm=input, sleep=time.sleep, previous=None):
     need(not journal.exists() and not journal.is_symlink(), 'KEEP_RECOVERY_JOURNAL_NO_RETRY')
     new, preserved = preflight(clients, old_journal)
+    previous_preview = None
+    if previous is not None:
+        previous_preview = verify_stopped_tag_preview(clients['cloudformation'], previous, preserved, new)
     need(confirm('Type REPAIR JJIKMUK SSM REGEX ONLY: ') == 'REPAIR JJIKMUK SSM REGEX ONLY',
          'NOT_CONFIRMED')
     state = {'status': 'CHANGE_SET_INTENT', 'stack_id': STACK, 'old_sha256': OLD_SHA,
-             'new_sha256': NEW_SHA, 'main': main, 'preserved': preserved}
+             'new_sha256': NEW_SHA, 'main': main, 'preserved': preserved, 'stack_tags': STACK_TAGS}
+    if previous_preview is not None:
+        state.update(previous_journal_sha256=digest(previous), previous_preview=previous_preview)
+    name = ('ssm-regex-keep-tags-' if previous is not None else 'ssm-regex-repair-') + NEW_SHA[:20]
     with journal.open('x', encoding='utf-8') as log:
         os.chmod(journal, 0o600)
         def save():
@@ -191,10 +241,10 @@ def repair(clients, old_journal, journal, main, confirm=input, sleep=time.sleep)
         try:
             cf = clients['cloudformation']
             created = cf.create_change_set(StackName=STACK,
-                ChangeSetName='ssm-regex-repair-' + NEW_SHA[:20], ChangeSetType='UPDATE',
-                ClientToken='preview-' + NEW_SHA, TemplateBody=canonical(new).decode(),
+                ChangeSetName=name, ChangeSetType='UPDATE',
+                ClientToken='preview-' + name, TemplateBody=canonical(new).decode(),
                 Parameters=[{'ParameterKey': 'ExistingGitHubProvider', 'UsePreviousValue': True}],
-                Capabilities=['CAPABILITY_NAMED_IAM'])
+                Capabilities=['CAPABILITY_NAMED_IAM'], Tags=copy.deepcopy(STACK_TAGS))
             need(created.get('StackId') == STACK, 'CHANGE_SET_STACK_MISMATCH')
             state.update(status='CHANGE_SET_CREATED', change_set_id=created['Id']); save()
             for _ in range(90):
@@ -207,13 +257,17 @@ def repair(clients, old_journal, journal, main, confirm=input, sleep=time.sleep)
                 raise ValueError('CHANGE_SET_WAIT_LIMIT_NO_RETRY')
             all_changes = pages(cf.describe_change_set, 'Changes', ChangeSetName=created['Id'], StackName=STACK)
             preview['Changes'] = all_changes
+            state['preview'] = {k: preview.get(k) for k in ('Status', 'ExecutionStatus', 'Tags', 'Changes')}; save()
             verify_change_set(preview)
             # Recheck all original resource state and document absence just before the write.
             again, current_preserved = preflight(clients, old_journal)
             need(again == new and current_preserved == preserved, 'PREFLIGHT_CHANGED')
+            if previous is not None:
+                need(verify_stopped_tag_preview(cf, previous, preserved, new) == previous_preview,
+                     'PREVIOUS_PREVIEW_CHANGED')
             state['status'] = 'EXECUTE_INTENT'; save()
             cf.execute_change_set(ChangeSetName=created['Id'], StackName=STACK,
-                ClientRequestToken='repair-' + NEW_SHA, DisableRollback=True)
+                ClientRequestToken='execute-' + name, DisableRollback=True)
             state['status'] = 'UPDATE_REQUESTED'; save()
             for _ in range(180):
                 status = cf.describe_stacks(StackName=STACK)['Stacks'][0]['StackStatus']
@@ -285,6 +339,8 @@ def main():
     parser.add_argument('--human-cloudshell', required=True, action='store_true')
     parser.add_argument('--main', help='Required for repair; observation uses the preserved journal')
     parser.add_argument('--observe', action='store_true', help='Read-only reconciliation; no retries or writes')
+    parser.add_argument('--preserve-stack-tags', action='store_true',
+                        help='Supersede only the known unexecuted tag preview; preserve both old journals')
     args = parser.parse_args()
     need('CLOUDSHELL' in os.environ.get('AWS_EXECUTION_ENV', '').upper(), 'HUMAN_CLOUDSHELL_REQUIRED')
     if not args.observe: verify_github(args.main)
@@ -294,11 +350,15 @@ def main():
     session = boto3.Session(region_name=REGION)
     clients = {s: session.client(s, config=config) for s in ('sts', 'cloudformation', 'ssm', 's3')}
     journal = Path('/home/cloudshell-user/jjikmuk-ssm-regex-recovery.json')
+    previous = None
+    if args.preserve_stack_tags:
+        if not args.observe: previous = read_json(journal)
+        journal = journal.with_name('jjikmuk-ssm-regex-tags-recovery.json')
     if args.observe:
         print(json.dumps(observe(clients, journal)))
         return
     old = read_json(Path('/home/cloudshell-user/jjikmuk-operations-setup.json'))
-    repair(clients, old, journal, args.main)
+    repair(clients, old, journal, args.main, previous=previous)
     print('CONNECTION_RECOVERED_NO_DOWNLOAD_NO_OPERATOR_SWITCH')
 
 
@@ -311,5 +371,5 @@ if __name__ == '__main__':
         if aws_code in {'ValidationError', 'AccessDenied', 'AccessDeniedException', 'InvalidRequest',
                         'InvalidDocument', 'NoSuchKey', 'PreconditionFailed', 'Throttling', 'ExpiredToken'}:
             print('AWS_CODE: ' + aws_code)
-        print('STOP: ' + code + '. Preserve both journals; do not repeat recovery.')
+        print('STOP: ' + code + '. Preserve all journals; do not repeat recovery.')
         raise SystemExit(1)
