@@ -24,19 +24,15 @@ class StackTagRecoveryTests(unittest.TestCase):
                     row['PhysicalResourceId'] = preserved[row['LogicalResourceId']]
             return result
         cf.list_stack_resources.side_effect = rows
-        # Full response metadata and empty Tags were not part of the user's projection.
-        # They are explicit simulated inputs, checked again against real AWS by the helper.
-        change_id = (f'arn:aws:cloudformation:{recovery.REGION}:{recovery.ACCOUNT}:changeSet/'
-                     + recovery.PREVIOUS_CHANGE_SET + '/11111111-1111-1111-1111-111111111111')
+        # The follow-up read supplied the real change-set ID and preserved stack tag.
+        change_id = data['metadata']['ChangeSetId']
         changes = []
         for key, (kind, value) in physical.items():
             change = dict(copy.deepcopy(data['common_tag_change']), LogicalResourceId=key,
                           ResourceType=kind, PhysicalResourceId=value)
             changes.append({'Type': 'Resource', 'ResourceChange': change})
         changes.extend({'Type': 'Resource', 'ResourceChange': x} for x in data['document_changes'])
-        previous_preview = {'StackId': recovery.STACK, 'ChangeSetId': change_id,
-            'ChangeSetName': recovery.PREVIOUS_CHANGE_SET, 'Status': data['Status'],
-            'ExecutionStatus': data['ExecutionStatus'], 'Changes': changes, 'Tags': []}
+        previous_preview = dict(data['metadata'], Changes=changes)
         current_preview = cf.describe_change_set.return_value
         cf.describe_change_set.side_effect = lambda **kw: previous_preview if kw['ChangeSetName'] == change_id else current_preview
         base_template = cf.get_template.side_effect
@@ -46,11 +42,17 @@ class StackTagRecoveryTests(unittest.TestCase):
             'main': recovery.PREVIOUS_MAIN, 'preserved': preserved, 'change_set_id': change_id}
         return api, old, previous, previous_preview, current_preview
 
+    def test_observed_previous_preview_preserves_project_tag(self):
+        api, old, previous, _, _ = self.fixture()
+        new, preserved = recovery.preflight(api, old)
+        result = recovery.verify_stopped_tag_preview(api['cloudformation'], previous, preserved, new)
+        self.assertEqual([{'Key': 'Project', 'Value': 'JJIKMUK'}], result['tags'])
+
     def run_repair(self, api, old, previous, path):
         return recovery.repair(api, old, path, 'b' * 40, previous=previous,
-            confirm=lambda _: 'REPAIR JJIKMUK SSM REGEX ONLY', sleep=lambda _: None)
+            confirm=lambda _: recovery.REVIEWED_CONFIRMATION, sleep=lambda _: None)
 
-    def test_supersedes_preview_preserves_old_records_and_only_executes_new_documents(self):
+    def test_completes_exact_reviewed_preview_without_creating_another(self):
         api, old, previous, old_preview, _ = self.fixture()
         before = copy.deepcopy([old, previous, old_preview])
         with tempfile.TemporaryDirectory() as td:
@@ -59,45 +61,36 @@ class StackTagRecoveryTests(unittest.TestCase):
             state = json.loads(path.read_bytes())
             self.assertEqual('RECOVERED_VERIFIED', state['status'])
             self.assertEqual(15, len(state['previous_preview']['changes']))
-            self.assertEqual(2, len(state['preview']['Changes']))
+            self.assertEqual(15, len(state['preview']['changes']))
             self.assertEqual(before, [old, previous, old_preview])
             cf = api['cloudformation']
-            self.assertEqual('ssm-regex-keep-tags-' + recovery.NEW_SHA[:20],
-                             cf.create_change_set.call_args.kwargs['ChangeSetName'])
-            self.assertEqual(recovery.STACK_TAGS, cf.create_change_set.call_args.kwargs['Tags'])
-            self.assertEqual('exact-change-set', cf.execute_change_set.call_args.kwargs['ChangeSetName'])
+            cf.create_change_set.assert_not_called()
+            self.assertEqual(recovery.PREVIOUS_CHANGE_ID, cf.execute_change_set.call_args.kwargs['ChangeSetName'])
+            self.assertTrue(cf.execute_change_set.call_args.kwargs['DisableRollback'])
             cf.delete_change_set.assert_not_called()
             cf.delete_stack.assert_not_called()
             with self.assertRaisesRegex(ValueError, 'KEEP_RECOVERY_JOURNAL'):
                 self.run_repair(api, old, previous, path)
             self.assertEqual(1, cf.execute_change_set.call_count)
 
-    def test_tag_omission_regression_creates_rejected_fifteen_resource_preview(self):
+    def test_fresh_preview_guard_remains_limited_to_two_documents(self):
         api, old, previous, prior, current = self.fixture()
-        def preview_create(**kw):
-            if kw.get('Tags') != recovery.STACK_TAGS:
-                current['Changes'] = prior['Changes']
-                current['Tags'] = []
-            return {'StackId': recovery.STACK, 'Id': 'exact-change-set'}
-        api['cloudformation'].create_change_set.side_effect = preview_create
-        with tempfile.TemporaryDirectory() as td:
-            self.run_repair(api, old, previous, Path(td) / 'tags.json')
-        self.assertEqual(1, api['cloudformation'].execute_change_set.call_count)
-        # Even if someone supplies expected tags on a 15-resource response, count remains strict.
-        expanded = dict(prior, Tags=copy.deepcopy(recovery.STACK_TAGS))
         with self.assertRaisesRegex(ValueError, 'UNEXPECTED_CHANGE_COUNT'):
-            recovery.verify_change_set(expanded)
+            recovery.verify_change_set(prior)
 
     def test_wrong_prior_state_scope_or_template_cannot_create_a_new_preview(self):
-        for case in ('execute_intent', 'main', 'physical', 'id', 'executed', 'tags',
-                     'remove', 'properties', 'replacement', 'extra', 'template'):
+        for case in ('execute_intent', 'main', 'physical', 'id', 'different_valid_id', 'executed', 'tags',
+                     'remove', 'properties', 'replacement', 'extra', 'template', 'failure_mode', 'drift_mode'):
             api, old, previous, prior, _ = self.fixture()
             if case == 'execute_intent': previous['last_stage'] = 'EXECUTE_INTENT'
             if case == 'main': previous['main'] = 'c' * 40
             if case == 'physical': previous['preserved']['ReadRole'] = 'different'
             if case == 'id': previous['change_set_id'] = 'unrelated'
+            if case == 'different_valid_id': previous['change_set_id'] = previous['change_set_id'][:-1] + '9'
             if case == 'executed': prior['ExecutionStatus'] = 'EXECUTE_COMPLETE'
-            if case == 'tags': prior['Tags'] = recovery.STACK_TAGS
+            if case == 'tags': prior['Tags'] = []
+            if case == 'failure_mode': prior['OnStackFailure'] = 'ROLLBACK'
+            if case == 'drift_mode': prior['DeploymentMode'] = 'REVERT_DRIFT'
             change = prior['Changes'][0]['ResourceChange']
             if case == 'remove': change['Action'] = 'Remove'
             if case == 'properties': change['Scope'] = ['Properties']
@@ -112,16 +105,39 @@ class StackTagRecoveryTests(unittest.TestCase):
                 api['cloudformation'].create_change_set.assert_not_called()
                 api['cloudformation'].execute_change_set.assert_not_called()
 
-    def test_new_preview_extra_change_or_changed_tag_still_blocks_execution(self):
+    def test_fresh_preview_extra_change_or_changed_tag_still_blocks_execution(self):
         for case in ('extra', 'tags'):
             api, old, previous, prior, current = self.fixture()
             if case == 'extra': current['Changes'].append(prior['Changes'][0])
             if case == 'tags': current['Tags'] = []
             with self.subTest(case=case), tempfile.TemporaryDirectory() as td:
                 path = Path(td) / 'tags.json'
-                with self.assertRaises(ValueError): self.run_repair(api, old, previous, path)
+                with self.assertRaises(ValueError): baseline.RegexRecoveryTests().run_repair(api, old, path)
                 self.assertEqual('CHANGE_SET_CREATED', json.loads(path.read_bytes())['last_stage'])
                 api['cloudformation'].execute_change_set.assert_not_called()
+
+    def test_old_two_document_confirmation_cannot_approve_fifteen_entry_preview(self):
+        api, old, previous, _, _ = self.fixture()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'reviewed.json'
+            with self.assertRaisesRegex(ValueError, 'NOT_CONFIRMED'):
+                recovery.repair(api, old, path, 'b' * 40, previous=previous,
+                    confirm=lambda _: 'REPAIR JJIKMUK SSM REGEX ONLY', sleep=lambda _: None)
+            self.assertFalse(path.exists())
+            api['cloudformation'].execute_change_set.assert_not_called()
+
+    def test_uncertain_existing_preview_execution_is_never_replayed(self):
+        api, old, previous, _, _ = self.fixture()
+        api['cloudformation'].execute_change_set.side_effect = TimeoutError()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'reviewed.json'
+            with self.assertRaises(TimeoutError): self.run_repair(api, old, previous, path)
+            state = json.loads(path.read_bytes())
+            self.assertEqual('EXECUTE_INTENT', state['last_stage'])
+            self.assertEqual(recovery.PREVIOUS_CHANGE_ID, state['change_set_id'])
+            with self.assertRaisesRegex(ValueError, 'KEEP_RECOVERY_JOURNAL'):
+                self.run_repair(api, old, previous, path)
+            self.assertEqual(1, api['cloudformation'].execute_change_set.call_count)
 
     def test_stack_tags_checked_before_creation_and_after_execution(self):
         for changed_at in (1, 2, 3):

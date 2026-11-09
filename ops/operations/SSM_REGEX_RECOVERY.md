@@ -1,39 +1,52 @@
 # SSM 문서 생성 오류 보완
 
-## 2026-11-10 미실행 복구 미리보기의 태그 누락 보완
+## 2026-11-10 실제 응답에 맞춘 기존 변경 세트 실행안
 
-첫 복구는 `UNEXPECTED_CHANGE_COUNT`로 실행 전에 중단됐습니다. 실제 미리보기에는
-실패한 문서 2개 외에 기존 자원 13개의 `Tags` 변경이 있었습니다. 최초 생성 요청은
-`Project=JJIKMUK`를 지정했지만 복구 `create_change_set`에는 `Tags`가 누락됐습니다.
-기존 13개는 `Replacement=False`, 문서 2개는 부재 확인 후 생성 대상입니다.
+첫 복구는 변경 항목이 2개라는 가정 때문에 `UNEXPECTED_CHANGE_COUNT`로 중단됐습니다.
+후속 보완은 이전 변경 세트의 `Tags`가 비어 있을 것이라는 가정 때문에
+`PREVIOUS_PREVIEW_CHANGED`로 중단됐습니다. 두 가정은 잘못됐습니다. 추가 조회에서
+이전 변경 세트의 태그가 이미 `Project=JJIKMUK`임을 확인했습니다. 태그 전달 누락이
+13개 추가 변경의 확정 원인이라는 이전 설명은 철회합니다.
 
-보완본은 원래 태그가 그대로 있는지 먼저 검사하고 동일 태그를 명시하여 새 미리보기를
-만듭니다. 새 미리보기에는 **문서 2개만** 허용합니다. 태그 변경을 추가 허용하거나
-변경 개수 제한을 늘리지 않습니다. 완료 후에도 원래 태그·물리 ID·문서 내용을 검사합니다.
+관측한 변경 세트는 정확한 ARN `ssm-regex-repair-61fb267d7b184b2e3477/30cc9193-55fe-496d-b4a4-018ea2a01908`
+이며 실행 전 `CREATE_COMPLETE / AVAILABLE`입니다. 변경 목록은 다음과 같습니다.
 
-이미 중단 기록이 있는 이번 스택은 `--preserve-stack-tags` 전용 경로를 사용합니다.
-이 경로는 이전 기록이 정확한 main/템플릿/스택에 속하고 실행 의도 기록 전 중단됐으며,
-AWS의 이전 미리보기가 아직 `AVAILABLE`이고 관측한 15개 변경과 동일한지 확인합니다.
-이전 미리보기의 전체 템플릿 SHA와 비어 있는 태그도 확인합니다. 다른 오류나 이미 실행된
-변경 세트를 일반 재시도로 처리하지 않습니다.
+- 생성에 실패했고 현재 존재하지 않는 SSM 배포 문서 2개: 복구 생성.
+- 기존 연결 리소스 13개: `Modify`, `Replacement=False`, 범위 `Tags`만,
+  `Evaluation=Static`, `RequiresRecreation=Never`. 권한/신뢰 내용이나 저장소 속성 변경은
+  표시되지 않았습니다. 실행 후 스택 태그도 기존 `Project=JJIKMUK`와 같습니다.
 
-기존 `jjikmuk-operations-setup.json`, `jjikmuk-ssm-regex-recovery.json`은 보존하고,
-새 기록 `jjikmuk-ssm-regex-tags-recovery.json`을 한 번만 생성합니다. 이전 미리보기는
-실행하지 않으며 내용을 새 기록에도 보존합니다. 다른 이름의 새 변경 세트만 검증·실행합니다.
-CloudFormation이 실행 후 다른 변경 세트를 정리할 수 있으므로 이전 미리보기의 보존 근거는
-로컬 기록입니다. 도구가 스택·변경 세트·기존 기록을 삭제하는 API는 호출하지 않습니다.
+13건이 표시되는 AWS 내부 원인은 확인되지 않았습니다. 태그 처리가 완전히 없는 작업이라고
+단정하지 않습니다. **기존과 같은 태그 유지·재적용이 포함될 수 있는 15항목 실행안**으로
+설명하며, 이전 두 문서만 처리한다는 안내와 달라진 범위를 사용자에게 승인받기 전에는
+실행하지 않습니다. PR 병합은 AWS 실행 승인이 아닙니다.
 
-정확한 병합 main과 보완 파일 해시 확인 후 별도 실행 블록을 제공합니다. 과거 실행 블록을
-반복하거나 기록을 지우지 않습니다. 새 경로도 실패하면 다시 실행하지 않고 기록을 보존합니다.
-`--observe --preserve-stack-tags`는 세 번째 기록 기준 읽기 대조만 수행합니다.
+`--complete-reviewed-preview`는 이미 있는 이 변경 세트만 검증해 실행합니다. 새 변경
+세트를 만들지 않습니다. 스택 원본/수정 템플릿 전체 SHA, 기존 물리 ID, 문서 부재,
+원래 실패 기록, 실제 관측한 변경 목록 전체, 현재/실행 후 스택 태그를 대조합니다.
+이전 문서 2개용 확인 문구로는 진행되지 않으며 새 문구는
+`COMPLETE JJIKMUK REVIEWED CONNECTION`입니다.
 
-검증: 태그 전달 누락 검사 수정 전 실패, 수정 후 성공. 실제 사용자 응답 구조로 15개 변경
-거부와 제한된 후속 경로를 검사하고, 기존 기록/미리보기 변조·실행 의도 단계·추가 변경·태그
-변경을 거절합니다. AWS SDK 입력 형식과 읽기/쓰기 호출 순서도 모의 검증합니다.
-**모의 검사는 실제 AWS 복구 성공을 의미하지 않습니다.** 서버 설치·배포·재시작·SQL은 없습니다.
+기존 setup/recovery 기록은 보존합니다. 중단된 태그 보완 실행이 새 기록
+`jjikmuk-ssm-regex-tags-recovery.json`을 남겼다면 상황이 다르므로 실행하지 않습니다.
+새 `jjikmuk-ssm-reviewed-preview-recovery.json`을 한 번만 만들고, 검증한 미리보기 내용을
+함께 저장합니다. 실행 직전 다시 대조하고 `DisableRollback=True`로 한 번 실행합니다.
+불명확한 결과나 실패는 자동 재시도하지 않습니다. `--observe --complete-reviewed-preview`
+는 새 기록 기준 읽기 대조만 하며 영수증을 임의 재업로드하지 않습니다.
 
-근거: [CreateChangeSet의 스택 태그 전달과 실행 전 미변경 원칙](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_CreateChangeSet.html),
-[ResourceChange의 변경 범위](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html).
+완료 후 태그·템플릿·기존 리소스 물리 ID·문서 내용을 확인하고 비공개 연결 영수증을
+저장합니다. IAM 권한 확대·앱 설치·배포·재시작·SQL·CD 활성화는 포함하지 않습니다.
+기존 `--preserve-stack-tags` 실행 안내는 더 이상 사용하지 않습니다.
+
+새로운 미리보기를 만드는 일반 경로는 두 문서만 허용하는 제한을 유지합니다.
+15건 허용은 실제 관측된 고정 ARN/템플릿/상태/목록에 한정된 별도 확인 경로입니다.
+
+검증: 사용자 응답의 태그로 기존 오류를 재현한 뒤 수정 성공, 이전 확인 문구 거절,
+권한 내용/삭제/교체/태그값/변경 목록/기록 불일치 거절, 불명확한 실행 재전송 금지,
+AWS SDK 요청 형식 검증. 모의 검사는 실제 AWS 복구 성공을 의미하지 않습니다.
+
+근거: [DescribeChangeSet의 Tags는 실행 후 스택 태그](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeChangeSet.html),
+[실패한 스택의 자원 보존](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/stack-failure-options.html).
 
 ## 최초 SSM 정규식 오류
 
