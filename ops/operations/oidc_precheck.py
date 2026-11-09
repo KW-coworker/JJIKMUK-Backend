@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import urllib.parse
 import urllib.request
-from connection import REPO, REPO_ID, CHATBOT_REPO, CHATBOT_REPO_ID
+from connection import REPO, REPO_ID, CHATBOT_REPO, CHATBOT_REPO_ID, CHATBOT_OWNER_ID, CHATBOT_OIDC_SUBJECT
 from bootstrap import need
 from control import NoRedirect
 
@@ -16,8 +16,12 @@ def validate_claims(claims,env):
     repo,repo_id,ref=(CHATBOT_REPO,CHATBOT_REPO_ID,'refs/heads/chatbot') if environment=='chatbot-production' else (REPO,REPO_ID,'refs/heads/main')
     need(claims.get('iss')=='https://token.actions.githubusercontent.com' and claims.get('aud')=='sts.amazonaws.com',
          'OIDC_ISSUER_OR_AUDIENCE')
-    need(claims.get('sub')=='repo:'+repo+':environment:'+environment and str(claims.get('repository_id'))==str(repo_id),
+    subject=CHATBOT_OIDC_SUBJECT if environment=='chatbot-production' else 'repo:'+repo+':environment:'+environment
+    need(claims.get('sub')==subject and str(claims.get('repository_id'))==str(repo_id),
          'OIDC_SUBJECT_OR_REPOSITORY')
+    if environment=='chatbot-production':
+        need(claims.get('repository')==CHATBOT_REPO and str(claims.get('repository_owner_id'))==str(CHATBOT_OWNER_ID),
+             'OIDC_CHATBOT_OWNER_OR_NAME')
     need(claims.get('ref')==ref and claims.get('sha')==env['GITHUB_SHA']
          and str(claims.get('run_id'))==env['GITHUB_RUN_ID'],'OIDC_RUN_CONTEXT')
     return {'status':'OIDC_CLAIMS_VERIFIED_NO_AWS','repository_id':repo_id,

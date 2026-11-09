@@ -4,9 +4,36 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock,patch
+from unittest.mock import MagicMock,Mock,patch
 import chat_release as release
 from package import sha
+
+
+class ChatIdentityTests(unittest.TestCase):
+    def test_transferred_repository_guard_uses_new_api_and_rejects_old_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            event=Path(tmp)/'event.json'
+            event.write_text(json.dumps({'after':'a'*40,'ref':'refs/heads/chatbot','forced':False,
+                'deleted':False,'repository':{'id':1206944262}}))
+            env={'GITHUB_REPOSITORY':'KW-coworker/PRE_REPO','GITHUB_REPOSITORY_ID':'1206944262',
+                'GITHUB_REF':'refs/heads/chatbot','GITHUB_EVENT_NAME':'push',
+                'GITHUB_WORKFLOW_REF':'KW-coworker/PRE_REPO/.github/workflows/chatbot-cd.yml@refs/heads/chatbot',
+                'CHATBOT_CD_ENABLED':'true','GITHUB_SHA':'a'*40,'GITHUB_RUN_ID':'12','GITHUB_RUN_ATTEMPT':'1',
+                'GITHUB_EVENT_PATH':str(event),'GH_TOKEN':'fake-offline-token'}
+            response=MagicMock();response.__enter__.return_value=response
+            response.read.return_value=json.dumps({'object':{'sha':'a'*40}}).encode()
+            opener=Mock();opener.open.return_value=response
+            with patch.dict(os.environ,env,clear=True),patch.object(release.urllib.request,'build_opener',return_value=opener):
+                self.assertEqual(release.guard(),('a'*40,'12','1'))
+                self.assertEqual(opener.open.call_args.args[0].full_url,
+                    'https://api.github.com/repos/KW-coworker/PRE_REPO/git/ref/heads/chatbot')
+                for changed in [{'GITHUB_REPOSITORY':'Alphrit/jjikmuk-CO-WORKER-'},
+                    {'GITHUB_REPOSITORY_ID':'999'},{'GITHUB_REF':'refs/heads/main'},
+                    {'GITHUB_WORKFLOW_REF':'Alphrit/jjikmuk-CO-WORKER-/.github/workflows/chatbot-cd.yml@refs/heads/chatbot'}]:
+                    opener.reset_mock()
+                    with self.subTest(changed=changed),patch.dict(os.environ,changed),self.assertRaisesRegex(ValueError,'CHATBOT_AUTOMATIC_CONTEXT'):
+                        release.guard()
+                    opener.open.assert_not_called()
 
 
 class S3:

@@ -10,7 +10,8 @@ import time
 import urllib.request
 from connection import (ACCOUNT, REGION, REPO, REPO_ID, HOSTS, HOST_ROLE, BUCKET, STACK,
                         READ_ROLE, WRITE_ROLE, AUTO_ROLE, READ_DOCUMENT, DEPLOY_DOCUMENT,
-                        CHATBOT_REPO, CHATBOT_REPO_ID, CHATBOT_ROLE, CHATBOT_DOCUMENT, template, canonical, sha)
+                        CHATBOT_REPO, CHATBOT_REPO_ID, CHATBOT_OWNER_ID, CHATBOT_OIDC_PREFIX,
+                        CHATBOT_ROLE, CHATBOT_DOCUMENT, template, canonical, sha)
 
 
 def need(value, code):
@@ -72,11 +73,14 @@ def check_github(commit):
 
 def check_chatbot():
     def get(path):return github(path,CHATBOT_REPO)
-    repo=get('');need(repo['id']==CHATBOT_REPO_ID and repo['default_branch']=='main','CHATBOT_REPOSITORY_CHANGED')
+    repo=get('');need(repo['id']==CHATBOT_REPO_ID and repo['default_branch']=='main'
+        and repo.get('full_name')==CHATBOT_REPO and repo.get('owner',{}).get('id')==CHATBOT_OWNER_ID,
+        'CHATBOT_REPOSITORY_CHANGED')
     branch=get('branches/chatbot');need(branch['protected'] is True,'CHATBOT_BRANCH_PROTECTION_REQUIRED')
     commit=branch['commit']['sha']
     subject=get('actions/oidc/customization/sub')
-    need(subject.get('use_default') is True and subject.get('use_immutable_subject') is False,'CHATBOT_OIDC_SUBJECT_CHANGED')
+    need(subject.get('use_default') is True and subject.get('use_immutable_subject') is True
+        and subject.get('sub_claim_prefix')==CHATBOT_OIDC_PREFIX,'CHATBOT_OIDC_SUBJECT_CHANGED')
     env=get('environments/chatbot-production')
     need(all(r.get('type')=='branch_policy' or (r.get('type')=='wait_timer' and r.get('wait_timer')==0)
         for r in env.get('protection_rules',[])),'CHATBOT_AUTOMATIC_APPROVAL_REQUIRED')

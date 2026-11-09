@@ -21,6 +21,11 @@ class PackageTests(unittest.TestCase):
             with zipfile.ZipFile(path,'w') as z:
                 for n,b in files.items():z.writestr(n,b)
             m.update(archive_sha256=sha(path.read_bytes()),archive_bytes=path.stat().st_size)
+            self.assertEqual(m['repository'],'KW-coworker/PRE_REPO')
+            self.assertEqual(m['repository_id'],1206944262)
+            with self.assertRaisesRegex(ValueError,'SOURCE_MANIFEST_MISMATCH'):
+                unpack(path,dict(m,repository='Alphrit/jjikmuk-CO-WORKER-'),root/'old-name')
+            self.assertFalse((root/'old-name').exists())
             unpack(path,m,root/'good');self.assertEqual((root/'good/app/api/main.py').read_bytes(),b'original')
             m['files']['app/api/main.py']['sha256']='0'*64
             with self.assertRaises(ValueError):unpack(path,m,root/'bad')

@@ -14,8 +14,12 @@ STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
 AUTO_ROLE = 'JjikmukBackendAutoDeploy'
-CHATBOT_REPO = 'Alphrit/jjikmuk-CO-WORKER-'
+CHATBOT_REPO = 'KW-coworker/PRE_REPO'
 CHATBOT_REPO_ID = 1206944262
+CHATBOT_OWNER_ID = 304766488
+CHATBOT_OIDC_PREFIX = (f'repo:{CHATBOT_REPO.split("/")[0]}@{CHATBOT_OWNER_ID}/'
+                       f'{CHATBOT_REPO.split("/")[1]}@{CHATBOT_REPO_ID}')
+CHATBOT_OIDC_SUBJECT = CHATBOT_OIDC_PREFIX + ':environment:chatbot-production'
 CHATBOT_ROLE = 'JjikmukChatbotAutoDeploy'
 CHATBOT_DOCUMENT = 'Jjikmuk-ChatbotDeploy-v1'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
@@ -147,7 +151,7 @@ def template():
             ('Read', READ_ROLE, permissions(False), PREFIX + ':ref:refs/heads/main'),
             ('Execute', WRITE_ROLE, permissions(True), PREFIX + ':environment:production'),
             ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production'),
-            ('ChatbotAuto', CHATBOT_ROLE, automatic_backend_permissions('chatbot'), 'repo:'+CHATBOT_REPO+':environment:chatbot-production')]:
+            ('ChatbotAuto', CHATBOT_ROLE, automatic_backend_permissions('chatbot'), CHATBOT_OIDC_SUBJECT)]:
         resources[key+'Policy'] = {'Type': 'AWS::IAM::ManagedPolicy', 'Properties': {
             'ManagedPolicyName': name+'Policy', 'PolicyDocument': document_policy}}
         resources[key+'Role'] = {'Type': 'AWS::IAM::Role', 'Properties': {
