@@ -1,5 +1,6 @@
 """Explicit post-install baseline enrollment. Never edits systemd, IAM, or application files."""
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -17,7 +18,7 @@ def commission(commit, expected_hash):
     require(re.fullmatch('[0-9a-f]{40}',commit) and re.fullmatch('[0-9a-f]{64}',expected_hash), 'INVALID_BASELINE_IDENTITY')
     config = load_config(require_baseline=False)
     root = Path(config['root'])
-    with deployment_lock(root):
+    with deployment_lock(root, hashlib.sha256(('commission:'+commit+':'+expected_hash).encode()).hexdigest()) as guard:
         require(not (root / 'baseline.json').exists(), 'BASELINE_ALREADY_EXISTS')
         folder = root / 'releases' / f'{commit}-1-1'
         manifest = make_manifest(folder / 'backend.jar', commit, '1', '1')
@@ -32,7 +33,9 @@ def commission(commit, expected_hash):
         host.runtime(release)
         host.database(manifest)
         for check in config['health_checks']: http_check(check)
+        guard.record('MUTATION_INTENT')
         atomic_json(root / 'baseline.json', release)
+        guard.record('VERIFIED')
         print(json.dumps({'status':'BASELINE_ENROLLED','jar_sha256':expected_hash}))
 
 

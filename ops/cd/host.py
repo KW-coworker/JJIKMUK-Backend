@@ -215,6 +215,7 @@ class Host:
         self.database(previous['manifest'])
 
     def record(self, request, status):
+        if getattr(self, 'coordinator', None): self.coordinator.record(status)
         self.journal = {'request': request, 'status': status, 'transition': self.transition}
         atomic_json(self.root / 'runs' / (request['run_key'] + '.json'), self.journal)
 
@@ -257,8 +258,7 @@ class Host:
 
 
 @contextmanager
-def deployment_lock(root):
-    import fcntl
-    with (Path(root) / 'deployment.lock').open('a') as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+def deployment_lock(root, operation_id):
+    from coordination import locked
+    with locked('backend', operation_id) as guard:
+        yield guard

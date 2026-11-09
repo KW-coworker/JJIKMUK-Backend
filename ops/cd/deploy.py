@@ -1,10 +1,12 @@
 """Fixed SSM entry point; no general-purpose command or path parameters."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import uuid
 
 # The installed bin directory is fingerprinted as immutable deployment input.
 # Set before sibling imports, including database_probe's first lazy import.
@@ -53,13 +55,18 @@ def main():
     parser.add_argument('mode', choices=['deploy', 'status'])
     args = parser.parse_args()
     c = load_config()
-    with deployment_lock(c['root']):
+    request = request_from_environment(os.environ) if args.mode == 'deploy' else None
+    operation_id = hashlib.sha256(json.dumps(request,sort_keys=True).encode()).hexdigest() if request else uuid.uuid4().hex*2
+    with deployment_lock(c['root'], operation_id) as guard:
         host = Host(c)
+        host.coordinator = guard
         if args.mode == 'status':
             host.runtime(host.baseline)
+            guard.record('VERIFIED')
             print(json.dumps({'status': 'CURRENT_VERIFIED', 'commit': host.baseline['manifest']['commit']}))
             return
-        result = deploy(host, request_from_environment(os.environ))
+        result = deploy(host, request)
+        if guard.status == 'PREPARING': guard.record(result['status'])
         print(json.dumps({'status': result['status']}))
         if result['status'] != 'SUCCEEDED': raise SystemExit(1)
 
