@@ -15,8 +15,12 @@ STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
 AUTO_ROLE = 'JjikmukBackendAutoDeploy'
-CHATBOT_REPO = 'Alphrit/jjikmuk-CO-WORKER-'
+CHATBOT_REPO = 'KW-coworker/PRE_REPO'
 CHATBOT_REPO_ID = 1206944262
+CHATBOT_OWNER_ID = 304766488
+CHATBOT_OIDC_PREFIX = (f'repo:{CHATBOT_REPO.split("/")[0]}@{CHATBOT_OWNER_ID}/'
+                       f'{CHATBOT_REPO.split("/")[1]}@{CHATBOT_REPO_ID}')
+CHATBOT_OIDC_SUBJECT = CHATBOT_OIDC_PREFIX + ':environment:chatbot-production'
 CHATBOT_ROLE = 'JjikmukChatbotAutoDeploy'
 CHATBOT_DOCUMENT = 'Jjikmuk-ChatbotDeploy-v1'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
@@ -148,7 +152,7 @@ def template():
             ('Read', READ_ROLE, permissions(False), PREFIX + ':ref:refs/heads/main'),
             ('Execute', WRITE_ROLE, permissions(True), PREFIX + ':environment:production'),
             ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production'),
-            ('ChatbotAuto', CHATBOT_ROLE, automatic_backend_permissions('chatbot'), 'repo:'+CHATBOT_REPO+':environment:chatbot-production')]:
+            ('ChatbotAuto', CHATBOT_ROLE, automatic_backend_permissions('chatbot'), CHATBOT_OIDC_SUBJECT)]:
         resources[key+'Policy'] = {'Type': 'AWS::IAM::ManagedPolicy', 'Properties': {
             'ManagedPolicyName': name+'Policy', 'PolicyDocument': document_policy}}
         resources[key+'Role'] = {'Type': 'AWS::IAM::Role', 'Properties': {
@@ -246,11 +250,14 @@ def check_github(commit):
 
 def check_chatbot():
     def get(path):return github(path,CHATBOT_REPO)
-    repo=get('');need(repo['id']==CHATBOT_REPO_ID and repo['default_branch']=='main','CHATBOT_REPOSITORY_CHANGED')
+    repo=get('');need(repo['id']==CHATBOT_REPO_ID and repo['default_branch']=='main'
+        and repo.get('full_name')==CHATBOT_REPO and repo.get('owner',{}).get('id')==CHATBOT_OWNER_ID,
+        'CHATBOT_REPOSITORY_CHANGED')
     branch=get('branches/chatbot');need(branch['protected'] is True,'CHATBOT_BRANCH_PROTECTION_REQUIRED')
     commit=branch['commit']['sha']
     subject=get('actions/oidc/customization/sub')
-    need(subject.get('use_default') is True and subject.get('use_immutable_subject') is False,'CHATBOT_OIDC_SUBJECT_CHANGED')
+    need(subject.get('use_default') is True and subject.get('use_immutable_subject') is True
+        and subject.get('sub_claim_prefix')==CHATBOT_OIDC_PREFIX,'CHATBOT_OIDC_SUBJECT_CHANGED')
     env=get('environments/chatbot-production')
     need(all(r.get('type')=='branch_policy' or (r.get('type')=='wait_timer' and r.get('wait_timer')==0)
         for r in env.get('protection_rules',[])),'CHATBOT_AUTOMATIC_APPROVAL_REQUIRED')

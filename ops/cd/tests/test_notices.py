@@ -33,9 +33,14 @@ class Notices(unittest.TestCase):
             parse_result(self.archive({'commit':'a'*40,'run_id':'124','attempt':'1','status':'SUCCEEDED'}),RUN)
 
     def test_schema_failure_has_actionable_guidance(self):
-        _,body=message('Alphrit/jjikmuk-CO-WORKER-',RUN,
+        _,body=message('KW-coworker/PRE_REPO',RUN,
             {'status':'REJECTED','reason':'CHATBOT_SCHEMA_MISMATCH'},['Alphrit'])
         self.assertIn('DB 구조',body);self.assertIn('자동 SQL 실행 없이',body)
+        self.assertIn('https://github.com/KW-coworker/PRE_REPO/actions/runs/123/',body)
+
+    def test_old_chatbot_name_is_not_a_notification_target(self):
+        with self.assertRaisesRegex(ValueError,'NOTICE_TARGET'):
+            message('Alphrit/jjikmuk-CO-WORKER-',RUN,{},[])
 
     def test_archive_member_names_are_not_extracted(self):
         b=io.BytesIO()

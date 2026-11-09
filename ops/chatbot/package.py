@@ -7,7 +7,7 @@ import stat
 import subprocess
 import zipfile
 
-REPO='Alphrit/jjikmuk-CO-WORKER-'
+REPO='KW-coworker/PRE_REPO'
 REPO_ID=1206944262
 MAX_BYTES=128*1024**2
 

@@ -5,7 +5,7 @@ import re
 import zipfile
 
 TARGETS = {'KW-coworker/JJIKMUK-Backend': ('main','Backend CD','backend'),
-           'Alphrit/jjikmuk-CO-WORKER-': ('chatbot','Chatbot CD','chatbot')}
+           'KW-coworker/PRE_REPO': ('chatbot','Chatbot CD','chatbot')}
 REASONS = {
     'SCHEMA_CHANGE_REQUIRES_SEPARATE_RELEASE': 'DB 변경이 포함돼 있습니다. 서버 담당자가 승인된 DB 작업과 기준 등록을 먼저 진행해야 합니다.',
     'DATABASE_HISTORY_MISMATCH': '서버 DB 이력이 코드 요구사항과 다릅니다. DB 상태를 확인하고 필요한 수동 작업을 요청하세요.',

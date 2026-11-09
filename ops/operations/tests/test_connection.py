@@ -36,7 +36,8 @@ class ConnectionTests(unittest.TestCase):
         self.assertIn('/artifacts/chatbot/*',text)
         self.assertNotIn('/artifacts/backend/',text);self.assertNotIn(HOSTS['ocr'],text)
         t=template()['Resources']['ChatbotAutoRole']['Properties']['AssumeRolePolicyDocument']
-        self.assertIn('repo:Alphrit/jjikmuk-CO-WORKER-:environment:chatbot-production',json.dumps(t))
+        subject=t['Statement'][0]['Condition']['StringEquals']['token.actions.githubusercontent.com:sub']
+        self.assertEqual('repo:KW-coworker@304766488/PRE_REPO@1206944262:environment:chatbot-production',subject)
 
     def test_execute_is_limited_to_named_hosts_and_operations(self):
         for write in (False, True):
