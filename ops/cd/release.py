@@ -57,6 +57,7 @@ def put_receipt(s3, key, value):
 
 
 def report(value):
+    value = {k: os.environ.get(v,'') for k,v in [('commit','GITHUB_SHA'),('run_id','GITHUB_RUN_ID'),('attempt','GITHUB_RUN_ATTEMPT')]} | value
     folder = Path('deployment-results'); folder.mkdir(exist_ok=True)
     (folder / 'result.json').write_text(json.dumps(value, sort_keys=True, indent=2), encoding='utf-8')
     summary = os.environ.get('GITHUB_STEP_SUMMARY')
@@ -105,13 +106,19 @@ def wait_result(ssm, command_id, intent):
             if error_code(error) != 'InvocationDoesNotExist': raise
             result = None
         if result and result['Status'] not in {'Pending', 'InProgress', 'Delayed'}:
-            try: status = json.loads(result.get('StandardOutputContent', ''))['status']
-            except (ValueError, KeyError, TypeError): status = 'UNRECOGNIZED_HOST_RESULT'
-            allowed = {'SUCCEEDED', 'ROLLED_BACK', 'MANUAL_RECOVERY_REQUIRED', 'STOP_REVIEW_REQUIRED'}
+            try:
+                observed = json.loads(result.get('StandardOutputContent', ''))
+                status = observed['status']
+            except (ValueError, KeyError, TypeError):
+                observed = {}; status = 'UNRECOGNIZED_HOST_RESULT'
+            allowed = {'SUCCEEDED', 'ROLLED_BACK', 'MANUAL_RECOVERY_REQUIRED', 'STOP_REVIEW_REQUIRED', 'REJECTED'}
             if status not in allowed: status = 'UNRECOGNIZED_HOST_RESULT'
             if status == 'SUCCEEDED' and (result['Status'] != 'Success' or result.get('ResponseCode') != 0):
                 status = 'UNRECOGNIZED_HOST_RESULT'
-            return {k: intent[k] for k in ('commit', 'run_id', 'attempt')} | {'status': status, 'command_id': command_id}
+            outcome = {k: intent[k] for k in ('commit', 'run_id', 'attempt')} | {'status': status, 'command_id': command_id}
+            from notices import REASONS
+            if observed.get('reason') in REASONS: outcome['reason']=observed['reason']
+            return outcome
         time.sleep(5)
     raise ValueError('STATUS_UNKNOWN_DO_NOT_REDISPATCH')
 
@@ -128,7 +135,8 @@ def collect(c, intent, root):
         require(isinstance(sent,dict) and set(sent)=={'command_id'} and isinstance(sent['command_id'],str) and
                 re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',sent['command_id']), 'COMMAND_ID_MISMATCH')
     if cached:
-        require(isinstance(cached,dict) and set(cached)=={'commit','run_id','attempt','command_id','status'} and
+        require(isinstance(cached,dict) and set(cached) in ({'commit','run_id','attempt','command_id','status'},
+                {'commit','run_id','attempt','command_id','status','reason'}) and
                 all(cached.get(k)==intent[k] for k in ('commit','run_id','attempt')), 'CACHED_RESULT_MISMATCH')
     command_id = None
     for _ in range(12):

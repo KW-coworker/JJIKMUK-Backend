@@ -8,6 +8,25 @@ from database_probe import probe,load_vendor
 
 
 class DatabaseReadOnlyTests(unittest.TestCase):
+    def test_chatbot_schema_reads_metadata_and_rejects_short_policy_column(self):
+        with tempfile.TemporaryDirectory() as td:
+            path=Path(td)/'app.properties'
+            path.write_text('spring.datasource.url=jdbc:mysql://fixed:3306/db\nspring.datasource.username=u\nspring.datasource.password=SENTINEL')
+            config={'schema_only':True,'database':{'properties_file':str(path),'expected_jdbc_url':'jdbc:mysql://fixed:3306/db',
+                'host':'fixed','name':'db','ca_file':'ca'}}
+            for width in (32,256):
+                mysql=MagicMock();conn=mysql.connect.return_value.__enter__.return_value;cur=conn.cursor.return_value.__enter__.return_value
+                cur.fetchmany.side_effect=[[('chatbot_logs','policy_version',1,'varchar('+str(width)+')','YES',width,'ascii_general_ci',None,'')],[]]
+                with patch.dict('sys.modules',{'pymysql':mysql}):
+                    if width==32:
+                        with self.assertRaisesRegex(ValueError,'CHATBOT_SCHEMA_MISMATCH'):probe(config)
+                    else:
+                        result=probe(config);self.assertEqual(set(result),{'schema_sha256'});self.assertEqual(len(result['schema_sha256']),64)
+                        self.assertNotIn('SENTINEL',str(result));conn.rollback.assert_called_once()
+                sql=[call.args[0] for call in cur.execute.call_args_list]
+                self.assertEqual(sql[1],'START TRANSACTION READ ONLY')
+                self.assertTrue(all(s.startswith('SELECT ') and 'information_schema.' in s for s in sql[2:]))
+
     def test_tls_readonly_transaction_and_sql_limit(self):
         with tempfile.TemporaryDirectory() as td:
             p=Path(td)/'app.properties'

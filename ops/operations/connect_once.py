@@ -15,6 +15,10 @@ STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
 AUTO_ROLE = 'JjikmukBackendAutoDeploy'
+CHATBOT_REPO = 'Alphrit/jjikmuk-CO-WORKER-'
+CHATBOT_REPO_ID = 1206944262
+CHATBOT_ROLE = 'JjikmukChatbotAutoDeploy'
+CHATBOT_DOCUMENT = 'Jjikmuk-ChatbotDeploy-v1'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
 DEPLOY_DOCUMENT = 'Jjikmuk-BackendDeploy-v1'
 DOCUMENT_PREFIX = 'JjikmukOperationsApproved-'
@@ -87,25 +91,27 @@ def permissions(write=False):
     return policy(statements)
 
 
-def automatic_backend_permissions():
+def automatic_backend_permissions(component='backend'):
+    if component not in ('backend','chatbot'):raise ValueError('AUTOMATIC_COMPONENT')
     regional = {'StringEquals': {'aws:RequestedRegion': REGION}}
-    doc = f'arn:aws:ssm:{REGION}:{ACCOUNT}:document/' + DEPLOY_DOCUMENT
+    doc = f'arn:aws:ssm:{REGION}:{ACCOUNT}:document/' + (DEPLOY_DOCUMENT if component=='backend' else CHATBOT_DOCUMENT)
     return policy([
         allow('sts:GetCallerIdentity', '*'),
         allow(['rds:DescribeDBSnapshots', 'ssm:GetCommandInvocation', 'ssm:ListCommands'], '*', Condition=regional),
         allow('s3:GetBucketVersioning', f'arn:aws:s3:::{BUCKET}'),
         allow(['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject'],
-              [f'arn:aws:s3:::{BUCKET}/artifacts/backend/*', f'arn:aws:s3:::{BUCKET}/receipts/backend-cd/*']),
+              [f'arn:aws:s3:::{BUCKET}/artifacts/{component}/*', f'arn:aws:s3:::{BUCKET}/receipts/{component}-cd/*']),
         allow('s3:ListBucket', f'arn:aws:s3:::{BUCKET}', Condition={
-            'StringLike': {'s3:prefix': ['receipts/backend-cd/*']}}),
+            'StringLike': {'s3:prefix': [f'receipts/{component}-cd/*']}}),
         allow('ssm:SendCommand', [doc, f'arn:aws:ec2:{REGION}:{ACCOUNT}:instance/{HOSTS["backend"]}'], Condition=regional),
     ])
 
 
 def template():
-    probe = '"""Fixed host metadata only. No environment, credentials, file contents or HTTP/SQL."""\nimport json\nimport shutil\nimport subprocess\nimport sys\nfrom pathlib import Path\n\nSERVICES = (\'jjikmuk-backend.service\', \'food-chatbot.service\', \'jjikmuk-ocr.service\', \'nginx.service\')\nSTATES = {\'active\', \'inactive\', \'failed\', \'activating\', \'deactivating\', \'reloading\', \'maintenance\', \'not-found\'}\n\n\ndef inspect():\n    services = {}\n    for service in SERVICES:\n        result = subprocess.run([\'/usr/bin/systemctl\', \'show\', service, \'--property=ActiveState\', \'--value\'],\n                                capture_output=True, timeout=4, env={\'PATH\': \'/usr/bin:/bin\', \'LANG\': \'C\'})\n        state = result.stdout.decode().strip()\n        services[service] = state if state in STATES else \'unknown\'\n    paths = {}\n    for name in (\'/opt/jjikmuk-cd\', \'/etc/jjikmuk-cd/config.json\', \'/opt/food-chatbot\', \'/opt/ocr-service\'):\n        p = Path(name)\n        if p.is_symlink():\n            paths[name] = {\'symlink\': True}\n        elif p.exists():\n            s = p.lstat(); paths[name] = {\'uid\': s.st_uid, \'gid\': s.st_gid, \'mode\': s.st_mode & 0o777}\n        else:\n            paths[name] = {\'exists\': False}\n    return {\'status\': \'OBSERVED\', \'services\': services, \'paths\': paths,\n            \'free_bytes\': shutil.disk_usage(\'/\').free, \'python\': list(sys.version_info[:3]),\n            \'database_queries\': 0, \'service_restarts\': 0, \'app_writes\': 0}\n\n\nif __name__ == \'__main__\':\n    try:\n        print(json.dumps(inspect()))\n    except Exception:\n        print(\'{"status":"INSPECTION_FAILED"}\')\n        raise SystemExit(1)\n'
+    probe = '"""Fixed service/source metadata. No environment files, credentials, SQL or HTTP."""\nimport hashlib\nimport json\nimport os\nimport shutil\nimport subprocess\nimport sys\nfrom pathlib import Path\n\nSERVICES = {\'backend\': (\'jjikmuk-backend.service\', \'food-chatbot-team.service\', \'nginx.service\'),\n            \'ocr\': (\'docker.service\',)}\n\n\ndef unit(name, prop):\n    result = subprocess.run([\'/usr/bin/systemctl\', \'show\', name, \'--property=\'+prop, \'--value\'],\n                            capture_output=True, timeout=4, env={\'PATH\':\'/usr/bin:/bin\',\'LANG\':\'C\'})\n    if result.returncode: raise ValueError(\'SERVICE_QUERY_FAILED\')\n    return result.stdout.decode().strip()\n\n\ndef source_digest(root):\n    root = root.resolve(strict=True)\n    allowed = (\'/opt/jjikmuk-github/releases/\', \'/opt/food-chatbot/releases/\', \'/opt/jjikmuk-chatbot/releases/\')\n    if not any(str(root).startswith(p) for p in allowed): raise ValueError(\'SOURCE_PATH_UNREVIEWED\')\n    files = sorted((root/\'app\').rglob(\'*.py\'))\n    if not 0 < len(files) <= 2000: raise ValueError(\'SOURCE_FILE_LIMIT\')\n    rows=[]; total=0\n    for path in files:\n        if path.is_symlink() or not path.is_file(): raise ValueError(\'SOURCE_FILE_TYPE\')\n        size=path.stat().st_size; total+=size\n        if size > 2*1024**2 or total > 64*1024**2: raise ValueError(\'SOURCE_BYTES_LIMIT\')\n        rows.append([path.relative_to(root).as_posix(),hashlib.sha256(path.read_bytes()).hexdigest()])\n    return hashlib.sha256(json.dumps(rows,separators=(\',\',\':\')).encode()).hexdigest(),len(rows)\n\n\ndef inspect(kind):\n    if kind not in SERVICES: raise ValueError(\'HOST_KIND_REQUIRED\')\n    checks={name:unit(name,\'ActiveState\')==\'active\' for name in SERVICES[kind]}\n    hashes={};counts={}\n    if kind==\'backend\' and checks[\'food-chatbot-team.service\']:\n        root=Path(unit(\'food-chatbot-team.service\',\'WorkingDirectory\'))\n        try:\n            hashes[\'chatbot_python_sources\'],counts[\'chatbot_python_files\']=source_digest(root)\n            checks[\'chatbot_source_observed\']=True\n        except (ValueError,OSError): checks[\'chatbot_source_observed\']=False\n    return {\'status\':\'OBSERVED\',\'checks\':checks,\'hashes\':hashes,\'counts\':counts,\n            \'free_bytes\':shutil.disk_usage(\'/\').free,\'python\':list(sys.version_info[:3]),\n            \'database_queries\':0,\'service_restarts\':0,\'app_writes\':0}\n\n\nif __name__ == \'__main__\':\n    try:\n        print(json.dumps(inspect(os.environ.get(\'SSM_HostKind\',\'\'))))\n    except Exception:\n        print(\'{"status":"INSPECTION_FAILED"}\')\n        raise SystemExit(1)\n'
     document = {'schemaVersion': '2.2', 'description': 'Fixed metadata inspection; no secrets or changes',
-                'parameters': {}, 'mainSteps': [{'action': 'aws:runShellScript', 'name': 'inspectHost',
+                'parameters': {'HostKind': {'type':'String','allowedValues':['backend','ocr'],
+                    'interpolationType':'ENV_VAR'}}, 'mainSteps': [{'action': 'aws:runShellScript', 'name': 'inspectHost',
                     'inputs': {'timeoutSeconds': '60', 'runCommand': [
                         "python3 -I -S -B - <<'JJIKMUK_INSPECT'\n" + probe + '\nJJIKMUK_INSPECT']}}]}
     resources = {
@@ -134,11 +140,15 @@ def template():
         'BackendDeployDocument': {'Type': 'AWS::SSM::Document', 'Properties': {
             'Name': DEPLOY_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON',
             'Content': json.loads('{\n  "schemaVersion": "2.2",\n  "description": "Deploy one approved immutable JJIKMUK backend JAR using an installed root-owned executor",\n  "parameters": {\n    "ReleaseCommit": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{40}$"},\n    "RunId": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,19}$"},\n    "RunAttempt": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[1-9][0-9]{0,3}$"},\n    "JarSha256": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[0-9a-f]{64}$"},\n    "JarVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"},\n    "ManifestVersion": {"type":"String","interpolationType":"ENV_VAR","allowedPattern":"^[A-Za-z0-9._~+/-]{1,1024}$"}\n  },\n  "mainSteps": [{\n    "action":"aws:runShellScript",\n    "name":"deployBackend",\n    "precondition":{"StringEquals":["platformType","Linux"]},\n    "inputs": {\n      "timeoutSeconds":"1500",\n      "runCommand":["exec /usr/bin/python3 -B -E -s /opt/jjikmuk-cd/bin/deploy.py deploy"]\n    }\n  }]\n}\n')}},
+        'ChatbotDeployDocument': {'Type':'AWS::SSM::Document','Properties':{
+            'Name':CHATBOT_DOCUMENT,'DocumentType':'Command','DocumentFormat':'JSON',
+            'Content':chatbot_document()}},
     }
     for key, name, document_policy, subject in [
             ('Read', READ_ROLE, permissions(False), PREFIX + ':ref:refs/heads/main'),
             ('Execute', WRITE_ROLE, permissions(True), PREFIX + ':environment:production'),
-            ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production')]:
+            ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production'),
+            ('ChatbotAuto', CHATBOT_ROLE, automatic_backend_permissions('chatbot'), 'repo:'+CHATBOT_REPO+':environment:chatbot-production')]:
         resources[key+'Policy'] = {'Type': 'AWS::IAM::ManagedPolicy', 'Properties': {
             'ManagedPolicyName': name+'Policy', 'PolicyDocument': document_policy}}
         resources[key+'Role'] = {'Type': 'AWS::IAM::Role', 'Properties': {
@@ -152,7 +162,17 @@ def template():
             'ReadRoleArn': {'Value': {'Fn::GetAtt': ['ReadRole', 'Arn']}},
             'ExecuteRoleArn': {'Value': {'Fn::GetAtt': ['ExecuteRole', 'Arn']}},
             'BackendAutoRoleArn': {'Value': {'Fn::GetAtt': ['BackendAutoRole', 'Arn']}},
+            'ChatbotAutoRoleArn': {'Value': {'Fn::GetAtt': ['ChatbotAutoRole', 'Arn']}},
             'Bucket': {'Value': {'Ref': 'OperationsBucket'}}}}
+
+
+def chatbot_document():
+    fields={'ReleaseCommit':'[a-f0-9]{40}','RunId':'[1-9][0-9]{0,19}','RunAttempt':'[1-9][0-9]{0,3}',
+        'ArchiveSha256':'[a-f0-9]{64}','ArchiveVersion':'[A-Za-z0-9._~+/-]{1,1024}','ManifestVersion':'[A-Za-z0-9._~+/-]{1,1024}'}
+    return {'schemaVersion':'2.2','description':'Fixed reviewed chatbot code deployment',
+        'parameters':{k:{'type':'String','allowedPattern':v,'interpolationType':'ENV_VAR'} for k,v in fields.items()},
+        'mainSteps':[{'action':'aws:runShellScript','name':'deployChatbot','inputs':{
+            'timeoutSeconds':'1800','runCommand':['/usr/bin/python3 -B /opt/jjikmuk-chatbot/bin/deploy_chatbot.py']}}]}
 
 
 """One human-admin CloudShell setup. No session export; never installs an application."""
@@ -171,8 +191,9 @@ def need(value, code):
     if not value:raise ValueError(code)
 
 
-def github(path):
-    request=urllib.request.Request('https://api.github.com/repos/'+REPO+'/'+path,
+def github(path,repo=REPO):
+    need(repo in (REPO,CHATBOT_REPO),'GITHUB_REPOSITORY_REJECTED')
+    request=urllib.request.Request('https://api.github.com/repos/'+repo+'/'+path,
                                    headers={'User-Agent':'jjikmuk-operations-setup','Accept':'application/vnd.github+json'})
     with urllib.request.urlopen(request,timeout=20) as response:
         need(response.url.startswith('https://api.github.com/'),'GITHUB_REDIRECT')
@@ -223,6 +244,28 @@ def check_github(commit):
             'backend_automatic_without_reviewers':True,'precheck_run_id':matching[0]['id']}
 
 
+def check_chatbot():
+    def get(path):return github(path,CHATBOT_REPO)
+    repo=get('');need(repo['id']==CHATBOT_REPO_ID and repo['default_branch']=='main','CHATBOT_REPOSITORY_CHANGED')
+    branch=get('branches/chatbot');need(branch['protected'] is True,'CHATBOT_BRANCH_PROTECTION_REQUIRED')
+    commit=branch['commit']['sha']
+    subject=get('actions/oidc/customization/sub')
+    need(subject.get('use_default') is True and subject.get('use_immutable_subject') is False,'CHATBOT_OIDC_SUBJECT_CHANGED')
+    env=get('environments/chatbot-production')
+    need(all(r.get('type')=='branch_policy' or (r.get('type')=='wait_timer' and r.get('wait_timer')==0)
+        for r in env.get('protection_rules',[])),'CHATBOT_AUTOMATIC_APPROVAL_REQUIRED')
+    need(env.get('deployment_branch_policy')=={'protected_branches':False,'custom_branch_policies':True},'CHATBOT_BRANCH_POLICY_REQUIRED')
+    branches=get('environments/chatbot-production/deployment-branch-policies')['branch_policies']
+    need(len(branches)==1 and branches[0]['name']=='chatbot' and branches[0].get('type','branch')=='branch','CHATBOT_BRANCH_ONLY_REQUIRED')
+    runs=get('actions/workflows/chatbot-precheck.yml/runs?event=workflow_dispatch&per_page=30')['workflow_runs']
+    matching=[r for r in runs if r['head_sha']==commit and r['head_branch']=='chatbot' and r.get('conclusion')=='success']
+    need(bool(matching),'REAL_CHATBOT_PRECHECK_REQUIRED_BEFORE_CLOUDSHELL')
+    jobs=get('actions/runs/'+str(matching[0]['id'])+'/jobs')['jobs']
+    need(any(j.get('conclusion')=='success' and any(s['name']=='Verify actual chatbot OIDC without AWS'
+        and s.get('conclusion')=='success' for s in j.get('steps',[])) for j in jobs),'REAL_CHATBOT_OIDC_STEP_REQUIRED')
+    return {'repository_id':CHATBOT_REPO_ID,'commit':commit,'precheck_run_id':matching[0]['id']}
+
+
 def aws_clients():
     # Only called by the human in their existing administrator CloudShell login.
     need('CLOUDSHELL' in os.environ.get('AWS_EXECUTION_ENV','').upper(),'HUMAN_CLOUDSHELL_REQUIRED')
@@ -248,16 +291,18 @@ def absent(call,**kwargs):
 
 def preflight(clients,commit):
     gh=check_github(commit)
+    gh['chatbot']=check_chatbot()
     identity=clients['sts'].get_caller_identity();need(identity['Account']==ACCOUNT,'WRONG_AWS_ACCOUNT')
     # All required APIs must be usable by the human's administrator, without changing users.
     iam=clients['iam']; ec2=clients['ec2']; ssm=clients['ssm']; cf=clients['cloudformation']
     absent(cf.describe_stacks,StackName=STACK)
-    for name in (READ_ROLE,WRITE_ROLE,AUTO_ROLE):
+    for name in (READ_ROLE,WRITE_ROLE,AUTO_ROLE,CHATBOT_ROLE):
         absent(iam.get_role,RoleName=name)
         absent(iam.get_policy,PolicyArn=f'arn:aws:iam::{ACCOUNT}:policy/{name}Policy')
     absent(iam.get_role_policy,RoleName=HOST_ROLE,PolicyName='JjikmukOperationsArtifactRead')
     absent(ssm.describe_document,Name=READ_DOCUMENT)
     absent(ssm.describe_document,Name=DEPLOY_DOCUMENT)
+    absent(ssm.describe_document,Name=CHATBOT_DOCUMENT)
     absent(clients['s3'].head_bucket,Bucket=BUCKET,ExpectedBucketOwner=ACCOUNT)
     profiles=iam.get_instance_profile(InstanceProfileName=HOST_ROLE)['InstanceProfile']
     need([r['RoleName'] for r in profiles['Roles']]==[HOST_ROLE],'HOST_ROLE_CHANGED')

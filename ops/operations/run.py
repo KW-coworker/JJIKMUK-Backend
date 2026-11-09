@@ -23,6 +23,13 @@ def context(expected,write=False):
             'request_id':e['OPERATIONS_REQUEST_ID']}
 
 
+def regional_s3(session):
+    from botocore.config import Config
+    return session.client('s3',endpoint_url=f'https://s3.{REGION}.amazonaws.com',
+        config=Config(signature_version='s3v4',s3={'addressing_style':'virtual'},
+            connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1}))
+
+
 def clients(write=False):
     import boto3
     from botocore.config import Config
@@ -31,6 +38,7 @@ def clients(write=False):
         aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],aws_session_token=os.environ['AWS_SESSION_TOKEN'],region_name=REGION)
     cfg=Config(connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1})
     result={s:session.client(s,config=cfg) for s in ('sts','ssm','s3')}
+    result['s3']=regional_s3(session)
     identity=result['sts'].get_caller_identity()
     role=WRITE_ROLE if write else READ_ROLE
     need(identity['Account']==ACCOUNT and identity['Arn'].startswith(f'arn:aws:sts::{ACCOUNT}:assumed-role/{role}/'),
@@ -48,7 +56,7 @@ def load_plan(path,expected_sha):
     plan=json.loads(raw)
     need(set(plan)=={'format','component','operation','approval_id','approved','document'},'PLAN_SCHEMA')
     need(plan['format']==1 and plan['approved'] is True,'PLAN_NOT_APPROVED')
-    need(plan['component'] in ('backend','chatbot','ocr') and
+    need(plan['component'] in ('backend','chatbot','ocr','db') and
          plan['operation'] in ('inspect','install','deploy','verify','rollback'),'PLAN_SCOPE')
     need(re.fullmatch('[A-Z0-9][A-Z0-9_-]{7,79}',plan['approval_id']),'APPROVAL_RECORD_REQUIRED')
     doc=plan['document'];need(doc.get('schemaVersion')=='2.2' and doc.get('parameters')=={},'FIXED_DOCUMENT_REQUIRED')
@@ -82,6 +90,13 @@ def safe_report(raw):
 def save_local(name,data):
     out=Path('operation-results');out.mkdir(exist_ok=True)
     with (out/name).open('x',encoding='utf-8') as f:json.dump(data,f,indent=2)
+
+
+def operation_succeeded(result):
+    """Command completion alone is not application success, including collection."""
+    return (result.get('status') == 'Success' and result.get('response_code') == 0
+            and result.get('report', {}).get('status') in
+            {'OK', 'VERIFIED', 'INSTALLED_DISABLED', 'SUCCEEDED'})
 
 
 def put_once(s3,key,value):
@@ -125,7 +140,9 @@ def wait_result(ssm,cid,target,document,sleep=time.sleep):
                 # detailed service metadata stays in SSM, not in this public repository's logs.
                 observed=json.loads(result['StandardOutputContent'])
                 need(observed.get('status')=='OBSERVED','INSPECTION_FAILED')
-                public['checks']={k:v=='active' for k,v in observed.get('services',{}).items()}
+                public['checks']=observed['checks']
+                public['hashes']=observed.get('hashes', {})
+                public['counts']=observed.get('counts', {})
                 public['free_bytes']=observed['free_bytes']
             else:public['report']=safe_report(result['StandardOutputContent'])
         return public
@@ -138,13 +155,15 @@ def inspect(api):
     need(info['Owner']==ACCOUNT and info['LatestVersion']=='1','INSPECTION_DOCUMENT_CHANGED')
     for component,target in HOSTS.items():
         response=api['ssm'].send_command(InstanceIds=[target],DocumentName=READ_DOCUMENT,DocumentVersion='1',
-            DocumentHash=info['Hash'],DocumentHashType='Sha256',Parameters={},TimeoutSeconds=120,
+            DocumentHash=info['Hash'],DocumentHashType='Sha256',Parameters={'HostKind':[component]},TimeoutSeconds=120,
             MaxConcurrency='1',MaxErrors='0',CloudWatchOutputConfig={'CloudWatchOutputEnabled':False},
             Comment='GitHub fixed metadata inspection '+component)
         cid=response['Command']['CommandId'];save_local('inspect-'+component+'-sent.json',{'command_id':cid})
         result=wait_result(api['ssm'],cid,target,READ_DOCUMENT);save_local('inspect-'+component+'.json',result);results.append(result)
+    completed=all(r['status']=='Success' and r['response_code']==0 for r in results)
+    healthy=completed and all(bool(r.get('checks')) and all(r['checks'].values()) for r in results)
     return {'status':'INSPECTION_FINISHED','hosts':len(results),
-            'success':all(r['status']=='Success' and r['response_code']==0 for r in results)}
+            'observation_completed':completed,'required_services_healthy':healthy,'success':healthy}
 
 
 def execute(api,context_data,plan,plan_hash,target):
@@ -170,8 +189,7 @@ def execute(api,context_data,plan,plan_hash,target):
     result=wait_result(api['ssm'],cid,target,name)
     put_once(api['s3'],'receipts/'+op_id+'/result.json',result);save_local('result.json',result)
     return {'status':'OPERATION_FINISHED','operation_id':op_id,'command_id':cid,
-            'success':result['status']=='Success' and result['response_code']==0 and
-                      result.get('report',{}).get('status') in ('OK','VERIFIED','INSTALLED_DISABLED','SUCCEEDED')}
+            'success':operation_succeeded(result)}
 
 
 def collect(api,op_id):
@@ -191,7 +209,8 @@ def collect(api,op_id):
         else:raise ValueError('COMMAND_HISTORY_LIMIT_NO_RESEND')
         need(len(found)==1,'SEND_OUTCOME_UNCERTAIN_NO_RESEND');cid=found[0]
     result=wait_result(api['ssm'],cid,intent['target'],intent['document']);save_local('collected.json',result)
-    return {'status':'COLLECTED_NO_RESEND','operation_id':op_id,'command_id':cid}
+    return {'status':'COLLECTED_NO_RESEND','operation_id':op_id,'command_id':cid,
+            'success':operation_succeeded(result)}
 
 
 if __name__=='__main__':

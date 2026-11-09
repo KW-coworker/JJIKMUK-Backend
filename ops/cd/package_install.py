@@ -39,6 +39,8 @@ def package(repo,dependencies,jar,config_path,commit,output):
             files.append({'path':name,'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data),'executable':executable})
         add('config.json',config_path.read_bytes())
         for f in sorted((repo/'ops/cd').glob('*.py')):add('bin/'+f.name,f.read_bytes())
+        for name in ('install_coordinator.py','private_runner.py','private_plan.py','connection.py','bootstrap.py'):
+            add('bin/'+name,(repo/'ops/operations'/name).read_bytes())
         add('vendor/'+WHEEL_NAME,(dependencies/WHEEL_NAME).read_bytes())
         with zipfile.ZipFile(dependencies/CLI_NAME) as cli:
             seen=set()

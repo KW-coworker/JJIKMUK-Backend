@@ -1,0 +1,103 @@
+name: Reusable chatbot release
+on:
+  workflow_call:
+    inputs:
+      controller_ref:
+        required: true
+        type: string
+      enabled:
+        required: true
+        type: boolean
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FOOD_CHATBOT_DB_PROVIDER: memory
+      FOOD_CHATBOT_ENABLE_EXTERNAL_AI: 'false'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: KW-coworker/JJIKMUK-Backend
+          ref: ${{ inputs.controller_ref }}
+          path: controller
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.13'
+      - name: Install source-pinned test dependencies
+        run: |
+          python -m pip install --only-binary=:all: -r source/AI/requirements-dev.txt
+      - name: Check dependency consistency
+        run: python -m pip check
+      - name: Test unchanged chatbot source
+        working-directory: source/AI
+        run: python -B -m pytest -q -p no:cacheprovider --junitxml=../../chatbot-tests.xml
+      - name: Package exact Git blob bytes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/chatbot'
+        run: python -B controller/ops/chatbot/chat_release.py package
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/chatbot'
+        with:
+          name: chatbot-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        if: failure()
+        with:
+          name: chatbot-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: chatbot-tests.xml
+          if-no-files-found: ignore
+  deploy:
+    needs: build
+    if: inputs.enabled && github.event_name == 'push' && github.ref == 'refs/heads/chatbot'
+    environment: chatbot-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CHATBOT_CD_ENABLED: 'true'
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: KW-coworker/JJIKMUK-Backend
+          ref: ${{ inputs.controller_ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          name: chatbot-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release
+      - run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/cd/requirements-sdk.lock
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukChatbotAutoDeploy
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 3600
+          role-session-name: chatbot-cd-${{ github.run_id }}
+          retry-max-attempts: 1
+      - name: Validate source, backup and dispatch once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B ops/chatbot/chat_release.py dispatch
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        if: always()
+        with:
+          name: deployment-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: deployment-results/
+          if-no-files-found: ignore
+          retention-days: 14

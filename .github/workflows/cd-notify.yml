@@ -1,0 +1,34 @@
+name: CD failure notification
+on:
+  workflow_run:
+    workflows: [Backend CD]
+    types: [completed]
+    branches: [main]
+  workflow_call:
+    inputs:
+      controller_ref:
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+  issues: write
+concurrency:
+  group: cd-notice-${{ github.event.workflow_run.id }}-${{ github.event.workflow_run.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  notify:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion != 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: KW-coworker/JJIKMUK-Backend
+          ref: ${{ inputs.controller_ref || github.workflow_sha }}
+          persist-credentials: false
+      - name: Record safe failure notice without AWS access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B ops/cd/notify.py

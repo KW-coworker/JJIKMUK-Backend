@@ -34,7 +34,10 @@ class HostTests(unittest.TestCase):
                 self.assertEqual('a'*40,journal['transition']['previous']['manifest']['commit'])
                 self.assertEqual('b'*40,journal['transition']['candidate']['manifest']['commit'])
                 host=Host.__new__(Host); host.root=root
-                with self.assertRaisesRegex(ValueError,'UNRESOLVED_RUN'): host.existing({'run_key':'3-1'})
+                # This fixture lives in a user-owned temporary directory, not an
+                # installed root-owned host tree. Test journal recovery separately.
+                with patch('host.secure'),self.assertRaisesRegex(ValueError,'UNRESOLVED_RUN'):
+                    host.existing({'run_key':'3-1'})
                 current=(root/'current').resolve().name
                 self.assertTrue(current.startswith('a'*40 if stage=='SWITCH_INTENT' else 'b'*40))
 

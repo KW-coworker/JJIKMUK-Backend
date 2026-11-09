@@ -16,7 +16,9 @@ def deploy(host, request):
         host.verify(candidate, old_identity)
         host.commit(candidate)
         host.record(request, 'SUCCEEDED')
-    except Exception:
+    except Exception as error:
+        from notices import REASONS
+        host.failure_reason = str(error) if str(error) in REASONS else 'REVIEW_REQUIRED'
         # A failure after intent may have switched the pointer, including restart failure.
         try:
             host.record(request, 'ROLLBACK_INTENT')
