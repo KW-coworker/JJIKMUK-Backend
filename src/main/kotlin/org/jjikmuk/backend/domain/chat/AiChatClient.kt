@@ -3,6 +3,7 @@ package org.jjikmuk.backend.domain.chat
 import org.jjikmuk.backend.domain.chat.dto.AiChatRequestDto
 import org.jjikmuk.backend.domain.chat.dto.ChatAnalysisContext
 import org.jjikmuk.backend.global.exception.CustomException
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
@@ -43,9 +44,18 @@ class AiChatClient(
     @Qualifier("aiChatRestClient") private val restClient: RestClient,
     @Value("\${chat.ai.url:http://localhost:8000/chat}") private val url: String,
     private val consentSigner: ExternalAiConsentSigner,
-    @Value("\${chatbot.api-token:}") private val apiToken: String
+    @Value("\${chatbot.api-token:}") private val apiToken: String,
+    @Value("\${chatbot.developer-test-auto-consent:false}") private val developerTestAutoConsent: Boolean = false
 ) {
     private val mapper = JsonMapper.builder().findAndAddModules().build()
+
+    init {
+        if (developerTestAutoConsent) {
+            LoggerFactory.getLogger(AiChatClient::class.java).warn(
+                "Developer test policy grants external AI processing for all authenticated chat requests; this is not per-user consent collection."
+            )
+        }
+    }
 
     fun ask(request: AiChatRequestDto, ownerId: Long, externalAiConsent: Boolean): String {
         val endpoint = runCatching { URI(url) }.getOrNull()
@@ -59,7 +69,9 @@ class AiChatClient(
         if (bytes.size > 1024 * 1024) {
             throw CustomException(HttpStatus.PAYLOAD_TOO_LARGE, "AI 요청 크기가 너무 큽니다.", "AI_REQUEST_TOO_LARGE")
         }
-        val proof = consentSigner.headers(bytes, ownerId, externalAiConsent)
+        // Temporary operator-approved developer test policy. Disabled by default.
+        // Keep the original request value and all signature/identity checks intact.
+        val proof = consentSigner.headers(bytes, ownerId, externalAiConsent || developerTestAutoConsent)
         val response = try {
             restClient.post().uri(url).contentType(MediaType.APPLICATION_JSON).accept(MediaType.APPLICATION_JSON)
                 .header(CONTRACT_HEADER, request.analysisContext.contractVersion)
