@@ -1,5 +1,12 @@
 {
-  "source": "User's 2026-11-10 describe-change-set projection; Tags and full response metadata were not included",
+  "source": "User's 2026-11-10 ResourceChange projection plus subsequent six-field metadata read; both are observed AWS responses",
+  "metadata": {
+    "StackId": "arn:aws:cloudformation:ap-northeast-2:076767081522:stack/Jjikmuk-ServerOperations/9d32c4f0-dc5f-11f1-850a-02e7e30b774b",
+    "ChangeSetId": "arn:aws:cloudformation:ap-northeast-2:076767081522:changeSet/ssm-regex-repair-61fb267d7b184b2e3477/30cc9193-55fe-496d-b4a4-018ea2a01908",
+    "ChangeSetName": "ssm-regex-repair-61fb267d7b184b2e3477",
+    "Status": "CREATE_COMPLETE", "ExecutionStatus": "AVAILABLE",
+    "Tags": [{"Key": "Project", "Value": "JJIKMUK"}]
+  },
   "Status": "CREATE_COMPLETE",
   "ExecutionStatus": "AVAILABLE",
   "unchanged_physical_resources_with_tag_only_changes": {
