@@ -46,6 +46,16 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl): return None
 
 
+def read_host_state(path):
+    """Host baselines contain thousands of protected files, unlike small artifacts."""
+    path=Path(path);secure(path)
+    require(path.is_file() and path.stat().st_size<=128*1024**2,'HOST_STATE_LIMIT')
+    with path.open('rb') as stream:raw=stream.read(128*1024**2+1)
+    require(len(raw)<=128*1024**2,'HOST_STATE_LIMIT')
+    value=json.loads(raw);require(type(value) is dict,'HOST_STATE_OBJECT')
+    return value
+
+
 def http_check(check):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
@@ -69,7 +79,7 @@ class Host:
         secure(self.root)
         secure(self.root / 'releases'); secure(self.root / 'runs')
         secure(self.root / 'baseline.json')
-        self.baseline = read_json(self.root / 'baseline.json')
+        self.baseline = read_host_state(self.root / 'baseline.json')
 
     def release_path(self, release):
         m = release['manifest']
@@ -79,11 +89,11 @@ class Host:
 
     def existing(self, request):
         for path in (self.root / 'runs').glob('*.json'):
-            item = read_json(path)
+            item = read_host_state(path)
             require(item['status'] in {'SUCCEEDED', 'ROLLED_BACK'}, 'UNRESOLVED_RUN')
         path = self.root / 'runs' / (request['run_key'] + '.json')
         if path.exists():
-            self.journal = read_json(path)
+            self.journal = read_host_state(path)
             require(self.journal['request'] == request, 'RUN_ID_CONFLICT')
             require(self.journal['status'] == 'SUCCEEDED', 'FAILED_RUN_REQUIRES_NEW_APPROVAL')
             require(self.baseline['manifest']['commit'] == request['commit'] and
@@ -118,18 +128,28 @@ class Host:
 
     def protected(self):
         result = {}
+        file_limit = self.config.get('protected_file_limit',10000)
+        byte_limit = self.config.get('protected_byte_limit',1024**3)
+        require(type(file_limit) is int and 1<=file_limit<=150000 and type(byte_limit) is int
+                and 1<=byte_limit<=16*1024**3,'PROTECTED_LIMIT_CONFIGURATION')
         for raw in self.config['protected_paths']:
             path = Path(raw)
             paths = [path] + sorted(path.rglob('*')) if path.is_dir() else [path]
             # The pinned CLI distribution contains ~7,600 files, all protected.
-            require(len(paths) < 10000, 'PROTECTED_PATH_LIMIT')
+            require(len(paths) < file_limit, 'PROTECTED_PATH_LIMIT')
             total = 0
             for entry in paths:
-                require(not entry.is_symlink(), 'PROTECTED_SYMLINK_UNSUPPORTED')
+                if entry.is_symlink():
+                    # Only an explicitly approved internal venv lib64 alias is supported.
+                    venv=self.config.get('venv','')
+                    require(venv and str(entry)==venv+'/lib64' and os.readlink(entry)=='lib'
+                            and entry.resolve()==Path(venv)/'lib','PROTECTED_SYMLINK_UNSUPPORTED')
+                    secure(Path(venv)/'lib')
+                    s=entry.lstat();result[str(entry)]=[s.st_uid,s.st_gid,s.st_mode,'symlink:lib'];continue
                 s = entry.stat()
                 if entry.is_file():
                     total += s.st_size
-                    require(s.st_size <= 256*1024*1024 and total <= 1024**3,'PROTECTED_BYTES_LIMIT')
+                    require(s.st_size <= 256*1024*1024 and total <= byte_limit,'PROTECTED_BYTES_LIMIT')
                 result[str(entry)] = [s.st_uid, s.st_gid, s.st_mode,
                                       digest(entry) if entry.is_file() else 'directory']
         return result
@@ -215,9 +235,12 @@ class Host:
         self.database(previous['manifest'])
 
     def record(self, request, status):
-        if getattr(self, 'coordinator', None): self.coordinator.record(status)
+        coordinator = getattr(self, 'coordinator', None)
+        terminal = status in {'SUCCEEDED','ROLLED_BACK'}
+        if coordinator and not terminal: coordinator.record(status)
         self.journal = {'request': request, 'status': status, 'transition': self.transition}
         atomic_json(self.root / 'runs' / (request['run_key'] + '.json'), self.journal)
+        if coordinator and terminal: coordinator.record(status)
 
     def activate(self, release):
         folder = self.release_path(release)

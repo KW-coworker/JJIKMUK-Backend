@@ -1,0 +1,66 @@
+name: Private operation upload
+run-name: Private upload at ${{ inputs.expected_sha }} [${{ inputs.request_id }}]
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        type: string
+        required: true
+      request_id:
+        type: string
+        required: true
+      binding:
+        description: Base64 non-secret object digest, size, expiry and ephemeral PUBLIC key
+        type: string
+        required: true
+      confirm:
+        description: User approved this exact private upload; this does not approve execution
+        type: boolean
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: private-upload-${{ inputs.request_id }}
+  cancel-in-progress: false
+jobs:
+  ticket:
+    if: github.ref == 'refs/heads/main' && inputs.confirm
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      OPERATIONS_REQUEST_ID: ${{ inputs.request_id }}
+      OPERATIONS_CONFIRM: ${{ inputs.confirm }}
+      UPLOAD_BINDING: ${{ inputs.binding }}
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements-private.lock
+      - name: Validate approved upload context
+        run: PYTHONPATH=ops/operations python3 -B -c 'import os; from run import context; context(os.environ["EXPECTED_SHA"],True)'
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 900
+          role-session-name: private-upload-${{ github.run_id }}
+          retry-max-attempts: 1
+      - run: python3 -B ops/operations/upload_ticket.py
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: encrypted-upload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: upload-ticket/ticket.json
+          retention-days: 1
+          if-no-files-found: error

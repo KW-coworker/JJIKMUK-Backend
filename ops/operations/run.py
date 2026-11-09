@@ -23,6 +23,13 @@ def context(expected,write=False):
             'request_id':e['OPERATIONS_REQUEST_ID']}
 
 
+def regional_s3(session):
+    from botocore.config import Config
+    return session.client('s3',endpoint_url=f'https://s3.{REGION}.amazonaws.com',
+        config=Config(signature_version='s3v4',s3={'addressing_style':'virtual'},
+            connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1}))
+
+
 def clients(write=False):
     import boto3
     from botocore.config import Config
@@ -31,6 +38,7 @@ def clients(write=False):
         aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],aws_session_token=os.environ['AWS_SESSION_TOKEN'],region_name=REGION)
     cfg=Config(connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1})
     result={s:session.client(s,config=cfg) for s in ('sts','ssm','s3')}
+    result['s3']=regional_s3(session)
     identity=result['sts'].get_caller_identity()
     role=WRITE_ROLE if write else READ_ROLE
     need(identity['Account']==ACCOUNT and identity['Arn'].startswith(f'arn:aws:sts::{ACCOUNT}:assumed-role/{role}/'),
@@ -48,7 +56,7 @@ def load_plan(path,expected_sha):
     plan=json.loads(raw)
     need(set(plan)=={'format','component','operation','approval_id','approved','document'},'PLAN_SCHEMA')
     need(plan['format']==1 and plan['approved'] is True,'PLAN_NOT_APPROVED')
-    need(plan['component'] in ('backend','chatbot','ocr') and
+    need(plan['component'] in ('backend','chatbot','ocr','db') and
          plan['operation'] in ('inspect','install','deploy','verify','rollback'),'PLAN_SCOPE')
     need(re.fullmatch('[A-Z0-9][A-Z0-9_-]{7,79}',plan['approval_id']),'APPROVAL_RECORD_REQUIRED')
     doc=plan['document'];need(doc.get('schemaVersion')=='2.2' and doc.get('parameters')=={},'FIXED_DOCUMENT_REQUIRED')

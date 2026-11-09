@@ -11,7 +11,7 @@ class API:
         self.pr=pr;self.posts=[];self.comments=[];self.artifacts=[]
     def request(self,path,method='GET',body=None):
         if method=='POST':self.posts.append((path,body));return {}
-        if path=='/actions/runs/21':return self.run
+        if path=='/actions/runs/21/attempts/1':return self.run
         if path=='/pulls/7':return {'user':{'login':'author'},'merged_by':{'login':'merger'}}
         raise AssertionError(path)
     def pages(self,path,key=None):
@@ -55,3 +55,11 @@ class NoticeDeliveryTests(unittest.TestCase):
         api.request=request
         with self.assertRaises(OSError):observe(api,{'workflow_run':dict(api.run)})
         self.assertEqual(api.posts,[])
+
+    def test_missing_artifact_storage_does_not_suppress_notice(self):
+        import urllib.error
+        api=API();api.artifacts=[{'id':1,'name':'deployment-result-21-1','expired':False}]
+        def unavailable(_):raise urllib.error.URLError('storage unavailable')
+        api.artifact=unavailable
+        observe(api,{'workflow_run':dict(api.run)})
+        self.assertEqual(len(api.posts),1)

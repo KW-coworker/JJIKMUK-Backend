@@ -58,7 +58,7 @@ class GitHub:
 def observe(api,event):
     repo=api.repo;branch,workflow,component=TARGETS[repo]
     supplied=event['workflow_run']
-    run=api.request('/actions/runs/'+str(supplied['id']))
+    run=api.request('/actions/runs/'+str(supplied['id'])+'/attempts/'+str(supplied['run_attempt']))
     need(run['head_sha']==supplied['head_sha'] and run['run_attempt']==supplied['run_attempt'],'NOTICE_RUN_CHANGED')
     need(run['repository']['full_name']==repo and run['head_repository']['full_name']==repo,'NOTICE_RUN_REPOSITORY')
     if run['head_branch']!=branch or run['event']!='push' or run['name']!=workflow:
@@ -73,7 +73,7 @@ def observe(api,event):
     matches=[a for a in artifacts if a['name']==expected_name and not a['expired']]
     if len(matches)==1:
         try: result=parse_result(api.artifact(matches[0]['id']),run)
-        except (ValueError,KeyError,TypeError,zipfile.BadZipFile): result=None
+        except (ValueError,KeyError,TypeError,zipfile.BadZipFile,urllib.error.URLError,TimeoutError): result=None
     outcome=classify(run,jobs,result)
     prs=api.pages('/commits/'+run['head_sha']+'/pulls')
     prs=[p for p in prs if p.get('merged_at') and p['base']['ref']==branch and p.get('merge_commit_sha')==run['head_sha']]

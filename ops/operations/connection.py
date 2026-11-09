@@ -14,6 +14,10 @@ STACK = 'Jjikmuk-ServerOperations'
 READ_ROLE = 'JjikmukOperationsRead'
 WRITE_ROLE = 'JjikmukOperationsExecute'
 AUTO_ROLE = 'JjikmukBackendAutoDeploy'
+CHATBOT_REPO = 'Alphrit/jjikmuk-CO-WORKER-'
+CHATBOT_REPO_ID = 1206944262
+CHATBOT_ROLE = 'JjikmukChatbotAutoDeploy'
+CHATBOT_DOCUMENT = 'Jjikmuk-ChatbotDeploy-v1'
 READ_DOCUMENT = 'JjikmukOperationsInspect-v1'
 DEPLOY_DOCUMENT = 'Jjikmuk-BackendDeploy-v1'
 DOCUMENT_PREFIX = 'JjikmukOperationsApproved-'
@@ -86,17 +90,18 @@ def permissions(write=False):
     return policy(statements)
 
 
-def automatic_backend_permissions():
+def automatic_backend_permissions(component='backend'):
+    if component not in ('backend','chatbot'):raise ValueError('AUTOMATIC_COMPONENT')
     regional = {'StringEquals': {'aws:RequestedRegion': REGION}}
-    doc = f'arn:aws:ssm:{REGION}:{ACCOUNT}:document/' + DEPLOY_DOCUMENT
+    doc = f'arn:aws:ssm:{REGION}:{ACCOUNT}:document/' + (DEPLOY_DOCUMENT if component=='backend' else CHATBOT_DOCUMENT)
     return policy([
         allow('sts:GetCallerIdentity', '*'),
         allow(['rds:DescribeDBSnapshots', 'ssm:GetCommandInvocation', 'ssm:ListCommands'], '*', Condition=regional),
         allow('s3:GetBucketVersioning', f'arn:aws:s3:::{BUCKET}'),
         allow(['s3:GetObject', 's3:GetObjectVersion', 's3:PutObject'],
-              [f'arn:aws:s3:::{BUCKET}/artifacts/backend/*', f'arn:aws:s3:::{BUCKET}/receipts/backend-cd/*']),
+              [f'arn:aws:s3:::{BUCKET}/artifacts/{component}/*', f'arn:aws:s3:::{BUCKET}/receipts/{component}-cd/*']),
         allow('s3:ListBucket', f'arn:aws:s3:::{BUCKET}', Condition={
-            'StringLike': {'s3:prefix': ['receipts/backend-cd/*']}}),
+            'StringLike': {'s3:prefix': [f'receipts/{component}-cd/*']}}),
         allow('ssm:SendCommand', [doc, f'arn:aws:ec2:{REGION}:{ACCOUNT}:instance/{HOSTS["backend"]}'], Condition=regional),
     ])
 
@@ -134,11 +139,15 @@ def template():
         'BackendDeployDocument': {'Type': 'AWS::SSM::Document', 'Properties': {
             'Name': DEPLOY_DOCUMENT, 'DocumentType': 'Command', 'DocumentFormat': 'JSON',
             'Content': json.loads((Path(__file__).parent/'backend-deploy.ssm.json').read_bytes())}},
+        'ChatbotDeployDocument': {'Type':'AWS::SSM::Document','Properties':{
+            'Name':CHATBOT_DOCUMENT,'DocumentType':'Command','DocumentFormat':'JSON',
+            'Content':chatbot_document()}},
     }
     for key, name, document_policy, subject in [
             ('Read', READ_ROLE, permissions(False), PREFIX + ':ref:refs/heads/main'),
             ('Execute', WRITE_ROLE, permissions(True), PREFIX + ':environment:production'),
-            ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production')]:
+            ('BackendAuto', AUTO_ROLE, automatic_backend_permissions(), PREFIX + ':environment:backend-production'),
+            ('ChatbotAuto', CHATBOT_ROLE, automatic_backend_permissions('chatbot'), 'repo:'+CHATBOT_REPO+':environment:chatbot-production')]:
         resources[key+'Policy'] = {'Type': 'AWS::IAM::ManagedPolicy', 'Properties': {
             'ManagedPolicyName': name+'Policy', 'PolicyDocument': document_policy}}
         resources[key+'Role'] = {'Type': 'AWS::IAM::Role', 'Properties': {
@@ -152,7 +161,17 @@ def template():
             'ReadRoleArn': {'Value': {'Fn::GetAtt': ['ReadRole', 'Arn']}},
             'ExecuteRoleArn': {'Value': {'Fn::GetAtt': ['ExecuteRole', 'Arn']}},
             'BackendAutoRoleArn': {'Value': {'Fn::GetAtt': ['BackendAutoRole', 'Arn']}},
+            'ChatbotAutoRoleArn': {'Value': {'Fn::GetAtt': ['ChatbotAutoRole', 'Arn']}},
             'Bucket': {'Value': {'Ref': 'OperationsBucket'}}}}
+
+
+def chatbot_document():
+    fields={'ReleaseCommit':'[a-f0-9]{40}','RunId':'[1-9][0-9]{0,19}','RunAttempt':'[1-9][0-9]{0,3}',
+        'ArchiveSha256':'[a-f0-9]{64}','ArchiveVersion':'[A-Za-z0-9._~+/-]{1,1024}','ManifestVersion':'[A-Za-z0-9._~+/-]{1,1024}'}
+    return {'schemaVersion':'2.2','description':'Fixed reviewed chatbot code deployment',
+        'parameters':{k:{'type':'String','allowedPattern':v,'interpolationType':'ENV_VAR'} for k,v in fields.items()},
+        'mainSteps':[{'action':'aws:runShellScript','name':'deployChatbot','inputs':{
+            'timeoutSeconds':'1800','runCommand':['/usr/bin/python3 -B /opt/jjikmuk-chatbot/bin/deploy_chatbot.py']}}]}
 
 
 if __name__ == '__main__':

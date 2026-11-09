@@ -45,13 +45,15 @@ def initialize(root=ROOT, owner=0):
 
 
 class Guard:
-    def __init__(self,root,component,operation_id):
+    def __init__(self,root,component,operation_id,recovery_of=None):
         self.root=root;self.component=component;self.operation_id=operation_id
+        self.recovery_of=recovery_of
         self.status='PREPARING';self.record('PREPARING')
 
     def record(self,status):
         need(status in STATES,'COORDINATOR_STATE_REJECTED')
         value={'status':status,'component':self.component,'operation_id':self.operation_id}
+        if self.recovery_of:value['recovery_of']=self.recovery_of
         # Preserve all transition records; no journal deletion or replay.
         history=self.root/'history'/self.operation_id
         history.mkdir(mode=0o700,exist_ok=True)
@@ -79,11 +81,12 @@ def locked(component, operation_id, *, root=None, owner=0, recovery_sha256=None)
                  'UNRESOLVED_HOST_OPERATION')
         else: need(recovery_sha256 is None,'RECOVERY_STATE_CHANGED')
         need(not (root/'history'/operation_id).exists(),'OPERATION_ALREADY_RECORDED_NO_REPLAY')
-        guard=Guard(root,component,operation_id)
+        guard=Guard(root,component,operation_id,recovery_sha256)
         try:
             yield guard
         except BaseException:
-            if guard.status=='PREPARING':guard.record('REJECTED')
+            if recovery_sha256:guard.record('MANUAL_RECOVERY_REQUIRED')
+            elif guard.status=='PREPARING':guard.record('REJECTED')
             raise
         else:
             # An omitted completion is not a successful operation.

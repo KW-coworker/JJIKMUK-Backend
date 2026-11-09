@@ -2,7 +2,7 @@ name: Server Operations Checks
 on:
   pull_request:
     branches: [main]
-    paths: ['ops/operations/**', '.github/workflows/server-operations*.yml']
+    paths: ['ops/operations/**', 'ops/chatbot/**', 'ops/cd/**', '.github/workflows/**']
 permissions:
   contents: read
 jobs:
@@ -12,4 +12,10 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - run: PYTHONPATH=ops/operations python3 -B -m unittest discover -s ops/operations/tests -v
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements-private.lock
+      - run: PYTHONPATH=ops/operations:ops/cd python3 -B -m unittest discover -s ops/operations/tests -v
+      - run: PYTHONPATH=ops/chatbot:ops/cd python3 -B -m unittest discover -s ops/chatbot/tests -v

@@ -75,6 +75,18 @@ def probe(config):
         with conn.cursor() as cur:
             cur.execute('SET SESSION MAX_EXECUTION_TIME=10000')
             cur.execute('START TRANSACTION READ ONLY')
+            if config.get('schema_only') is True:
+                cur.execute('SELECT TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,COLUMN_TYPE,IS_NULLABLE,CHARACTER_MAXIMUM_LENGTH,COLLATION_NAME,COLUMN_DEFAULT,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME,ORDINAL_POSITION LIMIT 4097',(db['name'],))
+                rows=cur.fetchmany(4097)
+                if not rows or len(rows)>4096:raise ValueError('DATABASE_SCHEMA_LIMIT')
+                columns={(r[0],r[1]):r for r in rows}
+                policy=columns.get(('chatbot_logs','policy_version'))
+                if not policy or policy[5] is None or policy[5]<256:raise ValueError('CHATBOT_SCHEMA_MISMATCH')
+                cur.execute('SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART,INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX LIMIT 4097',(db['name'],))
+                indexes=cur.fetchmany(4097)
+                if len(indexes)>4096:raise ValueError('DATABASE_INDEX_LIMIT')
+                conn.rollback()
+                return {'schema_sha256':hashlib.sha256(json.dumps([rows,indexes],sort_keys=True,default=str).encode()).hexdigest()}
             cur.execute('SELECT version, script, checksum, success, type FROM flyway_schema_history ORDER BY installed_rank LIMIT 102')
             rows = cur.fetchmany(102)
             if len(rows) > 101: raise ValueError('DATABASE_HISTORY_LIMIT')

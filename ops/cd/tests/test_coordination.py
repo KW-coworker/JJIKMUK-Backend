@@ -54,3 +54,17 @@ sys.exit(2)
     def test_missing_completion_does_not_turn_green(self):
         with self.assertRaisesRegex(ValueError,'COMPLETION'):
             with c.locked('ocr','8'*64,root=self.root,owner=self.owner):pass
+
+    def test_failed_recovery_never_clears_original_hold(self):
+        with self.assertRaises(RuntimeError):
+            with c.locked('db','9'*64,root=self.root,owner=self.owner) as g:
+                g.record('MUTATION_INTENT');raise RuntimeError('interrupted')
+        old=hashlib.sha256((self.root/'state.json').read_bytes()).hexdigest()
+        with self.assertRaises(RuntimeError):
+            with c.locked('db','a'*64,root=self.root,owner=self.owner,recovery_sha256=old):
+                raise RuntimeError('recovery preflight failed')
+        state=json.loads((self.root/'state.json').read_text())
+        self.assertEqual(state['recovery_of'],old)
+        self.assertEqual(state['status'],'MANUAL_RECOVERY_REQUIRED')
+        with self.assertRaisesRegex(ValueError,'UNRESOLVED_HOST_OPERATION'):
+            with c.locked('backend','b'*64,root=self.root,owner=self.owner):pass
