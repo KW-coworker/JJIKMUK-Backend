@@ -12,6 +12,14 @@ object ProfileInputs {
         val unknown = body.keys - fields - extra
         if (unknown.isNotEmpty()) throw invalid(unknown.first(), "지원하지 않는 프로필 필드입니다.")
     }
+    fun expectedVersion(raw: Any?): Long {
+        val value = when (raw) {
+            is Byte, is Short, is Int, is Long, is java.math.BigInteger -> raw.toString().toLongOrNull()
+            else -> null
+        }
+        return value?.takeIf { it >= 0 }
+            ?: throw invalid("version", "조회한 version을 0 이상의 정수로 전달해주세요.")
+    }
     fun text(body: Map<String, Any?>, field: String, previous: String?): String? {
         if (!body.containsKey(field)) return previous
         val raw = body[field]

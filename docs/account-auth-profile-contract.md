@@ -132,6 +132,8 @@ Android 패키지명과 서명 SHA 등록은 Google Cloud/Firebase 설정에서 
 ```http
 GET /api/users/me
 PUT /api/users/me
+PATCH /api/users/me
+POST /api/users/me/profile/complete
 ```
 
 기존 ID API도 유지한다.
@@ -153,6 +155,10 @@ PUT /api/users/{id}
 
 `PUT`은 전체 교체다. `nickname`은 필수이고 선택 필드는 `null`로 보내면 해제된다. `""`도 선택 필드에서는 `null`로 정규화한다. 이메일·역할·인증 방식은 이 API로 변경할 수 없다.
 
+2026-11-10 변경: `PATCH`·두 `PUT` 경로·프로필 완료 요청에는 조회한 `version`이 필수다.
+누락/잘못된 형식은 400 `VALIDATION_FAILED`, 오래된 버전은 409 `PROFILE_VERSION_CONFLICT`다.
+성공 시 새 version을 반환한다. 상세 정책과 배포 주의사항은 [V19 계약](self-profile-version-contract.md)을 따른다.
+
 응답은 전용 `UserProfileResponse`를 사용하며 다음 값만 포함한다.
 
 ```json
@@ -166,7 +172,10 @@ PUT /api/users/{id}
   "dislikedIngredients": null,
   "role": "USER",
   "authProvider": "LOCAL",
-  "profileCompleted": true
+  "profileCompleted": true,
+  "hasPassword": true,
+  "photoUrl": null,
+  "version": 0
 }
 ```
 

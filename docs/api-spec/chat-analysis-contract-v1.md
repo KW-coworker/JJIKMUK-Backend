@@ -15,7 +15,7 @@ Content-Type: application/json
 ```
 
 - JWT 필수이다. userId를 생략하면 로그인 계정을 사용한다. 호환용 Body userId는 로그인 ID와 같을 때만 허용하며 관리자도 타인 ID를 지정하지 못한다.
-- query 이름·선택 규칙은 상품 API와 같다. 생략/self는 본인, selected는 소유한 가족 및 선택적 본인, none은 개인 조건 미적용이다. includeSelf/familyProfileIds는 selected에서만 허용한다.
+- query 이름·선택 규칙은 상품 API와 같다. V20부터 선택 필드 모두 생략 시 서버 저장 토글(미설정만 본인), 명시적 self는 본인, selected는 소유한 가족 및 선택적 본인, none은 개인 조건 미적용이다. includeSelf/familyProfileIds는 selected에서만 허용한다. [V20 계약](../family-selection-sync-contract.md)을 따른다.
 - selected의 includeSelf 기본값은 false이다. 본인 미포함·빈 가족 목록은 400이다. 가족 ID는 최대 20개의 고유 양수이며 정렬·중복 제거한다. 타인·삭제된 가족은 404이다.
 - 선택 파라미터는 **Query**에만 보낸다. Body의 analysisMode/familyProfileIds/analysisContext 등 지원하지 않는 필드는 400이다. 클라이언트가 임의 조건이나 판정 근거를 주입하지 못한다.
 - Body: message 필수(공백만 불가, 최대 4,000자), barcode 선택(null/생략 가능; 빈 값·앞뒤 공백·255자 초과 불가), chatHistory 선택(기본 []).

@@ -103,10 +103,10 @@ class FrontendContractIntegrationTest @Autowired constructor(
             mvc.perform(get(path).header("Authorization", bearer(issued.token))).andExpect(status().isOk)
         }
         mvc.perform(patch("/api/users/me").header("Authorization", bearer(issued.token)).contentType(MediaType.APPLICATION_JSON)
-            .content("""{"nickname":"${account.nickname}"}"""))
+            .content("""{"version":0,"nickname":"${account.nickname}"}"""))
             .andExpect(status().isOk).andExpect(jsonPath("$.data.profileCompleted").value(false))
         mvc.perform(post("/api/users/me/profile/complete").header("Authorization", bearer(issued.token))
-            .contentType(MediaType.APPLICATION_JSON).content("""{"nickname":"${account.nickname}","allergies":null,"specialDiet":null}"""))
+            .contentType(MediaType.APPLICATION_JSON).content("""{"version":1,"nickname":"${account.nickname}","allergies":null,"specialDiet":null}"""))
             .andExpect(status().isOk).andExpect(jsonPath("$.data.profileCompleted").value(true))
         mvc.perform(get("/api/products/$barcode").header("Authorization", bearer(issued.token))).andExpect(status().isOk)
     }
@@ -242,7 +242,7 @@ class FrontendContractIntegrationTest @Autowired constructor(
         mvc.perform(get("/api/auth/nicknames/availability").param("nickname", account.nickname).header("Authorization", "Bearer bad"))
             .andExpect(status().isUnauthorized).andExpect(jsonPath("$.code").value("AUTH_TOKEN_INVALID"))
         mvc.perform(patch("/api/users/me").header("Authorization", bearer(issued.token)).contentType(MediaType.APPLICATION_JSON)
-            .content("""{"nickname":"${other.nickname}"}"""))
+            .content("""{"version":0,"nickname":"${other.nickname}"}"""))
             .andExpect(status().isConflict).andExpect(jsonPath("$.code").value("NICKNAME_ALREADY_EXISTS"))
     }
 
@@ -347,19 +347,19 @@ class FrontendContractIntegrationTest @Autowired constructor(
     @Test fun `partial edits preserve omitted values reject arrays and never finish onboarding`() {
         val account = user(complete = false); val token = login(account).token
         mvc.perform(patch("/api/users/me").header("Authorization", bearer(token)).contentType(MediaType.APPLICATION_JSON)
-            .content("""{"nickname":"${account.nickname.uppercase()}"}"""))
+            .content("""{"version":0,"nickname":"${account.nickname.uppercase()}"}"""))
             .andExpect(status().isOk).andExpect(jsonPath("$.data.allergies").value("milk"))
             .andExpect(jsonPath("$.data.specialDiet").value("lowSugar"))
             .andExpect(jsonPath("$.data.profileCompleted").value(false))
         mvc.perform(patch("/api/users/me").header("Authorization", bearer(token)).contentType(MediaType.APPLICATION_JSON)
             .content("""{"allergies":[],"profileCompleted":true}"""))
             .andExpect(status().isBadRequest)
-        error("VALIDATION_FAILED") { service.patchProfile(account.id!!, mapOf("allergies" to emptyList<String>())) }
-        assertFailsWith<CustomException> { service.patchProfile(account.id!!, mapOf("nickname" to null)) }
-        val cleared = service.patchProfile(account.id!!, mapOf("allergies" to null, "specialDiet" to ""))
+        error("VALIDATION_FAILED") { service.patchProfile(account.id!!, mapOf("version" to 1, "allergies" to emptyList<String>())) }
+        assertFailsWith<CustomException> { service.patchProfile(account.id!!, mapOf("version" to 1, "nickname" to null)) }
+        val cleared = service.patchProfile(account.id!!, mapOf("version" to 1, "allergies" to null, "specialDiet" to ""))
         assertNull(cleared.allergies); assertNull(cleared.specialDiet); assertFalse(cleared.profileCompleted)
         mvc.perform(post("/api/users/me/profile/complete").header("Authorization", bearer(token)).contentType(MediaType.APPLICATION_JSON)
-            .content("""{"nickname":"${account.nickname}"}"""))
+            .content("""{"version":2,"nickname":"${account.nickname}"}"""))
             .andExpect(status().isOk).andExpect(jsonPath("$.data.profileCompleted").value(true))
         assertTrue(login(account).profileCompleted)
     }

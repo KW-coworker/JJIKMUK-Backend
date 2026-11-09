@@ -120,6 +120,7 @@ class BackendApplicationTests @Autowired constructor(
         val updated = userService.updateUserProfile(
             requireNotNull(user.id),
             UserProfileRequest(
+                version = 0L,
                 nickname = user.nickname,
                 allergies = "egg, 견과류",
                 diseases = null,
@@ -133,6 +134,7 @@ class BackendApplicationTests @Autowired constructor(
             userService.updateUserProfile(
                 requireNotNull(user.id),
                 UserProfileRequest(
+                    version = updated!!.profileVersion,
                     nickname = user.nickname,
                     allergies = "unsupported-allergen",
                     diseases = null,
@@ -146,6 +148,7 @@ class BackendApplicationTests @Autowired constructor(
             userService.updateUserProfile(
                 requireNotNull(user.id),
                 UserProfileRequest(
+                    version = updated!!.profileVersion,
                     nickname = user.nickname,
                     allergies = null,
                     diseases = null,
@@ -159,6 +162,7 @@ class BackendApplicationTests @Autowired constructor(
         val cleared = userService.updateUserProfile(
             requireNotNull(user.id),
             UserProfileRequest(
+                version = updated!!.profileVersion,
                 nickname = user.nickname,
                 allergies = null,
                 diseases = null,

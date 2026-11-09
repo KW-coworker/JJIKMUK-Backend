@@ -4,6 +4,11 @@
 
 ## 1. 공통 규칙
 
+2026-11-10 추가: 가족 토글은 [V20 계정 동기화 계약](../family-selection-sync-contract.md)을 따른다.
+`GET/PUT /api/users/me/analysis-selection`으로 저장하며, 기기 가족 자료는 자동 이관하지 않는다.
+가족 목록의 관계·조건 데이터와 토글 설정은 별개이다. 2026-11-10 로컬 MySQL V18~V20 검증·적용을 완료했다.
+AWS/운영은 미적용이며 [V18~V20 배포 안내](../account-state-v18-v20-deployment.md)를 따른다.
+
 - 모든 아래 API는 `Authorization: Bearer {token}`이 필요하다. 미완료 계정은 `403 PROFILE_INCOMPLETE`다.
 - 가족/좋아요의 소유자는 JWT로 정한다. Body에 userId/ownerId를 보내지 않는다.
 - 관계·이모지·좋아요는 계정별 서버 데이터다. 같은 계정으로 다른 기기에서 조회하면 동일한 상태를 받는다. 실시간 push는 아니므로 화면 복귀·로그인 후 다시 조회한다.
@@ -184,7 +189,8 @@ recent의 page/size 범위는 좋아요 목록과 같다. 잘못된 view/page/si
 
 캐시 화면처럼 상세 GET을 호출하지 않는 독립 행동에서만 필요한 이벤트를 전송한다. barcode/productId 중 하나 이상, 함께 주면 동일 상품이어야 한다.
 
-추가 Body 선택 필드: analysisMode, includeSelf, familyProfileIds(Long 배열). 상품 API와 같은 소유권 검증이며 생략은 self, 전원 OFF는 none이다.
+추가 Body 선택 필드: analysisMode, includeSelf, familyProfileIds(Long 배열). 상품 API와 같은 소유권 검증이다.
+V20부터 세 선택 필드를 모두 생략하면 서버 저장 토글을 사용한다(미설정 계정만 self). 전원 OFF는 none이다.
 
 ```json
 {"productId":12345,"actionType":"DETAIL_VIEW","analysisMode":"none"}
