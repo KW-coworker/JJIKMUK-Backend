@@ -89,6 +89,18 @@ class CatalogEvolutionTest @Autowired constructor(
         assertEquals(2L, snapshots.count())
     }
 
+    @Test fun `nutrition basis changes are captured without rewriting prior observations`() {
+        products.saveAndFlush(Product("nutrition-snapshot", productId = 1, totalWeight = "44g", energyKcal = 500.0))
+        evolution.captureAttributes("before-basis", "BASELINE")
+        jdbc.update("UPDATE products SET nutrition_basis_raw='100g' WHERE product_id=1")
+        assertEquals(1, evolution.captureAttributes("basis-v1", "NUTRITION_BASIS_BACKFILL").changed)
+        val entries = snapshots.findByProductIdOrderByIdDesc(1, PageRequest.of(0, 10))
+        assertEquals("nutrition_basis_raw", entries[0].changedFields)
+        assertContains(entries[0].payloadJson, "\"nutrition_basis_raw\":\"100g\"")
+        assertContains(entries[1].payloadJson, "\"nutrition_basis_raw\":null")
+        assertEquals(0, evolution.captureAttributes("basis-v1", "RETRY").changed)
+    }
+
     @Test fun `events accept ID and preserve snapshot and never retarget retired synthetic barcode`() {
         val owner = users.saveAndFlush(User(email = "catalog@example.invalid", nickname = "catalog", password = "DISABLED"))
         products.saveAndFlush(product("NO_BARCODE_ROW_1", 1))

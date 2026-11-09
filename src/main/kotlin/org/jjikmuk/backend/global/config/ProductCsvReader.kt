@@ -11,7 +11,7 @@ import java.io.InputStreamReader
 import java.io.PushbackReader
 import java.io.Reader
 
-internal enum class ProductCsvColumn(val header: String) {
+internal enum class ProductCsvColumn(val header: String, val optional: Boolean = false) {
     BARCODE("barcode"),
     PRODUCT_NAME("product_name"),
     MANUFACTURER("manufacturer"),
@@ -31,6 +31,7 @@ internal enum class ProductCsvColumn(val header: String) {
     ALLERGY_WARNING("allergy_warning"),
     CLEAN_PRODUCT_NAME("clean_product_name"),
     TOTAL_WEIGHT("total_weight"),
+    NUTRITION_BASIS_RAW("영양성분함량기준량", true),
     CARBS_PERCENT("carbs_percent(%)"),
     PROTEIN_PERCENT("protein_percent(%)"),
     FAT_PERCENT("fat_percent(%)"),
@@ -147,6 +148,7 @@ internal data class ProductCsvRecord(
             allergyWarning = allergyWarning,
             cleanProductName = cleanProductName,
             totalWeight = text(ProductCsvColumn.TOTAL_WEIGHT),
+            nutritionBasisRaw = text(ProductCsvColumn.NUTRITION_BASIS_RAW),
             foodType = foodType,
             foodCategories = text(ProductCsvColumn.FOOD_CATEGORIES),
             allergyClassification = text(ProductCsvColumn.ALLERGY_CLASSIFICATION),
@@ -221,6 +223,7 @@ internal class ProductCsvReader(inputStream: InputStream) : Closeable {
         headerCount = normalizedHeaders.size
 
         val missingHeaders = ProductCsvColumn.entries
+            .filterNot { it.optional }
             .map { it.header }
             .filterNot(normalizedHeaders::contains)
         require(missingHeaders.isEmpty()) {
@@ -266,7 +269,7 @@ internal class SelectiveRfc4180Reader(reader: Reader) : Closeable {
         val maxInputIndex = inputIndices.maxOrNull() ?: -1
         selectedOutputPositionByInput = IntArray(maxInputIndex + 1) { NOT_SELECTED }
         inputIndices.forEachIndexed { outputPosition, inputIndex ->
-            selectedOutputPositionByInput[inputIndex] = outputPosition
+            if (inputIndex >= 0) selectedOutputPositionByInput[inputIndex] = outputPosition
         }
         selectedColumnCount = inputIndices.size
     }

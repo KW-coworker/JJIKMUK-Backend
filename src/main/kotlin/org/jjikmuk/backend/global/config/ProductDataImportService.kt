@@ -892,7 +892,8 @@ class ProductDataImportService(
         statement.setString(index++, product.nutritionDataOrigin.name)
         statement.setNullableDouble(index++, product.nutritionDataConfidence)
         statement.setString(index++, product.dietaryDataOrigin.name)
-        statement.setNullableDouble(index, product.dietaryDataConfidence)
+        statement.setNullableDouble(index++, product.dietaryDataConfidence)
+        statement.setString(index, product.nutritionBasisRaw)
     }
 
     private fun PreparedStatement.setNullableDouble(index: Int, value: Double?) {
@@ -962,7 +963,7 @@ class ProductDataImportService(
             "is_low_sugar", "is_low_sodium", "is_gluten_free", "is_low_calorie",
             "is_low_fat", "is_high_protein", "search_keywords", "product_group_key",
             "allergy_evidence_level", "allergy_data_confidence", "nutrition_data_origin",
-            "nutrition_data_confidence", "dietary_data_origin", "dietary_data_confidence"
+            "nutrition_data_confidence", "dietary_data_origin", "dietary_data_confidence", "nutrition_basis_raw"
         )
 
         private val INSERT_STAGING_SQL = """

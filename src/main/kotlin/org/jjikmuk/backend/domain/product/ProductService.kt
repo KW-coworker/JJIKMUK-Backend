@@ -173,6 +173,7 @@ class ProductService(
         return mapOf(
             "product" to product,
             "nutrientPercents" to nutrientPercents(product),
+            "nutrientPercentsBasis" to "SOURCE_VALUES_LEGACY_NOT_PACKAGE",
             "analysis" to decision
         )
     }
