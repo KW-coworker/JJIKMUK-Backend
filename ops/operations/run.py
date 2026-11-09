@@ -59,6 +59,7 @@ def load_plan(path,expected_sha):
     need(plan['component'] in ('backend','chatbot','ocr','db') and
          plan['operation'] in ('inspect','install','deploy','verify','rollback'),'PLAN_SCOPE')
     need(re.fullmatch('[A-Z0-9][A-Z0-9_-]{7,79}',plan['approval_id']),'APPROVAL_RECORD_REQUIRED')
+    need(not plan['approval_id'].startswith('PENDING_'),'APPROVAL_RECORD_REQUIRED')
     doc=plan['document'];need(doc.get('schemaVersion')=='2.2' and doc.get('parameters')=={},'FIXED_DOCUMENT_REQUIRED')
     need(0<len(doc.get('mainSteps',[]))<=8 and len(canonical(doc))<=60000,'DOCUMENT_SIZE_LIMIT')
     need(all(s.get('action') in ('aws:runShellScript','aws:downloadContent') for s in doc['mainSteps']),
@@ -70,11 +71,15 @@ def load_plan(path,expected_sha):
 def safe_report(raw):
     need(len(raw.encode())<=16384,'REPORT_LIMIT')
     value=json.loads(raw)
-    need(type(value) is dict and set(value)<={'status','checks','hashes','counts','codes'},'REPORT_FIELDS')
+    need(type(value) is dict and set(value)<={'status','checks','hashes','counts','codes','paths'},'REPORT_FIELDS')
     need(value.get('status') in {'OK','VERIFIED','INSTALLED_DISABLED','SUCCEEDED','ROLLED_BACK','STOPPED',
         'MANUAL_RECOVERY_REQUIRED','PREFLIGHT_FAILED','FAILED'},'REPORT_STATUS')
     for name,values in value.items():
         if name=='status':continue
+        if name=='paths':
+            from readiness_paths import checked_paths
+            checked_paths(values)
+            continue
         if name=='codes':
             need(type(values) is list and len(values)<=50 and all(type(v) is str and re.fullmatch('[A-Z][A-Z0-9_]{0,79}',v) for v in values),'REPORT_CODES')
             continue
