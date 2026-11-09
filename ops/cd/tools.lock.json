@@ -1,0 +1,23 @@
+{
+  "platform": "linux-x86_64",
+  "aws_cli": {
+    "version": "2.39.6",
+    "url": "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.39.6.zip",
+    "sha256": "7a121264f2637a3b90767aaf5bdd43ee88b8c925a931d0479fa2ce22b1a2fa76",
+    "bytes": 74824648,
+    "signature_url": "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-2.39.6.zip.sig",
+    "signing_key_fingerprint": "FB5DB77FD5C118B80511ADA8A6310ACC4672475C",
+    "key_source": "https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html",
+    "installation": "/opt/jjikmuk-cd/tools/aws-cli"
+  },
+  "pymysql": {
+    "version": "1.2.3",
+    "filename": "pymysql-1.2.3-py3-none-any.whl",
+    "sha256": "14f1c68e2ed859243ae5ca41ffbe677027fc46bc136a9f0be8a4e928e5e7415a",
+    "bytes": 46740,
+    "source": "https://pypi.org/project/PyMySQL/1.2.3/",
+    "installation": "/opt/jjikmuk-cd/vendor/pymysql-1.2.3-py3-none-any.whl",
+    "interpreter": "/usr/bin/python3.12",
+    "flags": ["-I", "-S", "-B"]
+  }
+}

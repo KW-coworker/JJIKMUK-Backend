@@ -1,0 +1,87 @@
+{
+  "notice": "Companion PR13 creates this dedicated automatic-backend role. Initial setup requires approval. Do not use the broader operations role.",
+  "trust": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Principal": {
+          "Federated": "arn:aws:iam::076767081522:oidc-provider/token.actions.githubusercontent.com"
+        },
+        "Action": "sts:AssumeRoleWithWebIdentity",
+        "Condition": {
+          "StringEquals": {
+            "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+            "token.actions.githubusercontent.com:sub": "repo:KW-coworker/JJIKMUK-Backend:environment:backend-production"
+          }
+        }
+      }
+    ]
+  },
+  "deployment_role_and_boundary": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": "sts:GetCallerIdentity",
+        "Resource": "*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "rds:DescribeDBSnapshots",
+          "ssm:GetCommandInvocation",
+          "ssm:ListCommands"
+        ],
+        "Resource": "*",
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestedRegion": "ap-northeast-2"
+          }
+        }
+      },
+      {
+        "Effect": "Allow",
+        "Action": "s3:GetBucketVersioning",
+        "Resource": "arn:aws:s3:::jjikmuk-operations-076767081522-apne2"
+      },
+      {
+        "Effect": "Allow",
+        "Action": [
+          "s3:GetObject",
+          "s3:GetObjectVersion",
+          "s3:PutObject"
+        ],
+        "Resource": [
+          "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/artifacts/backend/*",
+          "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/receipts/backend-cd/*"
+        ]
+      },
+      {
+        "Effect": "Allow",
+        "Action": "s3:ListBucket",
+        "Resource": "arn:aws:s3:::jjikmuk-operations-076767081522-apne2",
+        "Condition": {
+          "StringLike": {
+            "s3:prefix": [
+              "receipts/backend-cd/*"
+            ]
+          }
+        }
+      },
+      {
+        "Effect": "Allow",
+        "Action": "ssm:SendCommand",
+        "Resource": [
+          "arn:aws:ssm:ap-northeast-2:076767081522:document/Jjikmuk-BackendDeploy-v1",
+          "arn:aws:ec2:ap-northeast-2:076767081522:instance/i-06350403fe0400e1b"
+        ],
+        "Condition": {
+          "StringEquals": {
+            "aws:RequestedRegion": "ap-northeast-2"
+          }
+        }
+      }
+    ]
+  }
+}
