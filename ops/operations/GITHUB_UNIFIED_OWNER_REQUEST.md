@@ -1,20 +1,20 @@
 # 저장소 담당자 설정 요청 — 자동 배포 + 승인된 수동 관리
 
-AWS/서버 설정은 아직 적용하지 않습니다. 준비 PR은 Draft로 유지하며, 완료 보고와 사용자 승인 전 자동 배포 변수를 켜지 마세요. PR11은 계속 닫힌 상태로 둡니다.
+AWS/서버 설정은 아직 적용하지 않습니다. Backend PR17과 AI PR14·15는 병합 완료했습니다. 완료 보고와 초기 적용 승인 전 자동 배포 변수를 켜지 마세요. PR11은 계속 닫힌 상태로 둡니다.
 
 ## KW-coworker/JJIKMUK-Backend
 
 1. Settings → Environments → `backend-production`: 배포 branch **main만**, required reviewers 없음, 대기 시간 없음. 이 환경은 일반 자동 CD용입니다.
 2. `production`: 배포 branch **main만**, required reviewer **fisfin**, Prevent self-review **해제**, 관리자 우회 **차단**. 사용자가 채팅으로 승인한 수동 작업을 Codex가 같은 GitHub 계정으로 승인 제출하기 위한 환경입니다. 팀원 리뷰를 매 배포마다 요구하는 설정이 아닙니다.
 3. Settings → Secrets and variables → Actions → Variables: `BACKEND_CD_ENABLED=false` 유지. 준비/최초 적용 검증 후 별도 승인으로 켭니다.
-4. main 보호: PR 리뷰 인원 0명 유지, `build`와 새 `operations-validation` 검사는 필수로 지정. 실제 PR에 표시된 검사 이름을 선택합니다. 직접 push/강제 push/브랜치 삭제로 검사를 우회하지 않게 합니다.
+4. main 보호: PR 리뷰 인원 0명 유지, `build`와 새 `operations-validation` 검사는 필수로 지정. **`Server Operations Checks`의 `pull_request.paths` 필터 제거 수정이 main에 병합된 뒤** 새 검사를 필수화합니다. 파일 경로 때문에 실행되지 않는 검사를 필수로 지정하면 일반 PR이 Pending에서 멈출 수 있습니다. 실제 PR에 표시된 검사 이름을 선택합니다. 직접 push/강제 push/브랜치 삭제로 검사를 우회하지 않게 합니다.
 
 기존 두 Environment 설정은 최근 조회에서 확인됐습니다. 다시 만드는 요청이 아니라 위 조건 유지 및 새 필수 검사 추가 요청입니다.
 
 ## Alphrit/jjikmuk-CO-WORKER-
 
 1. 최신 Python 원본은 **chatbot 브랜치**입니다. 옛 main의 앱 코드를 chatbot에 합치거나 기본 브랜치를 바꾸지 않습니다.
-2. 준비 PR 하나는 chatbot에 CI/CD 호출 파일을 추가합니다. 별도 작은 PR은 기본 main에 실패 알림 관찰자와 수동 OIDC 사전검사 파일만 추가합니다. GitHub의 `workflow_run`은 기본 브랜치에 관찰자 파일이 있어야 합니다.
+2. PR14는 chatbot에 CI/CD 호출 파일을, PR15는 기본 main에 실패 알림 관찰자와 수동 OIDC 사전검사 파일을 추가했으며 모두 병합됐습니다. GitHub의 `workflow_run`은 기본 브랜치에 관찰자 파일이 있어야 합니다.
 3. Settings → Environments → New environment → **chatbot-production**: required reviewers 없음, wait timer 없음. Deployment branches and tags → Selected branches and tags → Branch **chatbot만** 추가.
 4. Settings → Secrets and variables → Actions → Variables → **CHATBOT_CD_ENABLED=false** 추가. 아직 true로 바꾸지 않습니다.
 5. Settings → Branches 또는 Rules → Rulesets에서 chatbot 보호: 리뷰 인원 0명, 실제 PR의 **cd / build** 검사 필수, 최신 브랜치 반영 요구, 강제 push/삭제 금지. 검사 이름은 CI가 만든 정확한 이름을 사용합니다.

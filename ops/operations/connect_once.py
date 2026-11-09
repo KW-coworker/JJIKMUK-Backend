@@ -193,7 +193,7 @@ def need(value, code):
 
 def github(path,repo=REPO):
     need(repo in (REPO,CHATBOT_REPO),'GITHUB_REPOSITORY_REJECTED')
-    request=urllib.request.Request('https://api.github.com/repos/'+repo+'/'+path,
+    request=urllib.request.Request('https://api.github.com/repos/'+repo+('/'+path if path else ''),
                                    headers={'User-Agent':'jjikmuk-operations-setup','Accept':'application/vnd.github+json'})
     with urllib.request.urlopen(request,timeout=20) as response:
         need(response.url.startswith('https://api.github.com/'),'GITHUB_REDIRECT')

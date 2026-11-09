@@ -2,7 +2,7 @@ name: Server Operations Checks
 on:
   pull_request:
     branches: [main]
-    paths: ['ops/operations/**', 'ops/chatbot/**', 'ops/cd/**', '.github/workflows/**']
+# A required check must run for every main PR, including application/docs-only changes.
 permissions:
   contents: read
 jobs:
