@@ -37,7 +37,8 @@ interface FamilyProfileRepository : JpaRepository<FamilyProfile, Long> {
 }
 
 @Service @Transactional(readOnly = true)
-class FamilyProfileService(private val repository: FamilyProfileRepository, private val users: UserRepository) {
+class FamilyProfileService(private val repository: FamilyProfileRepository, private val users: UserRepository,
+    private val selections: AccountAnalysisSelectionService) {
     fun list(owner: Long) = repository.findAllByOwnerIdOrderById(owner).map(FamilyProfile::response)
     fun owned(owner: Long, id: Long): FamilyProfile = repository.findByIdAndOwnerId(id, owner)
         ?: throw CustomException(HttpStatus.NOT_FOUND, "가족 프로필을 찾을 수 없습니다.", "FAMILY_NOT_FOUND")
@@ -66,8 +67,11 @@ class FamilyProfileService(private val repository: FamilyProfileRepository, priv
 
     @Transactional
     fun delete(owner: Long, id: Long, version: Long) {
+        // Same lock order as toggle writes: deletion and selection are one atomic account change.
+        users.lockById(owner) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", "USER_NOT_FOUND")
         val member = owned(owner, id)
         checkVersion(member, version)
+        selections.removeFamily(owner, id)
         repository.delete(member)
         repository.flush()
     }

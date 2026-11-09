@@ -19,8 +19,16 @@ data class EffectiveAnalysis(val profile: User, val selection: AnalysisSelection
 }
 
 @Service @Transactional(readOnly = true)
-class AnalysisSelectionService(private val users: UserRepository, private val families: FamilyProfileService) {
+class AnalysisSelectionService(private val users: UserRepository, private val families: FamilyProfileService,
+    private val savedSelections: AccountAnalysisSelectionService) {
     fun resolve(ownerId: Long?, mode: String?, includeSelf: Boolean?, familyIds: List<Long>?): EffectiveAnalysis {
+        if (mode == null && includeSelf == null && familyIds == null && ownerId != null) {
+            val saved = savedSelections.get(ownerId)
+            return resolve(ownerId, saved.mode, if (saved.mode == "selected") saved.includeSelf else null,
+                if (saved.mode == "selected") saved.familyProfileIds else null)
+        }
+        if (mode == null && (includeSelf != null || familyIds != null))
+            throw invalid("요청별 분석 대상을 지정할 때는 analysisMode도 전달해주세요.")
         val selectedMode = mode?.lowercase() ?: if (ownerId == null) "none" else "self"
         if (selectedMode !in setOf("self", "selected", "none")) throw invalid("analysisMode는 self, selected, none 중 하나입니다.")
         val ids = familyIds.orEmpty().distinct().sorted()

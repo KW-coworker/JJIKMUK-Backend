@@ -67,7 +67,12 @@ class User(
     var specialDiet: String? = null,
 
     @Column(length = 1000)
-    var dislikedIngredients: String? = null
+    var dislikedIngredients: String? = null,
+
+    // Profile edit revision, independent from JWT tokenVersion and unrelated session/photo writes.
+    // Increment only while holding the owner row lock in UserService.
+    @Column(name = "profile_version", nullable = false)
+    var profileVersion: Long = 0
 ){
     fun updateProfile(
         nickname: String,

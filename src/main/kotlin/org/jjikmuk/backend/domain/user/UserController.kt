@@ -16,7 +16,9 @@ data class UserProfileRequest(
     val allergies: String? = null,
     val diseases: String? = null,
     val specialDiet: String? = null,
-    val dislikedIngredients: String? = null
+    val dislikedIngredients: String? = null,
+    // Kept uncoerced so a JSON string/decimal cannot silently become an integer revision.
+    val version: Any? = null
 )
 
 data class UserProfileResponse(
@@ -31,7 +33,8 @@ data class UserProfileResponse(
     val authProvider: String,
     val profileCompleted: Boolean,
     val hasPassword: Boolean,
-    val photoUrl: String?
+    val photoUrl: String?,
+    val version: Long
 )
 
 fun User.toProfileResponse(): UserProfileResponse = UserProfileResponse(
@@ -46,7 +49,8 @@ fun User.toProfileResponse(): UserProfileResponse = UserProfileResponse(
     authProvider = authProvider.name,
     profileCompleted = profileCompleted,
     hasPassword = authProvider.supportsPassword,
-    photoUrl = if (hasProfilePhoto) "/api/users/me/photo" else null
+    photoUrl = if (hasProfilePhoto) "/api/users/me/photo" else null,
+    version = profileVersion
 )
 
 @RestController
@@ -54,6 +58,11 @@ fun User.toProfileResponse(): UserProfileResponse = UserProfileResponse(
 class UserController(
     private val userService: UserService // 💡 Service 주입
 ) {
+    @ModelAttribute
+    fun preventCaching(response: jakarta.servlet.http.HttpServletResponse) {
+        response.setHeader("Cache-Control", "no-store")
+    }
+
     @GetMapping
     fun getAllUsers(authentication: Authentication): ResponseEntity<*> {
         requireAdmin(authentication)

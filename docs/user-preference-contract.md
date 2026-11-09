@@ -86,9 +86,12 @@ highProtein
 ## 3. 기존 조건을 모두 해제하는 프로필 수정
 
 `PUT /api/users/{id}`는 전체 교체 방식이므로 해제할 필드를 명시적으로 `null`로 보낸다.
+`version`에는 직전 조회 응답의 값을 보낸다. 아래 3은 예시이며 고정값이 아니다.
+오래된 버전은 409이다. [프로필 버전 계약](self-profile-version-contract.md)을 참고한다.
 
 ```json
 {
+  "version": 3,
   "nickname": "사용자",
   "allergies": null,
   "specialDiet": null,

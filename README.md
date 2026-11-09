@@ -19,6 +19,10 @@
 - [계정·인증·프로필 계약(A06~A13)](docs/account-auth-profile-contract.md)
 - [이메일 OTP와 인증 완료 증명](docs/email-verification-api.md)
 - [알레르기·식이조건 저장 계약](docs/user-preference-contract.md)
+- [계정별 채팅 저장 및 FE 연동 계약](docs/account-chat-storage-api.md)
+- [본인 프로필 버전 충돌 방지(V19)](docs/self-profile-version-contract.md)
+- [가족 토글 계정 동기화·선택형 가져오기(V20)](docs/family-selection-sync-contract.md)
+- [V18~V20 로컬 MySQL 적용 결과·서버 배포 절차](docs/account-state-v18-v20-deployment.md)
 - [맞춤 안심 상품 추천 API](docs/safe-product-recommendation-api.md)
 - [상품 통합 검색·분류 API](docs/product-classification-api.md)
 
@@ -26,9 +30,15 @@ Google 로그인에는 서버에서 허용할 Web OAuth Client ID를 `GOOGLE_CLI
 DB·JWT·메일 설정은 `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET`,
 `MAIL_USERNAME`, `MAIL_PASSWORD` 환경변수 또는 로컬 설정 파일로 전달합니다.
 
-이번 버전에는 Flyway V9~V12가 포함됩니다. 운영 적용 전 복원 DB에서 마이그레이션을
-검증해야 합니다. 기존 JWT에는 `tokenVersion`이 없으므로 업데이트 후 재로그인이 필요합니다.
+스키마 변경은 Flyway V1~V20으로 관리합니다. V18은 계정별 채팅방·대화 저장 테이블,
+V19는 본인 프로필 수정 버전, V20은 계정별 분석 대상 토글 저장을 추가하며,
+운영 적용 전 복원 DB에서 마이그레이션을 검증해야 합니다. 구형 JWT에 `tokenVersion`이 없는 경우 재로그인이 필요합니다.
 프로필 `PUT`은 전체 수정이며, 생략한 선택 필드는 초기화됩니다.
+본인 프로필 `PATCH`·`PUT`·완료 요청에는 조회한 `version`이 필수입니다.
+오래된 버전은 `409 PROFILE_VERSION_CONFLICT`이며 FE 연동 후 조율된 배포가 필요합니다.
+가족 토글은 `GET/PUT /api/users/me/analysis-selection`으로 동기화합니다.
+분석 대상 생략 시 저장된 선택을 사용하며, 미설정 계정만 본인 기본값을 사용합니다.
+기기 가족 정보는 자동 이관하지 않습니다. 사용자가 확인한 항목만 명시적으로 추가합니다.
 
 ## 협업
 

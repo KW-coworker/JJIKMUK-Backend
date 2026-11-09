@@ -4,6 +4,9 @@
 
 ## 문서 구성
 
+- [가족 토글 동기화·선택형 가져오기(V20)](../family-selection-sync-contract.md) — 계정별 토글 GET/PUT, 충돌 방지, 자동 이관 금지, FE·AI 연결. 로컬 MySQL V20 검증·적용 완료, 운영 미적용.
+- [V18~V20 검증 결과·배포 안내](../account-state-v18-v20-deployment.md) — 백업/복제/데이터 보존/FE 전환 및 운영 승인 절차.
+
 - [영양성분 기준량 계약](nutrition-basis-v1.md) — 원본 기준량, 100g/100ml/전체 용량 환산, FE·AI 표시 규칙.
 - [V17 배포·기존 상품 기준량 백필](v17-deployment-checklist.md) — 마이그레이션과 데이터 보정 분리, 대상 검증·백업·복구 절차.
 - [OCR 중계 API 및 인증 v2 호환](ocr-proxy.md) — 일반 OCR·계정 제한 실험실, 운영 설정과 JWT/Refresh/로그아웃 호환. 두 경로 추가이며 기존 API 개수 집계와 별도이다.
@@ -71,6 +74,8 @@ Notion에는 통합본의 요청주소별 섹션과 해당 공통 응답 모델�
 | GET | `/api/users/me/family-profiles/{id}` | 가족 조회 | 필수 | v2 추가 |
 | PATCH | `/api/users/me/family-profiles/{id}` | 가족 부분 수정 | 필수 | v2 추가 |
 | DELETE | `/api/users/me/family-profiles/{id}` | 가족 삭제 | 필수 | v2 추가 |
+| GET | `/api/users/me/analysis-selection` | 계정별 분석 대상 토글 조회 | 필수 | V20 추가 |
+| PUT | `/api/users/me/analysis-selection` | version 검증 후 토글 전체 저장 | 필수 | V20 추가 |
 | GET | `/api/users/me/favorites` | 현재 좋아요 목록 | 필수 | 2026-11-02 추가 |
 | GET | `/api/users/me/favorites/{productId}` | 상품 좋아요 상태 | 필수 | 2026-11-02 추가 |
 | PUT | `/api/users/me/favorites/{productId}` | 좋아요 등록 | 필수 | 2026-11-02 추가 |

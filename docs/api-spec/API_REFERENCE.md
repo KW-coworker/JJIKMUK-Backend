@@ -1,5 +1,10 @@
 # 찍먹 Backend 전체 API 명세서
 
+> 2026-11-10: [V20 가족 토글 동기화·선택형 가져오기](../family-selection-sync-contract.md)를 추가했다.
+> GET/PUT `/api/users/me/analysis-selection`으로 토글을 계정별 저장하며, 분석 대상 생략 시 저장 선택을 사용한다.
+> 미설정 계정만 본인 기본값이다. 기기 가족 자료를 자동 이관하지 않는다. 로컬 MySQL V18~V20 검증·적용 완료,
+> AWS/운영 적용은 별도이다. [검증·배포 안내](../account-state-v18-v20-deployment.md)를 따른다.
+
 > 2026-11-02: [가족 표시 정보·좋아요·최근 본 상품](family-favorites-recent-v1.md) 계약을 추가했다. 가족 relation/emoji, 계정별 favorites 4개 API, 기존 이력 view=recent 및 가족/none 자동 기록은 이 문서가 우선이다. 로컬 V16 적용·검증 완료, AWS/운영 DB 및 서버 배포는 별도다.
 
 > 2026-11-01 인증 후속: `403 PROFILE_INCOMPLETE` 서버 제한, `POST /api/auth/logout/refresh`, JWT 본인 제외 닉네임 사전 확인을 추가했다. [인증 v2](frontend-auth-integration-v2.md)의 허용 API/FE 처리 규칙을 따른다. 운영 배포 완료를 의미하지 않는다.
@@ -77,6 +82,8 @@
 | GET | `/api/users/me/family-profiles/{id}` | 가족 조회 |
 | PATCH | `/api/users/me/family-profiles/{id}` | 가족 수정 |
 | DELETE | `/api/users/me/family-profiles/{id}` | 가족 삭제 |
+| GET | `/api/users/me/analysis-selection` | 계정별 분석 대상 토글 조회 (V20) |
+| PUT | `/api/users/me/analysis-selection` | version 검증 후 토글 전체 저장 (V20) |
 | GET | `/api/users/me/favorites` | 현재 좋아요 목록 (V16) |
 | GET | `/api/users/me/favorites/{productId}` | 좋아요 상태 (V16) |
 | PUT | `/api/users/me/favorites/{productId}` | 좋아요 등록 (V16) |

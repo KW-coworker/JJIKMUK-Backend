@@ -101,7 +101,7 @@ class CoreUserFlowHttpIntegrationTest {
     @Test @Order(1) fun `signup profile family search capacity recommendation history chat refresh logout`() {
         val session = register(); val token = session.token
         request("GET", "/api/users/me", token = token)
-        request("PATCH", "/api/users/me", mapOf("specialDiet" to "vegan", "allergies" to "milk"), token)
+        request("PATCH", "/api/users/me", mapOf("version" to 0, "specialDiet" to "vegan", "allergies" to "milk"), token)
         val family = request("POST", "/api/users/me/family-profiles", mapOf("nickname" to "테스트가족", "allergies" to "soy"), token, 201)
         val selected = "?analysisMode=selected&includeSelf=true&familyProfileIds=${family.at("/data/id").asLong()}"
         val search = request("GET", "/api/products/search?keyword=${URLEncoder.encode("테스트쌀칩", "UTF-8")}", token = token)
@@ -151,7 +151,7 @@ class CoreUserFlowHttpIntegrationTest {
 
     @Test @Order(2) fun `unknown and contradictory vegan flags are not safe recommendations`() {
         val token = register().token
-        request("PATCH", "/api/users/me", mapOf("specialDiet" to "vegan"), token)
+        request("PATCH", "/api/users/me", mapOf("version" to 0, "specialDiet" to "vegan"), token)
         val unknown = request("GET", "/api/products/9900000000005", token = token)
         assertEquals("UNKNOWN", unknown.at("/data/analysis/status").asText())
         assertEquals("UNKNOWN", unknown.at("/data/analysis/dietConstraints/status").asText())
@@ -219,7 +219,7 @@ class CoreUserFlowHttpIntegrationTest {
         val blocked = request("GET", "/api/products/9900000000001?analysisMode=none", token = session.token, expected = 403)
         assertEquals("PROFILE_INCOMPLETE", blocked["code"].asText())
         request("GET", "/api/products/filters", token = session.token)
-        request("POST", "/api/users/me/profile/complete", mapOf("nickname" to nickname), session.token)
+        request("POST", "/api/users/me/profile/complete", mapOf("version" to me.at("/data/version").asLong(), "nickname" to nickname), session.token)
         request("GET", "/api/products/9900000000001", token = session.token)
         val loggedOut = request("POST", "/api/auth/logout/refresh", mapOf("refreshToken" to session.refresh), "stale-access")
         assertTrue(loggedOut.at("/data/serverTokenRevoked").asBoolean())

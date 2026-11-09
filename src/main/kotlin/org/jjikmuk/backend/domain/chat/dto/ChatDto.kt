@@ -12,11 +12,14 @@ data class ChatRequestDto(
     val chatHistory: List<ChatHistoryDto?> = emptyList(),
     val chat_history: List<ChatHistoryDto?>? = null,
     val profile: ChatProfileInput? = null,
-    // null/omitted preserves the legacy default; [] explicitly means no selected people.
+    // null/omitted uses the account's saved selection; [] is an explicit request-only all-OFF override.
     val profiles: List<ChatProfileInput?>? = null,
     val product: ChatProductInput? = null,
     @field:tools.jackson.databind.annotation.JsonDeserialize(using = ConsentBooleanDeserializer::class)
-    val externalAiConsent: Boolean = false
+    val externalAiConsent: Boolean = false,
+    // Both are required for opt-in account-owned persistence. Omit both for the legacy API.
+    val conversationId: Long? = null,
+    val clientMessageId: String? = null
 ) {
     // Do not silently ignore body-level selection or forged server decisions.
     @JsonAnySetter

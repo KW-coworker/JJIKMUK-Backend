@@ -1,5 +1,8 @@
 # 프론트 인증·프로필 연동 변경 계약 v2
 
+2026-11-10 추가: 본인 프로필 수정에 `version`이 필수가 되었다.
+V19 배포 전 FE 변경이 필요하며 [프로필 버전 계약](../self-profile-version-contract.md)을 함께 따른다.
+
 > 로그인 전용 릴리스 검증(2026-11-01): `fix/auth-login-hardening`은 팀 main 기준으로 인증 변경만 포함한다. 전체 **289개 중 283개 통과 / 기존 조건부 미실행 6개 / 실패 0개**, `test bootJar` 성공. 아래 단계별 통계는 당시 개발 원본의 기록이며, 상품 변경까지 포함한 291개 결과와는 범위가 다르다. [서버·FE 전달서](../auth-login-release-20261101.md)를 함께 확인한다. 서버 배포는 수행하지 않았다.
 
 기준: 2026-11-01 로컬 구현. 10월 23일 인증 v2에 FE 통합 협의안의 미완료 계정 접근 제한, Refresh 기반 로그아웃, 본인 닉네임 사전 확인을 반영했다. **운영 배포·DB 마이그레이션 완료를 의미하지 않는다.** 기존 `auth-users.md`, `API_REFERENCE.md`의 인증/사진/가족/분석 대상 설명과 충돌하면 이 문서가 우선이다. 그 외 상품 검색·용량·이력 계약은 기존 문서를 따른다.
@@ -14,7 +17,7 @@
 | Google 완료 | 별도 최종 완료 API만 profileCompleted=true 설정. 미완료 세션은 허용 API 외 403 | 서버 제한은 확정. 아래 허용 범위와 공개 상품 조회 유지 정책 확인 필요 |
 | 새 비밀번호 | ASCII 8~72자, 영문/숫자 필수. 특수문자 선택, 한글/공백/기타 Unicode 불가 | FE 합의 확정. 기존 비밀번호 로그인에는 새 생성 규칙을 적용하지 않음 |
 | 사진 | 인증된 본인만 접근하는 DB 저장. JPEG/PNG, 2MiB, 최대 4096×4096 | 장기적으로 비공개 객체 저장소로 옮길지, 크기/해상도/보존 정책 |
-| 가족 | 계정별 서버 CRUD, 최대 20명, version 충돌 검사 | 인원/이름 제한, 기존 로컬 자료 이전, 선택 상태 동기화 |
+| 가족 | 계정별 서버 CRUD, 최대 20명, version 충돌 검사. V20 토글 서버 저장 | 자동 이관 금지, 확인한 항목만 추가하는 FE 화면 및 토글 연동 |
 | 복수 분석 | 선택한 사람들의 제한을 합집합으로 적용. 식단은 모두 충족해야 함 | 충돌 조건/후보 부족 안내, 일반 추천 UI 문구 |
 
 임시값은 이미 최종 합의된 정책으로 간주하지 않는다. Access 수명은 `JWT_ACCESS_EXPIRATION_MS`(기본 900000), Refresh 수명은 `AUTH_REFRESH_LIFETIME_DAYS`(기본 30, 허용 1~90)로 설정한다. 앱은 상수보다 서버의 expiresAt/refreshExpiresAt을 사용한다.
@@ -309,10 +312,13 @@ POST /api/users/me/profile/complete
 Authorization: Bearer <access-token>
 Content-Type: application/json
 
-{"nickname":"찍먹사용자","allergies":"egg,wheat","specialDiet":"lactoOvoVegetarian,lowSugar,highProtein"}
+{"version":0,"nickname":"찍먹사용자","allergies":"egg,wheat","specialDiet":"lactoOvoVegetarian,lowSugar,highProtein"}
 ```
 
-필수는 nickname이고 나머지는 선택이다. 선택하지 않아도 완료 가능하다. 이 요청은 전체 프로필 제출이며 선택 필드를 생략하면 비운다. 부분 저장은 PATCH를 사용한다. 완료 응답은 `{"message":"추가 프로필 입력 완료","data":{...최신 프로필...,"profileCompleted":true}}`다. 성공 응답을 잃으면 GET me로 확인하며, 다시 동일 최종 프로필을 제출해도 완료 상태는 true다.
+필수는 nickname과 조회한 version이며 나머지는 선택이다. 예시 version=0은 고정값이 아니다.
+선택 조건이 없어도 완료 가능하다. 이 요청은 전체 프로필 제출이며 선택 필드를 생략하면 비운다.
+부분 저장은 PATCH를 사용한다. 완료 응답은 `{"message":"추가 프로필 입력 완료","data":{...최신 프로필...,"profileCompleted":true,"version":1}}`다.
+성공 응답을 잃으면 GET me로 확인한다. 같은 예전 version으로 재전송하면 409이며 자동 덮어쓰기는 하지 않는다.
 
 ## 5. 프로필 조회·부분 수정
 
@@ -324,22 +330,27 @@ GET/PATCH/PUT/완료 응답의 data:
   "allergies": "egg,wheat", "diseases": null,
   "specialDiet": "lactoOvoVegetarian,lowSugar,highProtein", "dislikedIngredients": null,
   "role": "USER", "authProvider": "LOCAL", "profileCompleted": true,
-  "hasPassword": true, "photoUrl": "/api/users/me/photo"
+  "hasPassword": true, "photoUrl": "/api/users/me/photo", "version": 0
 }
 ```
 
 사진이 없으면 photoUrl=null이다. photoUrl은 공개 Firebase URL이 아니라 현재 로그인 계정용 상대 경로다. 관리자용 타인 프로필 응답에서는 이 경로를 그 타인의 사진 URL로 해석하지 않는다.
 
-PATCH 허용 필드는 nickname/allergies/diseases/specialDiet/dislikedIngredients뿐이다.
+PATCH 허용 필드는 nickname/allergies/diseases/specialDiet/dislikedIngredients와 필수 version이다.
+version은 현재 조회값인 0 이상의 JSON 정수여야 한다. 각 성공마다 1 증가하며, 토큰 버전과는 별개이다.
 
 | 전송 | 의미 |
 |---|---|
-| `{ "nickname":"새닉네임" }` | 닉네임만 바꾸고 기존 조건 유지 |
-| `{ "allergies":null, "specialDiet":"" }` | 해당 선택 조건 전체 해제 |
-| `{}` | 변경 없음, 최신 프로필 반환 |
-| `{ "nickname":null }` 또는 빈 nickname | 400, 필수 닉네임을 비울 수 없음 |
-| `{ "allergies":[] }` | 400, 문자열/null 계약이며 배열 미지원 |
-| `{ "profileCompleted":true }` | 400, 클라이언트가 완료 상태 직접 변경 불가 |
+| `{ "version":0, "nickname":"새닉네임" }` | 버전 일치 시 닉네임만 바꾸고 기존 조건 유지 |
+| `{ "version":0, "allergies":null, "specialDiet":"" }` | 버전 일치 시 해당 선택 조건 전체 해제 |
+| `{ "version":0 }` | 버전 일치 시 값은 그대로이고 version은 1 증가 |
+| `{}` / version 누락·null·문자열·소수 | 400 VALIDATION_FAILED, field=version |
+| `{ "version":0, "nickname":null }` 또는 빈 nickname | 400, 필수 닉네임을 비울 수 없음 |
+| `{ "version":0, "allergies":[] }` | 400, 문자열/null 계약이며 배열 미지원 |
+| `{ "version":0, "profileCompleted":true }` | 400, 클라이언트가 완료 상태 직접 변경 불가 |
+
+표의 version=0은 요청별 예시다. 성공 응답의 새 version을 유지하고, 409 PROFILE_VERSION_CONFLICT에서는
+GET me로 재조회 후 변경사항을 사용자에게 확인한다. 다른 필드를 수정하더라도 예전 전체 버전이면 충돌이다.
 
 PATCH/기존 PUT은 완료 상태를 바꾸지 않는다. 기존 PUT은 전체 교체이므로 생략한 선택 필드를 비운다. 공개 닉네임 중복 확인은 현재 사용 중인 이름에 available=false를 반환할 수 있지만, 본인 수정 시 본인 닉네임 유지/대소문자 변경은 허용한다. 사전 확인은 예약이 아니며 최종 저장에서 다시 검사한다.
 
@@ -389,7 +400,7 @@ Content-Type: application/json
 - DELETE는 `?version=현재버전`이 필수다. 성공 200 메시지다. 삭제 후 재조회/재삭제는 404다.
 - 다른 소유자/삭제된 ID는 404 FAMILY_NOT_FOUND, 오래된 version은 409 PROFILE_VERSION_CONFLICT다. 누락/잘못된 version은 400이다.
 - 다른 기기에서 변경한 경우 GET으로 다시 읽고 병합을 사용자에게 확인한 뒤 최신 version으로 제출한다. 자동으로 덮어쓰지 않는다.
-- 본인 프로필 PATCH는 필드 단위 마지막 저장 우선이며 가족처럼 version을 요구하지 않는다. 같은 필드를 여러 기기에서 동시 수정할 때 본인도 충돌 UI가 필요한지는 추가 합의 대상이다.
+- 본인 프로필 PATCH·PUT·완료에도 version이 필수다. 가족의 version과는 독립된 값이며 본인 GET 응답에서 가져온다.
 - 기존 로컬 가족 데이터는 소유자가 확인되지 않았으므로 자동 업로드·삭제하지 않는다. 분석 대상 선택 상태는 이번에 서버 저장하지 않는다.
 
 ## 8. 상품·추천 분석 대상 계약
@@ -405,7 +416,7 @@ Content-Type: application/json
 
 | query | 값/의미 |
 |---|---|
-| analysisMode 생략 | 로그인은 self, 공개 비로그인 조회는 none |
+| 분석 선택 필드 모두 생략 | V20: 로그인은 서버 저장 토글 적용(미설정만 self), 공개 비로그인 조회는 none |
 | analysisMode=self | 본인 조건, includeSelf/familyProfileIds는 보내지 않음 |
 | analysisMode=selected | 선택한 가족 + 선택적으로 본인 |
 | includeSelf | selected에서만 사용. 기본 false |
@@ -490,7 +501,7 @@ DB 일시 장애로 JWT 확인에 실패하면 `503 AUTH_SERVICE_UNAVAILABLE`을
 1. 확정: Access 15분 + 최초 로그인부터 Refresh 30일 고정. 배포 서버 설정을 대조한다.
 2. 확정: Refresh 갱신 응답 유실 시 재로그인. 새 로그아웃 API는 폐기 전용이므로 갱신 재시도와 구분한다.
 3. 확정: 비밀번호 ASCII 8~72자 영문/숫자 필수·특수문자 선택, 기존 닉네임 규칙. 본인 사전 확인 예외는 JWT를 전달한다.
-4. 가족 최대 20명·이름 규칙·선택 상태 동기화·기존 로컬 자료 이전·본인 프로필 동시 수정 정책.
+4. 가족 토글은 V20 계정별 서버 저장으로 확정했다. 기존 기기 자료는 자동 이관하지 않고 확인한 항목만 추가한다. [가족 토글·가져오기 계약](../family-selection-sync-contract.md)의 FE 화면 및 배포 시점을 조율한다. 본인 프로필은 V19 버전 검사로 확정하며 충돌 안내 UX를 적용한다.
 5. 사진 DB 저장을 초기 방식으로 채택할지, 비공개 객체 저장소와 URL 만료 방식으로 바꿀지.
 6. 서버 제한은 확정·구현. 메타데이터/사진/탈퇴를 포함한 허용 목록과 익명 상품 조회 유지 여부, 별도 AI/OCR 접근 제한을 추가 확인한다.
 7. 가족/none 일반 추천의 UI, 가족 이력 저장, 챗봇 분석 대상 전달까지 이번 연동 범위에 넣을지.

@@ -39,6 +39,14 @@ class ChatService(
     fun askToAiChatbot(request: ChatRequestDto, ownerId: Long,
         analysisMode: String? = null, includeSelf: Boolean? = null, familyProfileIds: List<Long>? = null
     ): String {
+        return askPrepared(prepareRequest(request, ownerId, analysisMode, includeSelf, familyProfileIds),
+            ownerId, request.externalAiConsent)
+    }
+
+    // Local validation/resolution only. In particular, this never calls the external AI service.
+    fun prepareRequest(request: ChatRequestDto, ownerId: Long,
+        analysisMode: String? = null, includeSelf: Boolean? = null, familyProfileIds: List<Long>? = null
+    ): AiChatRequestDto {
         // Never use a client-supplied account ID to fetch private conditions.
         if (request.userId != null && request.userId != ownerId) {
             throw CustomException(HttpStatus.FORBIDDEN, "다른 사용자의 조건으로 질문할 수 없습니다.", "ACCESS_DENIED")
@@ -127,8 +135,11 @@ class ChatService(
             )
         )
         // No SCAN writes, and no transaction held across the external AI request.
-        return aiClient.ask(aiRequest, ownerId, request.externalAiConsent)
+        return aiRequest
     }
+
+    fun askPrepared(request: AiChatRequestDto, ownerId: Long, externalAiConsent: Boolean): String =
+        aiClient.ask(request, ownerId, externalAiConsent)
 
     private fun validate(request: ChatRequestDto) {
         fun invalid(field: String): Nothing = throw CustomException(HttpStatus.BAD_REQUEST,

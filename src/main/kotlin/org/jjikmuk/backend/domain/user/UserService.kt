@@ -22,7 +22,9 @@ class UserService(
     private val linkGrants: org.jjikmuk.backend.domain.auth.GoogleLinkGrantRepository,
     private val families: FamilyProfileRepository,
     private val photos: ProfilePhotoRepository,
-    private val favorites: ProductFavoriteRepository
+    private val favorites: ProductFavoriteRepository,
+    private val chats: org.jjikmuk.backend.domain.chat.ChatConversationStore,
+    private val analysisSelections: AccountAnalysisSelectionService
 ) {
     @Transactional(readOnly = true)
     fun getAllUsers(): List<User> {
@@ -64,9 +66,15 @@ class UserService(
 
     @Transactional
     fun updateUserProfile(id: Long, request: UserProfileRequest): User? {
+        val expectedVersion = ProfileInputs.expectedVersion(request.version)
         val user = userRepository.lockById(id) ?: return null
+        checkProfileVersion(user, expectedVersion)
+        return applyProfile(user, request)
+    }
+
+    private fun applyProfile(user: User, request: UserProfileRequest, complete: Boolean = false): User {
         val nickname = AccountInputPolicy.normalizeNickname(request.nickname)
-        if (userRepository.existsByNicknameIgnoreCaseAndIdNot(nickname, id)) {
+        if (userRepository.existsByNicknameIgnoreCaseAndIdNot(nickname, requireNotNull(user.id))) {
             throw CustomException(
                 HttpStatus.CONFLICT,
                 "이미 사용 중인 닉네임입니다.",
@@ -81,6 +89,9 @@ class UserService(
             specialDiet = normalizeSpecialDiet(request.specialDiet),
             dislikedIngredients = normalizeDelimited(request.dislikedIngredients, "기피 식재료")
         )
+        if (complete) user.profileCompleted = true
+        // One accepted edit = one revision, including a no-op or explicit profile completion.
+        user.profileVersion = Math.addExact(user.profileVersion, 1)
         return try {
             userRepository.saveAndFlush(user)
         } catch (_: DataIntegrityViolationException) {
@@ -95,22 +106,32 @@ class UserService(
 
     @Transactional
     fun patchProfile(id: Long, body: Map<String, Any?>): User {
-        ProfileInputs.validateKeys(body)
+        ProfileInputs.validateKeys(body, setOf("version"))
+        val expectedVersion = ProfileInputs.expectedVersion(body["version"])
         val user = userRepository.lockById(id) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
+        checkProfileVersion(user, expectedVersion)
         val request = UserProfileRequest(
             nickname = requireNotNull(ProfileInputs.text(body, "nickname", user.nickname)),
             allergies = ProfileInputs.text(body, "allergies", user.allergies),
             diseases = ProfileInputs.text(body, "diseases", user.diseases),
             specialDiet = ProfileInputs.text(body, "specialDiet", user.specialDiet),
-            dislikedIngredients = ProfileInputs.text(body, "dislikedIngredients", user.dislikedIngredients))
-        return requireNotNull(updateUserProfile(id, request))
+            dislikedIngredients = ProfileInputs.text(body, "dislikedIngredients", user.dislikedIngredients),
+            version = expectedVersion)
+        return applyProfile(user, request)
     }
 
     @Transactional
     fun completeProfile(id: Long, request: UserProfileRequest): User {
-        val user = updateUserProfile(id, request) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
-        user.profileCompleted = true
-        return userRepository.saveAndFlush(user)
+        val expectedVersion = ProfileInputs.expectedVersion(request.version)
+        val user = userRepository.lockById(id) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
+        checkProfileVersion(user, expectedVersion)
+        return applyProfile(user, request, complete = true)
+    }
+
+    private fun checkProfileVersion(user: User, expected: Long) {
+        if (user.profileVersion != expected) throw CustomException(HttpStatus.CONFLICT,
+            "프로필이 변경되었습니다. 최신 정보를 다시 조회한 뒤 수정해주세요.",
+            "PROFILE_VERSION_CONFLICT", "version")
     }
 
     @Transactional
@@ -118,10 +139,12 @@ class UserService(
         val user = userRepository.lockById(id) ?: throw CustomException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다.", ApiErrorCode.USER_NOT_FOUND)
         sessions.deleteAll(id)
         linkGrants.deleteByUserId(id)
+        analysisSelections.deleteAccount(id)
         families.deleteByOwnerId(id)
         photos.deleteById(id)
         historyRepository.deleteByUserId(id)
         favorites.deleteByUserId(id)
+        chats.deleteAccount(id)
         recommendationFeedbackService.deleteByUserId(id)
         userRepository.delete(user)
     }
