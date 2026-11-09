@@ -104,7 +104,8 @@ def automatic_backend_permissions():
 def template():
     probe = (Path(__file__).parent / 'inspect_host.py').read_text(encoding='utf-8')
     document = {'schemaVersion': '2.2', 'description': 'Fixed metadata inspection; no secrets or changes',
-                'parameters': {}, 'mainSteps': [{'action': 'aws:runShellScript', 'name': 'inspectHost',
+                'parameters': {'HostKind': {'type':'String','allowedValues':['backend','ocr'],
+                    'interpolationType':'ENV_VAR'}}, 'mainSteps': [{'action': 'aws:runShellScript', 'name': 'inspectHost',
                     'inputs': {'timeoutSeconds': '60', 'runCommand': [
                         "python3 -I -S -B - <<'JJIKMUK_INSPECT'\n" + probe + '\nJJIKMUK_INSPECT']}}]}
     resources = {

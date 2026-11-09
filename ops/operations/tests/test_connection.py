@@ -49,7 +49,10 @@ class ConnectionTests(unittest.TestCase):
         bucket=t['Resources']['OperationsBucket']
         self.assertEqual('Retain',bucket['DeletionPolicy'])
         self.assertTrue(all(bucket['Properties']['PublicAccessBlockConfiguration'].values()))
-        self.assertEqual({},t['Resources']['InspectDocument']['Properties']['Content']['parameters'])
+        parameters=t['Resources']['InspectDocument']['Properties']['Content']['parameters']
+        self.assertEqual({'HostKind'},set(parameters))
+        self.assertEqual(['backend','ocr'],parameters['HostKind']['allowedValues'])
+        self.assertEqual('ENV_VAR',parameters['HostKind']['interpolationType'])
 
 
 if __name__ == '__main__':unittest.main()
