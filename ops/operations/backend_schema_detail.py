@@ -32,6 +32,7 @@ def summarize(columns, indexes, history, contract):
     counts = {'db_columns': len(columns), 'db_indexes': len(indexes), 'db_history_rows': len(history),
               'database_connections': 1, 'database_mutations': 0, 'service_restarts': 0,
               'application_writes': 0, 'paid_ai_calls': 0}
+    history_hashes = {}
     for table in TABLES:
         checks[table + '.present'] = table in present
     for version in ('18', '19', '20'):
@@ -39,12 +40,31 @@ def summarize(columns, indexes, history, contract):
         counts['v' + version + '.required_columns_missing'] = len(required - pairs)
         checks['v' + version + '.history_present'] = version in actual
         checks['v' + version + '.history_matches'] = actual.get(version) == expected[version]
+    # Diagnose every historical version in the same bounded read. A single
+    # overall match flag cannot distinguish a missing release from edited SQL.
+    for version, (script, checksum) in expected.items():
+        row = actual.get(version)
+        checks['v' + version + '.history_present'] = row is not None
+        checks['v' + version + '.script_matches'] = row is not None and row[0] == script
+        checks['v' + version + '.checksum_matches'] = row is not None and row[1] == checksum
+        if row is not None:
+            need(type(row[0]) is str and len(row[0]) <= 1024, 'HISTORY_SCRIPT_LIMIT')
+            history_hashes['v' + version + '.script'] = digest(row[0].encode())
+            if type(row[1]) is int:
+                need(-(2**31) <= row[1] < 2**31, 'HISTORY_CHECKSUM_RANGE')
+                counts['v' + version + '.checksum_u32'] = row[1] & 0xffffffff
+    counts['history_baselines'] = baselines
+    counts['history_sql_versions'] = len(actual)
+    counts['history_unknown_versions'] = len(set(actual) - set(expected))
+    for table in ('products', 'products_staging', 'products_rollback'):
+        checks[table + '.present'] = table in present
+        checks[table + '.nutrition_basis_raw_present'] = (table, 'nutrition_basis_raw') in pairs
     checks['exact_unapplied_v18_v19_v20_shape'] = (
         checks['history_exact_v1_through_v17'] and
         not any(t in present for t in TABLES) and ('users', 'profile_version') not in pairs)
     return {'status': 'OK', 'checks': checks, 'counts': counts,
             'hashes': {'schema_metadata': digest(canonical([columns, indexes])),
-                       'migration_history': digest(canonical(history))},
+                       'migration_history': digest(canonical(history)), **history_hashes},
             'codes': ['SCHEMA_METADATA_ONLY_NO_DATABASE_CHANGES']}
 
 

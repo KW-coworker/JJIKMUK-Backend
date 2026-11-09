@@ -6,12 +6,15 @@ import sys
 
 from readiness_document import canonical, sha, contract
 
-PLAN_NAME = 'backend-schema-detail.json'
+PLAN_NAME = 'backend-schema-history-detail.json'
+CONSUMED_PLAN_SHA = '59c0cbfd22a46387f46719609b8f932f975d59f3fca4f8b652d8a5463bd87ccd'
 STAGE = '/opt/jjikmuk-readiness-15c9d87c15808f1935637382'
 
 
 def plan(repo):
     root = repo / 'ops/operations'
+    if sha((root / 'plans/backend-schema-detail.json').read_bytes()) != CONSUMED_PLAN_SHA:
+        raise ValueError('CONSUMED_SCHEMA_DETAIL_CHANGED')
     sources = {name: (root / (name + '.py')).read_bytes() for name in
                ('readiness_paths', 'readiness_probe', 'backend_schema_detail')}
     hashes = {name: sha(raw) for name, raw in sources.items()}
