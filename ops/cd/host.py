@@ -204,6 +204,7 @@ class Host:
         require_database(manifest, json.loads(output))
 
     def preflight(self, previous, candidate):
+        require(int(candidate['manifest']['run_id']) > int(previous['manifest']['run_id']), 'STALE_RELEASE_RUN')
         self.runtime(previous)
         require_same_schema(previous['manifest'], candidate['manifest'])
         self.database(candidate['manifest'])
@@ -229,17 +230,25 @@ class Host:
     def restart(self): command(['systemctl', 'restart', self.config['service']], 90)
 
     def verify(self, release, old_identity):
-        deadline = time.monotonic() + 180
+        deadline = time.monotonic() + 240
+        healthy_since, observed_identity = None, None
         while True:
             try:
-                require(bool(self.identity()) and self.identity() != old_identity, 'OLD_PROCESS_STILL_RUNNING')
+                current_identity = self.identity()
+                require(bool(current_identity) and current_identity != old_identity, 'OLD_PROCESS_STILL_RUNNING')
+                if current_identity != observed_identity:
+                    healthy_since, observed_identity = None, current_identity
                 self.runtime(release)
                 for check in self.config['health_checks']: http_check(check)
                 self.database(release['manifest'])
-                return
+                now = time.monotonic()
+                require(now < deadline, 'HEALTH_DEADLINE')
+                if healthy_since is None: healthy_since = now
+                if now - healthy_since >= 60: return
             except Exception:
+                healthy_since = None
                 if time.monotonic() >= deadline: raise ValueError('HEALTH_DEADLINE') from None
-                time.sleep(3)
+            time.sleep(5)
 
     def commit(self, release):
         atomic_json(self.root / 'baseline.json', release)

@@ -1,74 +1,116 @@
-"""GitHub runner packaging and approved S3/SSM dispatch. Never creates infrastructure."""
+"""Exact-main build and automatic, duplicate-resistant fixed SSM deployment."""
 import argparse
-from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import time
-import urllib.request
-
+from auto_context import (ACCOUNT, REGION, BUCKET, PREFIX, INSTANCE, DOCUMENT,
+                          identity, guard, select_snapshot, check_snapshot)
 from manifest import make_manifest, read_json, require
 
 
-def env(name, pattern):
-    value = os.environ.get(name, '')
-    require(re.fullmatch(pattern, value) is not None, 'INVALID_RELEASE_INPUT')
-    return value
-
-
-def identity():
-    return (env('GITHUB_SHA', r'[0-9a-f]{40}'), env('GITHUB_RUN_ID', r'[1-9][0-9]{0,19}'),
-            env('GITHUB_RUN_ATTEMPT', r'[1-9][0-9]{0,3}'))
-
-
-def aws(*args, missing_invocation=False):
-    p = subprocess.run(['aws', *args, '--region', 'ap-northeast-2', '--output', 'json'],
-                       capture_output=True, text=True, timeout=180,
-                       env={**os.environ, 'AWS_MAX_ATTEMPTS': '1', 'AWS_PAGER': ''})
-    if missing_invocation and p.returncode and 'InvocationDoesNotExist' in p.stderr: return None
-    require(p.returncode == 0, 'AWS_REQUEST_FAILED_NO_RETRY')
-    return json.loads(p.stdout)
-
-
-def check_snapshot(snapshot, account, database, now):
-    require(snapshot['Status'] == 'available' and snapshot['Encrypted'] is True, 'BACKUP_NOT_READY')
-    require(snapshot['DBInstanceIdentifier'] == database and
-            snapshot['DBSnapshotArn'].startswith(f'arn:aws:rds:ap-northeast-2:{account}:snapshot:'), 'WRONG_BACKUP')
-    age = (now - datetime.fromisoformat(snapshot['SnapshotCreateTime'].replace('Z', '+00:00'))).total_seconds()
-    require(0 <= age <= 86400, 'BACKUP_TOO_OLD')
-
-
-def guard(deployment=True):
-    require(os.environ.get('GITHUB_REPOSITORY') == 'KW-coworker/JJIKMUK-Backend' and
-            os.environ.get('GITHUB_REF') == 'refs/heads/main' and
-            os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch', 'MAIN_MANUAL_ONLY')
-    sha, _, _ = identity()
-    mode = os.environ.get('CD_MODE', 'verify')
-    require(mode in {'verify', 'deploy'}, 'INVALID_CD_MODE')
-    require(os.environ.get('EXPECTED_SHA') == sha, 'SHA_OR_APPROVAL_MISMATCH')
-    if deployment or mode == 'deploy':
-        require(mode == 'deploy' and os.environ.get('CONFIRM_DEPLOY') == 'true', 'DEPLOYMENT_NOT_APPROVED')
-        require(os.environ.get('CD_ENABLED') == 'true', 'CD_DISABLED')
-    # Recheck after environment approval: an old approval must not deploy a moved main.
-    request = urllib.request.Request('https://api.github.com/repos/KW-coworker/JJIKMUK-Backend/git/ref/heads/main',
-                                     headers={'Accept': 'application/vnd.github+json', 'User-Agent': 'JJIKMUK-CD'})
-    with urllib.request.urlopen(request, timeout=15) as response:
-        require(json.load(response)['object']['sha'] == sha, 'MAIN_MOVED')
+def clients():
+    import boto3
+    from botocore.config import Config
+    keys = [os.environ.get(k) for k in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN')]
+    require(all(keys), 'OIDC_CREDENTIALS_REQUIRED')
+    sdk = boto3.Session(aws_access_key_id=keys[0], aws_secret_access_key=keys[1], aws_session_token=keys[2], region_name=REGION)
+    cfg = Config(connect_timeout=10, read_timeout=30, retries={'total_max_attempts': 1})
+    return {s: sdk.client(s, config=cfg) for s in ('sts', 'rds', 's3', 'ssm')}
 
 
 def package():
     guard(deployment=False)
-    jars = list(Path('build/libs').glob('*.jar'))
-    jars = [p for p in jars if not p.name.endswith('-plain.jar')]
+    jars = [p for p in Path('build/libs').glob('*.jar') if not p.name.endswith('-plain.jar')]
     require(len(jars) == 1, 'EXPECTED_ONE_BOOT_JAR')
     folder = Path('build/cd-release'); folder.mkdir(exist_ok=False)
     m = make_manifest(jars[0], *identity())
     shutil.copyfile(jars[0], folder / 'backend.jar')
     (folder / 'manifest.json').write_text(json.dumps(m, sort_keys=True, indent=2), encoding='utf-8')
-    print(json.dumps({'status': 'PACKAGED', 'commit': m['commit'], 'jar_sha256': m['jar_sha256']}))
+    report({'status': 'PACKAGED', 'commit': m['commit'], 'jar_sha256': m['jar_sha256']})
+
+
+def error_code(error):
+    return getattr(error, 'response', {}).get('Error', {}).get('Code')
+
+
+def get_receipt(s3, key):
+    try: response = s3.get_object(Bucket=BUCKET, Key=key, ExpectedBucketOwner=ACCOUNT)
+    except Exception as error:
+        if error_code(error) in ('NoSuchKey', '404'): return None
+        raise
+    with response['Body'] as stream: data = stream.read(65537)
+    require(len(data) <= 65536, 'RECEIPT_SIZE')
+    return json.loads(data)
+
+
+def put_receipt(s3, key, value):
+    return s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(value, sort_keys=True).encode(),
+                         ContentType='application/json', ServerSideEncryption='AES256',
+                         ExpectedBucketOwner=ACCOUNT, IfNoneMatch='*')
+
+
+def report(value):
+    folder = Path('deployment-results'); folder.mkdir(exist_ok=True)
+    (folder / 'result.json').write_text(json.dumps(value, sort_keys=True, indent=2), encoding='utf-8')
+    summary = os.environ.get('GITHUB_STEP_SUMMARY')
+    if summary:
+        with open(summary, 'a', encoding='utf-8') as f:
+            f.write('Backend CD: **' + value['status'] + '**\n\n')
+            for name in ('commit', 'command_id', 'run_id', 'attempt'):
+                if name in value: f.write('- ' + name + ': `' + str(value[name]) + '`\n')
+    print(json.dumps(value), flush=True)
+
+
+def find_command(ssm, intent):
+    # SendCommand has no client idempotency token: collect a lost response, never resend.
+    found, token = [], None
+    for _ in range(100):
+        args = {'InstanceId': INSTANCE, 'MaxResults': 50}
+        if token: args['NextToken'] = token
+        response = ssm.list_commands(**args)
+        found.extend(c['CommandId'] for c in response.get('Commands', [])
+                     if c.get('Comment') == intent['comment'] and c.get('DocumentName') == DOCUMENT
+                     and c.get('DocumentVersion') == '1' and c.get('InstanceIds') == [INSTANCE])
+        token = response.get('NextToken')
+        if not token: break
+    else: raise ValueError('COMMAND_HISTORY_LIMIT')
+    require(len(found) <= 1, 'AMBIGUOUS_COMMAND_HISTORY')
+    return found[0] if found else None
+
+
+def wait_result(ssm, command_id, intent):
+    deadline = time.monotonic() + 1800
+    while time.monotonic() < deadline:
+        try: result = ssm.get_command_invocation(CommandId=command_id, InstanceId=INSTANCE, PluginName='deployBackend')
+        except Exception as error:
+            if error_code(error) != 'InvocationDoesNotExist': raise
+            result = None
+        if result and result['Status'] not in {'Pending', 'InProgress', 'Delayed'}:
+            try: status = json.loads(result.get('StandardOutputContent', ''))['status']
+            except (ValueError, KeyError, TypeError): status = 'UNRECOGNIZED_HOST_RESULT'
+            allowed = {'SUCCEEDED', 'ROLLED_BACK', 'MANUAL_RECOVERY_REQUIRED', 'STOP_REVIEW_REQUIRED'}
+            if status not in allowed: status = 'UNRECOGNIZED_HOST_RESULT'
+            if status == 'SUCCEEDED' and (result['Status'] != 'Success' or result.get('ResponseCode') != 0):
+                status = 'UNRECOGNIZED_HOST_RESULT'
+            return {k: intent[k] for k in ('commit', 'run_id', 'attempt')} | {'status': status, 'command_id': command_id}
+        time.sleep(5)
+    raise ValueError('STATUS_UNKNOWN_DO_NOT_REDISPATCH')
+
+
+def collect(c, intent, root):
+    require(intent.get('commit') == identity()[0] and intent.get('instance') == INSTANCE and
+            intent.get('document') == DOCUMENT and intent.get('document_version') == '1', 'RECEIPT_TARGET_MISMATCH')
+    result = get_receipt(c['s3'], root + '/result.json')
+    if result: return result
+    sent = get_receipt(c['s3'], root + '/sent.json')
+    command_id = sent['command_id'] if sent else find_command(c['ssm'], intent)
+    require(bool(command_id), 'SEND_OUTCOME_UNKNOWN_NO_REDISPATCH')
+    result = wait_result(c['ssm'], command_id, intent)
+    put_receipt(c['s3'], root + '/result.json', result)
+    return result
 
 
 def dispatch():
@@ -76,51 +118,51 @@ def dispatch():
     sha, run, attempt = identity()
     m = read_json('release/manifest.json')
     require(m == make_manifest('release/backend.jar', sha, run, attempt), 'DOWNLOADED_ARTIFACT_MISMATCH')
-    account = env('AWS_ACCOUNT_ID', r'[0-9]{12}')
-    require(aws('sts', 'get-caller-identity')['Account'] == account, 'WRONG_AWS_ACCOUNT')
-    bucket = env('CD_BUCKET', r'[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]')
-    prefix = env('CD_PREFIX', r'[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9_-]+)*')
-    iid = env('CD_INSTANCE_ID', r'i-[0-9a-f]{17}')
-    document = env('CD_DOCUMENT', r'[A-Za-z][A-Za-z0-9_-]{2,127}')
-    version = env('CD_DOCUMENT_VERSION', r'[1-9][0-9]*')
-    snapshot_id = env('SNAPSHOT_ID', r'[a-zA-Z][a-zA-Z0-9-]{0,254}')
-    database = env('CD_DATABASE_ID', r'[a-zA-Z][a-zA-Z0-9-]{0,62}')
-    snapshots = aws('rds', 'describe-db-snapshots', '--db-snapshot-identifier', snapshot_id)['DBSnapshots']
-    require(len(snapshots) == 1, 'BACKUP_COUNT')
-    check_snapshot(snapshots[0], account, database, datetime.now(timezone.utc))
-    require(aws('s3api', 'get-bucket-versioning', '--bucket', bucket).get('Status') == 'Enabled', 'S3_VERSIONING_REQUIRED')
-    versions = {}
-    for name in ['backend.jar', 'manifest.json']:
-        result = aws('s3api', 'put-object', '--bucket', bucket, '--key', f'{prefix}/{sha}/{run}-{attempt}/{name}',
-                     '--body', f'release/{name}', '--checksum-algorithm', 'SHA256')
-        value = result.get('VersionId', '')
-        require(value not in ['', 'null'], 'S3_VERSION_MISSING')
-        versions[name] = value
-    params = {'ReleaseCommit': [sha], 'RunId': [run], 'RunAttempt': [attempt], 'JarSha256': [m['jar_sha256']],
-              'JarVersion': [versions['backend.jar']], 'ManifestVersion': [versions['manifest.json']]}
-    response = aws('ssm', 'send-command', '--instance-ids', iid, '--document-name', document,
-                   '--document-version', version, '--parameters', json.dumps(params), '--timeout-seconds', '60',
-                   '--comment', f'Approved backend release {sha} run {run}-{attempt}')
-    command_id = response['Command']['CommandId']
-    print(json.dumps({'status': 'DISPATCHED', 'command_id': command_id, 'commit': sha}), flush=True)
-    deadline = time.monotonic() + 1800
-    while time.monotonic() < deadline:
-        result = aws('ssm', 'get-command-invocation', '--command-id', command_id, '--instance-id', iid, missing_invocation=True)
-        if result and result['Status'] not in {'Pending', 'InProgress', 'Delayed'}:
-            require(result['Status'] == 'Success' and result['ResponseCode'] == 0, 'DEPLOYMENT_FAILED_CHECK_SSM_RECEIPT')
-            require(json.loads(result['StandardOutputContent']) == {'status': 'SUCCEEDED'}, 'UNEXPECTED_DEPLOYMENT_RESULT')
-            print(json.dumps({'status': 'SUCCEEDED', 'commit': sha})); return
-        time.sleep(5)
-    raise ValueError('STATUS_UNKNOWN_DO_NOT_REDISPATCH')
+    c = clients()
+    caller = c['sts'].get_caller_identity()
+    require(caller['Account'] == ACCOUNT and caller['Arn'].startswith(
+        f'arn:aws:sts::{ACCOUNT}:assumed-role/JjikmukBackendAutoDeploy/'), 'WRONG_AWS_IDENTITY')
+    s3 = c['s3']; root = 'receipts/backend-cd/' + sha
+    intent = get_receipt(s3, root + '/intent.json')
+    if intent:
+        result = collect(c, intent, root)
+    else:
+        backup = select_snapshot(c['rds'])
+        require(s3.get_bucket_versioning(Bucket=BUCKET, ExpectedBucketOwner=ACCOUNT).get('Status') == 'Enabled', 'S3_VERSIONING_REQUIRED')
+        intent = {'commit': sha, 'run_id': run, 'attempt': attempt, 'jar_sha256': m['jar_sha256'],
+                  'instance': INSTANCE, 'document': DOCUMENT, 'document_version': '1', 'backup': backup,
+                  'comment': 'backend-auto:' + sha + ':' + run + '-' + attempt}
+        put_receipt(s3, root + '/intent.json', intent)
+        versions = {}
+        for name in ('backend.jar', 'manifest.json'):
+            with open('release/' + name, 'rb') as body:
+                uploaded = s3.put_object(Bucket=BUCKET, Key=f'{PREFIX}/{sha}/{run}-{attempt}/{name}', Body=body,
+                    ExpectedBucketOwner=ACCOUNT, ServerSideEncryption='AES256', ChecksumAlgorithm='SHA256', IfNoneMatch='*')
+            version = uploaded.get('VersionId', '')
+            require(isinstance(version, str) and version not in ('', 'null'), 'S3_VERSION_MISSING')
+            versions[name] = version
+        guard()
+        params = {'ReleaseCommit': [sha], 'RunId': [run], 'RunAttempt': [attempt], 'JarSha256': [m['jar_sha256']],
+                  'JarVersion': [versions['backend.jar']], 'ManifestVersion': [versions['manifest.json']]}
+        try:
+            response = c['ssm'].send_command(InstanceIds=[INSTANCE], DocumentName=DOCUMENT,
+                DocumentVersion='1', Parameters=params, TimeoutSeconds=60, Comment=intent['comment'])
+        except Exception:
+            result = collect(c, intent, root)
+        else:
+            command_id = response['Command']['CommandId']
+            put_receipt(s3, root + '/sent.json', {'command_id': command_id})
+            result = collect(c, intent, root)
+    report(result)
+    require(result['status'] == 'SUCCEEDED', 'DEPLOYMENT_NOT_SUCCESSFUL')
+    return result
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['package', 'dispatch'])
+    parser = argparse.ArgumentParser(); parser.add_argument('mode', choices=['package', 'dispatch'])
     args = parser.parse_args()
-    try:
-        {'package': package, 'dispatch': dispatch}[args.mode]()
+    try: {'package': package, 'dispatch': dispatch}[args.mode]()
     except Exception as error:
-        allowed = str(error) if type(error) is ValueError and re.fullmatch('[A-Z_]+', str(error)) else 'RELEASE_FAILED'
-        print(json.dumps({'status': allowed}))
-        raise SystemExit(1)
+        code = str(error) if type(error) is ValueError and re.fullmatch('[A-Z_]+', str(error)) else 'RELEASE_FAILED'
+        if not Path('deployment-results/result.json').exists(): report({'status': code})
+        print(json.dumps({'status': code})); raise SystemExit(1)

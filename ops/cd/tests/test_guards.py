@@ -33,38 +33,6 @@ class GuardTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 check_snapshot(dict(good,**{key:value}),'111111111111','test-db',now)
 
-    def test_non_main_or_unapproved_runs_fail_before_network(self):
-        with patch.dict('os.environ', {}, clear=True), patch('urllib.request.urlopen') as network:
-            with self.assertRaises(ValueError): guard()
-            network.assert_not_called()
-
-    def test_guard_rejects_individual_identity_and_approval_changes_before_network(self):
-        good = {'GITHUB_REPOSITORY':'KW-coworker/JJIKMUK-Backend', 'GITHUB_REF':'refs/heads/main',
-                'GITHUB_EVENT_NAME':'workflow_dispatch', 'GITHUB_SHA':'a'*40,
-                'GITHUB_RUN_ID':'12', 'GITHUB_RUN_ATTEMPT':'1', 'EXPECTED_SHA':'a'*40,
-                'CONFIRM_DEPLOY':'true', 'CD_ENABLED':'true', 'CD_MODE':'deploy'}
-        for key, value in [('GITHUB_REPOSITORY','other/repository'), ('GITHUB_REF','refs/heads/feature'),
-                           ('GITHUB_EVENT_NAME','push'), ('EXPECTED_SHA','b'*40),
-                           ('CONFIRM_DEPLOY','false'), ('CD_ENABLED','false')]:
-            with self.subTest(key=key), patch.dict('os.environ',dict(good, **{key:value}),clear=True), \
-                    patch('urllib.request.urlopen') as network:
-                with self.assertRaises(ValueError): guard()
-                network.assert_not_called()
-
-    def test_guard_rechecks_main_after_approval(self):
-        good = {'GITHUB_REPOSITORY':'KW-coworker/JJIKMUK-Backend', 'GITHUB_REF':'refs/heads/main',
-                'GITHUB_EVENT_NAME':'workflow_dispatch', 'GITHUB_SHA':'a'*40,
-                'GITHUB_RUN_ID':'12', 'GITHUB_RUN_ATTEMPT':'1', 'EXPECTED_SHA':'a'*40,
-                'CONFIRM_DEPLOY':'true', 'CD_ENABLED':'true', 'CD_MODE':'deploy'}
-        for remote_sha in ['a'*40, 'b'*40]:
-            response = io.BytesIO(json.dumps({'object':{'sha':remote_sha}}).encode())
-            with self.subTest(remote_sha=remote_sha), patch.dict('os.environ',good,clear=True), \
-                    patch('urllib.request.urlopen',return_value=response) as network:
-                if remote_sha == good['GITHUB_SHA']: guard()
-                else:
-                    with self.assertRaisesRegex(ValueError,'MAIN_MOVED'): guard()
-                network.assert_called_once()
-
     def test_atomic_json_preserves_old_value_if_abandoned_temp_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'state.json'
