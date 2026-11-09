@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import tempfile
 import unittest
 from unittest.mock import Mock,patch
@@ -6,6 +7,11 @@ from host import Host,read_host_state,atomic_json
 
 
 class JournalOrdering(unittest.TestCase):
+    @unittest.skipUnless(os.name=='posix','Root ownership enforced on Linux')
+    def test_host_state_refuses_writable_temporary_ancestor(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/'state.json';path.write_text('{}')
+            with self.assertRaisesRegex(ValueError,'UNTRUSTED_HOST_PATH'):read_host_state(path)
     def test_large_protected_baseline_and_transition_roundtrip(self):
         with tempfile.TemporaryDirectory() as temp,patch('host.secure'):
             path=Path(temp)/'state.json'
