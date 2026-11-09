@@ -3,13 +3,30 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import MagicMock,patch
-from bootstrap import create_connection,check_github
-from connection import canonical,sha,REPO_ID
+from bootstrap import create_connection,check_github,github
+from connection import canonical,sha,REPO_ID,REPO,CHATBOT_REPO
 from connection import template
 from build_bootstrap import build
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_public_repository_metadata_uses_canonical_endpoint(self):
+        # GitHub returns 404 for /repos/owner/repository/ (verified live).
+        # Both initial identity checks call github('') before any AWS changes.
+        for repo in (REPO,CHATBOT_REPO):
+            for path in ('','git/ref/heads/main'):
+                expected='https://api.github.com/repos/'+repo
+                if path:expected+='/git/ref/heads/main'
+                response=MagicMock()
+                response.__enter__.return_value=response
+                response.url=expected
+                response.read.return_value=b'{"verified":true}'
+                def respond(request,timeout):
+                    self.assertEqual(expected,request.full_url)
+                    return response
+                with self.subTest(repo=repo,path=path),patch('bootstrap.urllib.request.urlopen',side_effect=respond):
+                    self.assertEqual({'verified':True},github(path,repo))
+
     def test_single_file_has_identical_template_and_does_not_execute_on_import(self):
         source=build(Path(__file__).resolve().parents[1]);namespace={'__name__':'offline_check'}
         exec(compile(source,'connect_once.py','exec'),namespace)
