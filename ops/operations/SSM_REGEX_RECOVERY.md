@@ -1,5 +1,42 @@
 # SSM 문서 생성 오류 보완
 
+## 2026-11-10 미실행 복구 미리보기의 태그 누락 보완
+
+첫 복구는 `UNEXPECTED_CHANGE_COUNT`로 실행 전에 중단됐습니다. 실제 미리보기에는
+실패한 문서 2개 외에 기존 자원 13개의 `Tags` 변경이 있었습니다. 최초 생성 요청은
+`Project=JJIKMUK`를 지정했지만 복구 `create_change_set`에는 `Tags`가 누락됐습니다.
+기존 13개는 `Replacement=False`, 문서 2개는 부재 확인 후 생성 대상입니다.
+
+보완본은 원래 태그가 그대로 있는지 먼저 검사하고 동일 태그를 명시하여 새 미리보기를
+만듭니다. 새 미리보기에는 **문서 2개만** 허용합니다. 태그 변경을 추가 허용하거나
+변경 개수 제한을 늘리지 않습니다. 완료 후에도 원래 태그·물리 ID·문서 내용을 검사합니다.
+
+이미 중단 기록이 있는 이번 스택은 `--preserve-stack-tags` 전용 경로를 사용합니다.
+이 경로는 이전 기록이 정확한 main/템플릿/스택에 속하고 실행 의도 기록 전 중단됐으며,
+AWS의 이전 미리보기가 아직 `AVAILABLE`이고 관측한 15개 변경과 동일한지 확인합니다.
+이전 미리보기의 전체 템플릿 SHA와 비어 있는 태그도 확인합니다. 다른 오류나 이미 실행된
+변경 세트를 일반 재시도로 처리하지 않습니다.
+
+기존 `jjikmuk-operations-setup.json`, `jjikmuk-ssm-regex-recovery.json`은 보존하고,
+새 기록 `jjikmuk-ssm-regex-tags-recovery.json`을 한 번만 생성합니다. 이전 미리보기는
+실행하지 않으며 내용을 새 기록에도 보존합니다. 다른 이름의 새 변경 세트만 검증·실행합니다.
+CloudFormation이 실행 후 다른 변경 세트를 정리할 수 있으므로 이전 미리보기의 보존 근거는
+로컬 기록입니다. 도구가 스택·변경 세트·기존 기록을 삭제하는 API는 호출하지 않습니다.
+
+정확한 병합 main과 보완 파일 해시 확인 후 별도 실행 블록을 제공합니다. 과거 실행 블록을
+반복하거나 기록을 지우지 않습니다. 새 경로도 실패하면 다시 실행하지 않고 기록을 보존합니다.
+`--observe --preserve-stack-tags`는 세 번째 기록 기준 읽기 대조만 수행합니다.
+
+검증: 태그 전달 누락 검사 수정 전 실패, 수정 후 성공. 실제 사용자 응답 구조로 15개 변경
+거부와 제한된 후속 경로를 검사하고, 기존 기록/미리보기 변조·실행 의도 단계·추가 변경·태그
+변경을 거절합니다. AWS SDK 입력 형식과 읽기/쓰기 호출 순서도 모의 검증합니다.
+**모의 검사는 실제 AWS 복구 성공을 의미하지 않습니다.** 서버 설치·배포·재시작·SQL은 없습니다.
+
+근거: [CreateChangeSet의 스택 태그 전달과 실행 전 미변경 원칙](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_CreateChangeSet.html),
+[ResourceChange의 변경 범위](https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_ResourceChange.html).
+
+## 최초 SSM 정규식 오류
+
 최초 연결에서 BackendDeployDocument와 ChatbotDeployDocument가 `{1,1024}`의
 `invalid repeat count`로 CREATE_FAILED가 됐습니다. Go 정규식 엔진은 한 반복의
 상한이 1000을 넘으면 거절합니다. Python 검사와 CloudFormation lint만으로는
