@@ -14,6 +14,8 @@ import zlib
 WHEEL_URL = 'https://files.pythonhosted.org/packages/a9/4b/0a906d8184f011ff8dbd4722743783867589b33269d2c5fff238d636fdcb/pymysql-1.2.3-py3-none-any.whl'
 WHEEL = 'pymysql-1.2.3-py3-none-any.whl'
 WHEEL_SHA = '14f1c68e2ed859243ae5ca41ffbe677027fc46bc136a9f0be8a4e928e5e7415a'
+PLAN_NAME = 'commissioning-readiness-tls.json'
+ARCHIVED_PLAN_SHA = '2847d9900e342c958e7e74d4909ccbb4961685a0a9092af60e23d3c01cecec8b'
 
 
 def canonical(value):
@@ -93,7 +95,14 @@ except Exception:
     if len(canonical(document)) > 60000:
         raise ValueError('DOCUMENT_LIMIT')
     return {'format': 1, 'component': 'backend', 'operation': 'inspect',
-            'approval_id': 'PENDING_COMMISSIONING_READINESS', 'approved': False, 'document': document}
+            'approval_id': 'PENDING_COMMISSIONING_READINESS_TLS', 'approved': False, 'document': document}
+
+
+def verify_archive(repo):
+    # The consumed original approval and embedded command stay byte-for-byte intact.
+    original = repo / 'ops/operations/plans/commissioning-readiness.json'
+    if sha(original.read_bytes()) != ARCHIVED_PLAN_SHA:
+        raise ValueError('CONSUMED_READINESS_PLAN_CHANGED')
 
 
 def verify_record(record, expected):
@@ -108,7 +117,8 @@ def verify_record(record, expected):
 
 if __name__ == '__main__':
     repo = Path(__file__).resolve().parents[2]
-    target = repo / 'ops/operations/plans/commissioning-readiness.json'
+    verify_archive(repo)
+    target = repo / 'ops/operations/plans' / PLAN_NAME
     raw = canonical(plan(repo)) + b'\n'
     if sys.argv[1:] == ['--check']:
         verify_record(json.loads(target.read_bytes()), plan(repo))
