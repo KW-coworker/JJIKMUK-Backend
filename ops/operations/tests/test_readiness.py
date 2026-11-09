@@ -165,12 +165,15 @@ class ReadinessTests(unittest.TestCase):
     def test_db_uses_one_tls_connection_metadata_only_and_rolls_back(self):
         conn, cur, connect, contract = self.db()
         report = probe.query_schema(connect, {'spring.datasource.username': 'fixture',
-                                              'spring.datasource.password': SECRET}, contract)
+                                              'spring.datasource.password': SECRET,
+                                              'spring.datasource.url': 'jdbc:mysql://fixture/jjikmuk?rewriteBatchedStatements=true'}, contract)
         connect.assert_called_once()
         args = connect.call_args.kwargs
         self.assertEqual(probe.DB_HOST, args['host'])
         self.assertTrue(args['ssl_verify_cert'] and args['ssl_verify_identity'])
         self.assertFalse(args['local_infile'])
+        self.assertNotIn('rewriteBatchedStatements', args)
+        self.assertNotIn('client_flag', args)
         self.assertEqual([10, 5, 5], [args['read_timeout'], args['write_timeout'], args['connect_timeout']])
         sql = [c.args[0] for c in cur.execute.call_args_list]
         self.assertEqual('START TRANSACTION READ ONLY', sql[2])

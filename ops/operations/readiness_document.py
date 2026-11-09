@@ -14,8 +14,12 @@ import zlib
 WHEEL_URL = 'https://files.pythonhosted.org/packages/a9/4b/0a906d8184f011ff8dbd4722743783867589b33269d2c5fff238d636fdcb/pymysql-1.2.3-py3-none-any.whl'
 WHEEL = 'pymysql-1.2.3-py3-none-any.whl'
 WHEEL_SHA = '14f1c68e2ed859243ae5ca41ffbe677027fc46bc136a9f0be8a4e928e5e7415a'
-PLAN_NAME = 'commissioning-readiness-tls.json'
-ARCHIVED_PLAN_SHA = '2847d9900e342c958e7e74d4909ccbb4961685a0a9092af60e23d3c01cecec8b'
+PLAN_NAME = 'commissioning-readiness-observed.json'
+ARCHIVED_PLANS = {
+    'commissioning-readiness.json': '2847d9900e342c958e7e74d4909ccbb4961685a0a9092af60e23d3c01cecec8b',
+    'commissioning-readiness-tls.json': '3cf2c3dae2202f1cdf3ff50ad7a0619351c252195def6724e57783c294739b30',
+    'commissioning-jdbc-option-names.json': 'f890dfb37372e737d8969d3dc225fadf8c61c0809c08a78a6927b25e3dd65f4d',
+}
 
 
 def canonical(value):
@@ -95,14 +99,16 @@ except Exception:
     if len(canonical(document)) > 60000:
         raise ValueError('DOCUMENT_LIMIT')
     return {'format': 1, 'component': 'backend', 'operation': 'inspect',
-            'approval_id': 'PENDING_COMMISSIONING_READINESS_TLS', 'approved': False, 'document': document}
+            'approval_id': 'PENDING_COMMISSIONING_OBSERVED_OPTIONS', 'approved': False, 'document': document}
 
 
 def verify_archive(repo):
-    # The consumed original approval and embedded command stay byte-for-byte intact.
-    original = repo / 'ops/operations/plans/commissioning-readiness.json'
-    if sha(original.read_bytes()) != ARCHIVED_PLAN_SHA:
-        raise ValueError('CONSUMED_READINESS_PLAN_CHANGED')
+    # Completed/consumed commands retain their exact approved bytes, even when
+    # a helper evolves for a separately reviewed future command.
+    for name, expected in ARCHIVED_PLANS.items():
+        original = repo / 'ops/operations/plans' / name
+        if sha(original.read_bytes()) != expected:
+            raise ValueError('CONSUMED_READINESS_PLAN_CHANGED')
 
 
 def verify_record(record, expected):

@@ -153,7 +153,13 @@ def jdbc_options(query):
              'trustCertificateKeyStorePassword', 'fallbackToSystemTrustStore'}
     need(len(pairs) == len(options) and set(options) <= trust |
          {'serverTimezone', 'useSSL', 'allowPublicKeyRetrieval', 'characterEncoding', 'useUnicode',
-          'sslMode', 'requireSSL', 'verifyServerCertificate'}, 'JDBC_OPTIONS_REQUIRES_REVIEW')
+          'sslMode', 'requireSSL', 'verifyServerCertificate', 'rewriteBatchedStatements'},
+         'JDBC_OPTIONS_REQUIRES_REVIEW')
+    # Observed on the host. This Java batch option is never forwarded to PyMySQL
+    # or used by the fixed read-only metadata queries below.
+    if 'rewriteBatchedStatements' in options:
+        need(options['rewriteBatchedStatements'].lower() in {'true', 'false'},
+             'JDBC_BATCH_OPTION_REQUIRES_REVIEW')
     # Recognize only the institution's existing Java trust profile. PyMySQL below
     # independently verifies its fixed PEM CA and hostname; it never uses this store.
     need(options.get('sslMode') == 'VERIFY_IDENTITY' and

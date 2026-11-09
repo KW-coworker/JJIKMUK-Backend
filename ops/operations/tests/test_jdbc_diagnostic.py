@@ -72,10 +72,9 @@ class JdbcDiagnosticTests(unittest.TestCase):
         report = safe_report(output.getvalue())
         self.assertFalse(operation_succeeded({'status': 'Success', 'response_code': 0, 'report': report}))
 
-    def test_new_plan_is_pending_and_bounded(self):
+    def test_consumed_plan_is_preserved_and_generation_stays_pending(self):
         expected = builder.plan(ROOT)
-        path = ROOT / 'ops/operations/plans' / builder.PLAN_NAME
-        builder.verify_record(json.loads(path.read_bytes()), expected)
+        builder.verify_archive(ROOT)
         self.assertFalse(expected['approved'])
         self.assertEqual({}, expected['document']['parameters'])
         self.assertLess(len(builder.canonical(expected['document'])), 60000)
