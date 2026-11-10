@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+import time
 from manifest import require
 
 
@@ -10,7 +11,7 @@ def canonical(value):
 
 
 def require_observation_privileges(conn):
-    """SHOW metadata must not silently hide triggers/events owned by other users."""
+    """Require complete trigger/event visibility in this project's schema."""
     with conn.cursor() as cur:
         cur.execute('SELECT CURRENT_ROLE()')
         role = cur.fetchone()[0]
@@ -22,13 +23,20 @@ def require_observation_privileges(conn):
         rows = cur.fetchmany(102)
     require(len(rows) <= 101 and not any(row[0].startswith('REVOKE ') for row in rows),
             'DB_METADATA_PRIVILEGES_RESTRICTED')
-    global_rights = set()
+    project_rights = set()
     for row in rows:
-        match = re.fullmatch(r'GRANT (.+) ON \*\.\* TO .+', row[0])
+        match = re.fullmatch(r'GRANT (.+) ON (\*\.\*|`jjikmuk`\.\*) TO .+', row[0])
         if match:
             names = set(match[1].split(', '))
-            global_rights.update({'PROCESS','TRIGGER','EVENT'} if 'ALL PRIVILEGES' in names else names)
-    require({'PROCESS','TRIGGER','EVENT'} <= global_rights, 'DB_METADATA_VISIBILITY_NOT_PROVEN')
+            project_rights.update({'TRIGGER','EVENT'} if 'ALL PRIVILEGES' in names else names)
+    require({'TRIGGER','EVENT'} <= project_rights, 'PROJECT_METADATA_VISIBILITY_NOT_PROVEN')
+
+
+def project_events_clear(conn):
+    require_observation_privileges(conn)
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM information_schema.EVENTS WHERE EVENT_SCHEMA=%s AND STATUS='ENABLED'", ('jjikmuk',))
+        require(int(cur.fetchone()[0]) == 0, 'PROJECT_SCHEDULED_EVENT_PRESENT')
 
 
 def logical_extras(conn):
@@ -74,18 +82,26 @@ def search_fingerprint(conn):
     return result
 
 
-def quiescent(conn):
-    require_observation_privileges(conn)
-    with conn.cursor() as cur:
-        # This also proves effective PROCESS access; observing only our own sessions is insufficient.
-        cur.execute('SELECT COUNT(*) FROM information_schema.INNODB_TRX')
-        transactions = int(cur.fetchone()[0])
-        # Another default schema does not prevent fully-qualified writes to jjikmuk.
-        cur.execute("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER NOT IN ('rdsadmin','event_scheduler','system user')")
-        sessions = int(cur.fetchone()[0])
-        cur.execute("SELECT COUNT(*) FROM information_schema.EVENTS WHERE STATUS='ENABLED' AND NOT (EVENT_SCHEMA='mysql' AND DEFINER LIKE 'rdsadmin@%')")
-        events = int(cur.fetchone()[0])
-    require(transactions == 0 and sessions == 0 and events == 0, 'DATABASE_WRITERS_NOT_QUIESCENT')
+def project_idle(conn, *, guard=lambda:None, timeout=30):
+    """Known apps must already be stopped; the owner confirmed no other operators.
+
+    This observes our own DB account and project events, not global quiescence.
+    Unexpected writes from outside that operating contract are detected by the
+    existing pre/post preservation checks; these checks are not a write lock.
+    """
+    require(0 <= timeout <= 30, 'PROJECT_DRAIN_TIMEOUT_INVALID')
+    deadline = time.monotonic() + timeout
+    while True:
+        guard()
+        project_events_clear(conn)
+        with conn.cursor() as cur:
+            # Same-account sessions are visible without PROCESS. Do not filter
+            # by default DB: qualified jjikmuk writes can use another default.
+            cur.execute('SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER=SUBSTRING_INDEX(CURRENT_USER(),%s,1)', ('@',))
+            sessions = int(cur.fetchone()[0])
+        if sessions == 0:return
+        require(time.monotonic() < deadline, 'PROJECT_ACCOUNT_CONNECTIONS_REMAIN')
+        time.sleep(1)
 
 
 def history_bound(conn):

@@ -1,7 +1,7 @@
 import copy
 import unittest
 from unittest.mock import MagicMock,patch
-from initial_db_facts import verify_logical, history_bound, quiescent,require_observation_privileges
+from initial_db_facts import verify_logical, history_bound, project_idle,project_events_clear,require_observation_privileges
 
 
 class InitialDbFactsTests(unittest.TestCase):
@@ -24,26 +24,40 @@ class InitialDbFactsTests(unittest.TestCase):
         conn=MagicMock();conn.cursor.return_value.__enter__.return_value.fetchone.return_value=(21,17)
         self.assertEqual(history_bound(conn),21)
 
-    def test_any_remaining_writer_or_transaction_blocks(self):
+    def test_project_event_or_same_account_session_blocks_without_global_queries(self):
         conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value
         with patch('initial_db_facts.require_observation_privileges'):
-            for values in (((1,),(0,),(0,)),((0,),(1,),(0,)),((0,),(0,),(1,))):
-                cur.fetchone.side_effect=values
-                with self.assertRaisesRegex(ValueError,'NOT_QUIESCENT'):quiescent(conn)
-            cur.fetchone.side_effect=((0,),(0,),(0,))
-            quiescent(conn)
+            cur.fetchone.side_effect=((1,),)
+            with self.assertRaisesRegex(ValueError,'SCHEDULED_EVENT'):project_idle(conn,timeout=0)
+            cur.fetchone.side_effect=((0,),(1,))
+            with self.assertRaisesRegex(ValueError,'CONNECTIONS_REMAIN'):project_idle(conn,timeout=0)
+            cur.fetchone.side_effect=((0,),(0,))
+            project_idle(conn,timeout=0)
         process_sql = [c.args[0] for c in cur.execute.call_args_list if 'PROCESSLIST' in c.args[0]]
         self.assertTrue(all('DB=' not in sql for sql in process_sql))
+        self.assertTrue(all('USER=SUBSTRING_INDEX(CURRENT_USER()' in sql for sql in process_sql))
+        self.assertFalse(any('INNODB_TRX' in c.args[0] for c in cur.execute.call_args_list))
+
+    def test_disconnecting_pool_gets_bounded_drain_with_guard(self):
+        conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value
+        cur.fetchone.side_effect=((0,),(2,),(0,),(0,))
+        guard=MagicMock()
+        with patch('initial_db_facts.require_observation_privileges'),patch('initial_db_facts.time.sleep') as sleep:
+            project_idle(conn,guard=guard)
+        self.assertEqual(guard.call_count,2);sleep.assert_called_once_with(1)
 
     def test_hidden_or_revoked_metadata_privileges_are_rejected(self):
         conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value
         cur.fetchone.return_value=('NONE',)
         for grants in ([('GRANT SELECT ON *.* TO x',)],
-                       [('GRANT ALL PRIVILEGES ON `jjikmuk`.* TO x',)],
+                       [('GRANT ALL PRIVILEGES ON `another`.* TO x',)],
+                       [('GRANT EVENT ON `jjikmuk`.* TO x',)],
                        [('GRANT ALL PRIVILEGES ON *.* TO x',),('REVOKE EVENT ON `other`.* FROM x',)]):
             cur.fetchmany.return_value=grants
             with self.assertRaises(ValueError):require_observation_privileges(conn)
         cur.fetchmany.return_value=[('GRANT PROCESS, EVENT, TRIGGER ON *.* TO x',)]
+        require_observation_privileges(conn)
+        cur.fetchmany.return_value=[('GRANT USAGE ON *.* TO x',),('GRANT ALL PRIVILEGES ON `jjikmuk`.* TO x',)]
         require_observation_privileges(conn)
         cur.fetchone.return_value=('`rds_superuser_role`@`%`',)
         require_observation_privileges(conn)
