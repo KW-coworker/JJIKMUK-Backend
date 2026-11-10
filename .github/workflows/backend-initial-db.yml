@@ -57,6 +57,8 @@ jobs:
           PYTHONPATH=ops/operations:ops/cd python3 -B -m unittest discover -s ops/operations/tests -p test_initial_schema.py -v
       - name: main 원본 테스트와 실행 파일 빌드
         run: ./gradlew test bootJar
+      - name: 최초 역할 발급 시작 시각 기록
+        run: python3 -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("INITIAL_ROLE_REQUEST_EPOCH="+str(int(time.time()))+"\n")'
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute

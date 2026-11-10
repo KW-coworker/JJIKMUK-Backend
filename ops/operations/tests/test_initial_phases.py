@@ -1,10 +1,20 @@
 from datetime import datetime,timezone
+import os,time
 import unittest
 from unittest.mock import MagicMock,patch
 import initial_db_runner as runner
 
 
 class InitialPhaseTests(unittest.TestCase):
+    def setUp(self):
+        self.marker=patch.dict(os.environ,{'INITIAL_ROLE_REQUEST_EPOCH':str(int(time.time()))})
+        self.marker.start();self.addCleanup(self.marker.stop)
+
+    def test_insufficient_remaining_session_blocks_apply_but_keeps_recovery_budget(self):
+        with patch.dict(os.environ,{'INITIAL_ROLE_REQUEST_EPOCH':str(int(time.time())-1000)}):
+            with self.assertRaisesRegex(ValueError,'TIME_BUDGET'):runner.require_time_budget('apply')
+            runner.require_time_budget('recover')
+
     def test_frozen_snapshot_must_precede_apply(self):
         events=[];ctx={'commit':'a'*40};backup={'id':'fixed'}
         def phase(name,snapshot=None):

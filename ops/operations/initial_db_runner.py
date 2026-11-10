@@ -143,10 +143,22 @@ def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:No
 from initial_document import document
 
 
+def require_time_budget(phase):
+    # The marker precedes the fixed 3600-second OIDC request, so this is a
+    # conservative lower bound, not a guessed expiration from a local profile.
+    raw=os.environ.get('INITIAL_ROLE_REQUEST_EPOCH','')
+    need(re.fullmatch('[1-9][0-9]{9}',raw),'ROLE_TIME_MARKER_REQUIRED')
+    started=int(raw);now=time.time()
+    need(0<=now-started,'ROLE_TIME_MARKER_INVALID')
+    reserve={'freeze':1600,'snapshot':1000,'apply':2700,'recover':330}[phase]
+    need(started+3600-now>=reserve,'ROLE_TIME_BUDGET_INSUFFICIENT_NO_NEW_DDL')
+
+
 def maintain(api,ctx,rds,monitor,phase):
     try:
         frozen=phase('freeze')
         need(frozen.get('success'),'FREEZE_FAILED_NO_SCHEMA_APPLY')
+        require_time_budget('snapshot')
         backup=snapshot(rds,api,ctx,frozen_epoch=frozen['report']['counts']['frozen_epoch'],guard=monitor.check)
         need(validate_context()==ctx,'CONTEXT_CHANGED_AFTER_SNAPSHOT')
         monitor.check()
@@ -174,6 +186,7 @@ def main():
     binding = {'commit': ctx['commit'], 'jar_sha256': envelope['jar_sha256'],
                'archive_sha256': archive_sha, 'request_id': ctx['request_id'],'required_bytes':5*1024**3}
     def phase(name,backup=None):
+        require_time_budget(name)
         doc=document(key,archive_sha,envelope,binding,name,backup)
         plan={'format':1,'component':'db','operation':'deploy','approved':True,
               'approval_id':'USER_FULLTEXT_MAINTENANCE_AND_CD_20261110','document':doc}
