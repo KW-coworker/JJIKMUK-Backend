@@ -55,17 +55,24 @@ def old_host():
 
 
 def stopped():
-    for unit in UNITS:
-        require(systemctl('show', unit, '--property=ActiveState', '--value') == 'inactive'
-                and systemctl('show', unit, '--property=MainPID', '--value') == '0'
-                and systemctl('show', unit, '--property=SubState', '--value') == 'dead', 'SERVICES_NOT_STOPPED')
-        group=systemctl('show',unit,'--property=ControlGroup','--value')
-        if group:
-            require(group.startswith('/system.slice/') and '..' not in group,'SERVICE_CGROUP_PATH')
-            directory=Path('/sys/fs/cgroup'+group)
-            if directory.exists():
-                require(all(not p.read_text().strip() for p in directory.rglob('cgroup.procs')),
-                        'SERVICE_CGROUP_NOT_EMPTY')
+    from initial_service_state import stopped as verify_stopped
+    return verify_stopped(UNITS,systemctl)
+
+
+def previous_freeze_record():
+    """Preserve the consumed pre-DDL attempt; never reset its journal."""
+    path=Path('/var/lib/jjikmuk-backend-initial-db-20261110/state.json')
+    secure(path)
+    require(path.is_file() and path.stat().st_size<1024**2,'PREVIOUS_FREEZE_RECORD_SIZE')
+    raw=path.read_bytes();state=json.loads(raw)
+    require(state['status']=='OLD_SERVICES_RESTORED_WITHOUT_DB_WRITES'
+            and state['binding']['commit']=='54557e2f16e05733a2d44bfe5add944d1c60e146'
+            and state['binding']['request_id']=='b496c0b3366640079ec8937673142c3e'
+            and state.get('operations',[])==[]
+            and not {'snapshot','frozen_epoch','data','failure_observed'} & state.keys(),
+            'PREVIOUS_FREEZE_NOT_PROVEN_PRE_DDL')
+    require_inputs(state)
+    return hashlib.sha256(raw).hexdigest()
 
 
 def chatbot_runtime():
@@ -213,6 +220,7 @@ def phase_guard(stage,binding,seconds):
 
 def freeze(stage,binding):
     mark('ABSENCE')
+    prior_record=previous_freeze_record()
     require(not JOURNAL_ROOT.exists() and not JOURNAL_ROOT.is_symlink(),'INITIAL_DB_JOURNAL_EXISTS_NO_RETRY')
     require(not Path('/opt/jjikmuk-cd').exists() and not Path('/etc/jjikmuk-cd').exists()
             and not Path('/var/lib/jjikmuk-operations').exists(),'INITIAL_INSTALL_ALREADY_PRESENT')
@@ -251,6 +259,7 @@ def freeze(stage,binding):
     schema.extract_runtime(stage/'backend.jar',stage)
     JOURNAL_ROOT.mkdir(mode=0o700);os.chmod(JOURNAL_ROOT,0o700)
     state={'status':'STOP_INTENT','binding':binding,'stage':str(stage),'candidate':manifest,
+           'previous_freeze_sha256':prior_record,
            'protected':protected,'chatbot_files':chat_files,'chatbot_runtime':chatbot_runtime(),
            'environment_sha256':environment,
            'truststore_sha256':digest(Path('/opt/food-chatbot/rds-institution-trust.p12')),
@@ -259,7 +268,8 @@ def freeze(stage,binding):
     try:
         mark('SERVICE_FREEZE')
         for unit in UNITS:systemctl('stop',unit)
-        stopped();guard();require_inputs(state)
+        state['stopped_units']=stopped();guard();require_inputs(state)
+        atomic_json(JOURNAL_ROOT/'state.json',state)
         with connect(stage) as conn:
             facts.project_idle(conn,guard=guard)
             frozen_schema=schema.read_from_connection(conn)

@@ -15,6 +15,20 @@ import initial_flyway as flyway
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_previous_attempt_must_be_restored_before_ddl_with_exact_binding(self):
+        import json
+        value={'status':'OLD_SERVICES_RESTORED_WITHOUT_DB_WRITES','binding':{
+            'commit':'54557e2f16e05733a2d44bfe5add944d1c60e146',
+            'request_id':'b496c0b3366640079ec8937673142c3e'}}
+        path=MagicMock();path.is_file.return_value=True;path.stat.return_value.st_size=1024
+        with patch.object(host,'Path',return_value=path),patch.object(host,'secure'),patch.object(host,'require_inputs'):
+            path.read_bytes.return_value=json.dumps(value).encode()
+            self.assertEqual(len(host.previous_freeze_record()),64)
+            for key,new in [('snapshot',{}),('data',{}),('frozen_epoch',1),('operations',[{}]),
+                            ('status','FULLTEXT_DROPPED'),('binding',{'commit':'a'*40,'request_id':'b'*32})]:
+                path.read_bytes.return_value=json.dumps({**value,key:new}).encode()
+                with self.subTest(key=key),self.assertRaises(ValueError):host.previous_freeze_record()
+
     def test_existing_app_config_uses_observed_owner_and_content_not_root_policy(self):
         raw=b'spring.datasource.username=synthetic\nspring.datasource.password=synthetic\n'
         with tempfile.TemporaryDirectory() as folder:
