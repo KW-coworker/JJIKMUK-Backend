@@ -152,9 +152,12 @@ def restore_services(state):
                 time.sleep(2)
         raise ValueError('OLD_SERVICE_RESTORE_HEALTH_FAILED')
     except BaseException:
-        for unit in UNITS:systemctl('stop',unit)
-        stopped()
-        set_state(state,'RESTORE_FAILED_SERVICES_STOPPED')
+        for unit in UNITS:
+            try:systemctl('stop',unit)
+            except Exception:pass
+        try:stopped()
+        except Exception:set_state(state,'RESTORE_FAILED_STOP_UNCONFIRMED')
+        else:set_state(state,'RESTORE_FAILED_SERVICES_STOPPED')
         raise
 
 

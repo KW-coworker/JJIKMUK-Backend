@@ -13,6 +13,18 @@ import initial_flyway as flyway
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_failed_backend_stop_still_attempts_chatbot_stop_and_marks_uncertain(self):
+        state={'status':'DB_VERIFIED_SERVICES_STOPPED'}
+        def command(*args):
+            if args in (('start',host.UNITS[0]),('stop',host.UNITS[0])):raise ValueError('SYNTHETIC_FAILURE')
+        def state_change(state,status):state['status']=status
+        with patch.object(host,'require_inputs'),patch.object(host,'set_state',side_effect=state_change), \
+                patch.object(host,'systemctl',side_effect=command) as commands, \
+                patch.object(host,'stopped',side_effect=ValueError('STILL_RUNNING')):
+            with self.assertRaisesRegex(ValueError,'SYNTHETIC'):host.restore_services(state)
+        self.assertIn(('stop',host.UNITS[1]),[c.args for c in commands.call_args_list])
+        self.assertEqual(state['status'],'RESTORE_FAILED_STOP_UNCONFIRMED')
+
     def test_second_service_start_failure_stops_both_and_journals_truth(self):
         state={'status':'DB_VERIFIED_SERVICES_STOPPED'}
         events=[]
