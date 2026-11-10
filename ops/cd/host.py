@@ -102,18 +102,20 @@ class Host:
             return self.journal
 
     def prepare(self, request):
+        from host_aws import command as aws_command,require_identity
+        require_identity(self.config['aws'],self.config['region'])
         # Root-owned staging is immutable per run. Never overwrite an uncertain attempt.
         folder = self.root / 'releases' / f"{request['commit']}-{request['run_id']}-{request['attempt']}"
         folder.mkdir(mode=0o755)
         prefix = f"{self.config['prefix']}/{request['commit']}/{request['run_id']}-{request['attempt']}"
         for name, version in [('manifest.json', request['manifest_version']), ('backend.jar', request['jar_version'])]:
-            metadata = json.loads(command([self.config['aws'], 's3api', 'head-object', '--region', self.config['region'],
+            metadata = json.loads(aws_command([self.config['aws'], 's3api', 'head-object', '--region', self.config['region'],
                     '--bucket', self.config['bucket'], '--key', prefix + '/' + name,
                     '--version-id', version, '--output', 'json'], 30))
             limit = 128*1024 if name == 'manifest.json' else m['jar_bytes']
             require(0 < metadata['ContentLength'] <= limit, 'S3_OBJECT_SIZE')
             require(shutil.disk_usage(folder).free >= limit + 2*1024**3, 'DISK_RESERVE_REQUIRED')
-            command([self.config['aws'], 's3api', 'get-object', '--region', self.config['region'],
+            aws_command([self.config['aws'], 's3api', 'get-object', '--region', self.config['region'],
                      '--bucket', self.config['bucket'], '--key', prefix + '/' + name,
                      '--version-id', version, str(folder / name)], 120)
             os.chmod(folder / name, 0o644)

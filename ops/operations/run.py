@@ -171,7 +171,7 @@ def inspect(api):
 
 
 def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
-    need(output_prefix in ('','freeze-','apply-','recover-'),'OPERATION_OUTPUT_PREFIX')
+    need(output_prefix in ('','freeze-','apply-','recover-','install-','activate-'),'OPERATION_OUTPUT_PREFIX')
     op_id=sha(canonical({'commit':context_data['commit'],'plan_sha256':plan_hash,'target':target}))
     doc=plan['document'];content=canonical(doc).decode();name=DOCUMENT_PREFIX+sha(canonical(doc))
     # S3 precondition makes reruns fail before any second command, including a lost SendCommand response.
@@ -197,7 +197,8 @@ def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
             'success':operation_succeeded(result)}
 
 
-def collect(api,op_id):
+def collect(api,op_id,*,output_prefix=''):
+    need(output_prefix in ('','install-','activate-','recover-'),'COLLECT_OUTPUT_PREFIX')
     need(re.fullmatch('[0-9a-f]{64}',op_id),'INVALID_OPERATION_ID')
     intent=read_object(api['s3'],'receipts/'+op_id+'/intent.json')
     need(intent['target'] in HOSTS.values() and intent['document'].startswith(DOCUMENT_PREFIX),'INVALID_STORED_INTENT')
@@ -213,7 +214,7 @@ def collect(api,op_id):
             request['NextToken']=page['NextToken']
         else:raise ValueError('COMMAND_HISTORY_LIMIT_NO_RESEND')
         need(len(found)==1,'SEND_OUTCOME_UNCERTAIN_NO_RESEND');cid=found[0]
-    result=wait_result(api['ssm'],cid,intent['target'],intent['document']);save_local('collected.json',result)
+    result=wait_result(api['ssm'],cid,intent['target'],intent['document']);save_local(output_prefix+'collected.json',result)
     return {'status':'COLLECTED_NO_RESEND','operation_id':op_id,'command_id':cid,
             'success':operation_succeeded(result)}
 
