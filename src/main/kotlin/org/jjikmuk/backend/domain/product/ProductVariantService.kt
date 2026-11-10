@@ -118,7 +118,7 @@ class ProductVariantService(
             status = status,
             conflictingAllergens = conflicts,
             evidenceSources = decisions.flatMap { it.evidenceSources }.distinct().sorted(),
-            evidenceLevel = relevant.maxBy { it.evidenceLevel.ordinal }.evidenceLevel,
+            evidenceLevel = relevant.maxBy { it.evidenceLevel.aggregationPriority }.evidenceLevel,
             confidence = if (relevant.any { it.confidence == null }) null else relevant.minOf { it.confidence!! },
             message = when (status) {
                 SafetyStatus.NOT_EVALUATED -> "개인 조건을 검사하지 않았습니다."

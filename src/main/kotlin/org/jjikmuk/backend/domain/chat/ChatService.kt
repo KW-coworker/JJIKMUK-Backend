@@ -135,7 +135,7 @@ class ChatService(
             )
         )
         // No SCAN writes, and no transaction held across the external AI request.
-        return aiRequest
+        return ChatEvidenceCompatibility.forV2(aiRequest)
     }
 
     fun askPrepared(request: AiChatRequestDto, ownerId: Long, externalAiConsent: Boolean): String =

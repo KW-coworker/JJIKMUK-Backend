@@ -76,6 +76,48 @@ class ChatSignedTransportIntegrationTest @Autowired constructor(
         assertEquals(before,captures.size)
     }
 
+    @Test fun `source evidence uses existing chat vocabulary without changing verdict confidence or proof bytes`() {
+        val member = users.saveAndFlush(User(email="${UUID.randomUUID()}@example.invalid", nickname="source-owner", password="test-only"))
+        val token = auth.issue(member, false, "test").token
+        data class Case(val name: String, val materials: String, val allergies: String, val count: Int, val confidence: Double?, val expected: String)
+        for (case in listOf(
+            Case("source-null", "쌀", "milk", 1, null, "UNKNOWN"),
+            Case("source-zero", "쌀", "milk", 1, 0.0, "UNKNOWN"),
+            Case("source-one", "쌀", "milk", 1, 1.0, "UNKNOWN"),
+            Case("source-danger", "쌀, 우유", "milk", 1, 0.42, "DANGER"),
+            Case("source-pass", "쌀", "", 1, 0.42, "PASS"),
+            Case("source-none", "쌀", "milk", 0, 0.42, "NOT_EVALUATED"),
+            Case("source-multi", "쌀", "milk", 2, 0.42, "UNKNOWN"),
+            Case("source-max21", "쌀", "milk", 21, 0.42, "UNKNOWN")
+        )) {
+            val product = products.saveAndFlush(Product(barcode="source-${UUID.randomUUID()}", productName="합성 원자료 상품",
+                rawMaterials=case.materials, allergyEvidenceLevel=AllergyEvidenceLevel.SOURCE_INGREDIENTS,
+                allergyDataConfidence=case.confidence))
+            val request = mapOf("message" to "이 제품 정보를 확인해 줘", "barcode" to product.barcode,
+                "profiles" to (0 until case.count).map { mapOf("nickname" to "합성 프로필 $it", "allergies" to case.allergies) },
+                "externalAiConsent" to false)
+            val response = mvc.perform(post("/api/chat").header("Authorization", "Bearer $token")
+                .contentType("application/json").content(mapper.writeValueAsBytes(request))).andReturn().response
+            assertEquals(200, response.status)
+            val capture = captures.last()
+            val payload = mapper.readTree(Base64.getDecoder().decode(capture["bodyBase64"] as String))
+            val context = payload.get("analysisContext")
+            assertEquals("UNKNOWN", context.at("/analysis/evidenceLevel").asText())
+            assertEquals(case.expected, context.at("/analysis/status").asText())
+            assertEquals("UNKNOWN", context.at("/dataEvidence/allergyEvidenceLevel").asText())
+            if (case.confidence == null) assertTrue(context.at("/dataEvidence/allergyConfidence").isNull)
+            else assertEquals(case.confidence, context.at("/dataEvidence/allergyConfidence").asDouble())
+            assertEquals(case.count, context.get("profileAnalyses").size())
+            for (profile in context.get("profileAnalyses")) {
+                assertEquals("UNKNOWN", profile.at("/analysis/evidenceLevel").asText())
+                assertEquals(case.expected, profile.at("/analysis/status").asText())
+            }
+            assertEquals(AllergyEvidenceLevel.SOURCE_INGREDIENTS, products.findById(product.barcode).orElseThrow().allergyEvidenceLevel)
+            capture["case"] = case.name
+            capture["ownerId"] = member.id!!
+        }
+    }
+
     companion object {
         private val mapper = JsonMapper.builder().findAndAddModules().build()
         private val captures = mutableListOf<MutableMap<String, Any>>()
