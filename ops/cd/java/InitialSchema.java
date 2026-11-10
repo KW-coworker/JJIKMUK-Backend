@@ -1,5 +1,7 @@
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.net.URI;
@@ -21,7 +23,7 @@ public final class InitialSchema {
             .placeholderReplacement(false).skipDefaultCallbacks(true)
             .ignoreMigrationPatterns(new String[0]).connectRetries(0).lockRetryCount(0)
             .initSql("SET SESSION lock_wait_timeout=10, innodb_lock_wait_timeout=10")
-            .loggers("noop").load();
+            .loggers("console").load();
     }
 
     static void apply(Flyway flyway) {
@@ -48,6 +50,9 @@ public final class InitialSchema {
     }
 
     public static void main(String[] args) {
+        PrintStream publicOutput = System.out;
+        System.setOut(new PrintStream(OutputStream.nullOutputStream()));
+        System.setErr(new PrintStream(OutputStream.nullOutputStream()));
         try {
             if (args.length != 1) throw new IllegalArgumentException();
             Path stage = Path.of(args[0]).toRealPath();
@@ -63,12 +68,12 @@ public final class InitialSchema {
                     !"/jjikmuk".equals(target.getPath()) || target.getUserInfo() != null || target.getFragment() != null)
                 throw new IllegalArgumentException();
             apply(configured(stage, url, user, password));
-            System.out.println("{\"status\":\"SCHEMA_PREPARED\",\"migrations\":4}");
+            publicOutput.println("{\"status\":\"SCHEMA_PREPARED\",\"migrations\":4}");
         } catch (Throwable error) {
             // Database URLs, credentials, SQL and driver messages never reach SSM output.
             String type = error.getClass().getSimpleName().toUpperCase(java.util.Locale.ROOT);
             if (!type.matches("[A-Z]{1,45}")) type = "OTHER";
-            System.out.println("{\"status\":\"SCHEMA_STOPPED_KEEP_RECORDS_NO_RETRY\",\"phase\":\""
+            publicOutput.println("{\"status\":\"SCHEMA_STOPPED_KEEP_RECORDS_NO_RETRY\",\"phase\":\""
                 + phase + "\",\"type\":\"" + type + "\"}");
             System.exit(1);
         }

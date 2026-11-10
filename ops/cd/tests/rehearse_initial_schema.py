@@ -19,7 +19,10 @@ with zipfile.ZipFile(jars[0]) as z:
             (stage / 'sql' / Path(item.filename).name).write_bytes(z.read(item))
 subprocess.run(['javac', '-cp', str(stage / 'lib/*'), '-d', str(stage / 'classes'),
                 str(repo / 'ops/cd/java/InitialSchema.java'),
-                str(repo / 'ops/cd/tests/java/InitialSchemaRehearsal.java')], check=True, timeout=60)
+                str(repo / 'ops/cd/tests/java/InitialSchemaRehearsal.java'),
+                str(repo / 'ops/cd/tests/java/V17FulltextRehearsal.java')], check=True, timeout=60)
+subprocess.run(['java', '-cp', str(stage / 'lib/*') + ':' + str(stage / 'classes'),
+                'V17FulltextRehearsal', str(stage / 'sql/V17__preserve_product_nutrition_basis.sql')], check=True, timeout=60)
 subprocess.run(['java', '-cp', str(stage / 'lib/*') + ':' + str(stage / 'classes'),
                 'InitialSchemaRehearsal', str(stage)], check=True, timeout=120)
 sys.path.insert(0, str(repo / 'ops/cd'))

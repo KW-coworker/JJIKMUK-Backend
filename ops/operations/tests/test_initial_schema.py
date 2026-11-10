@@ -38,13 +38,14 @@ def metadata(prepared=False):
     history = [dict(version='0', script='baseline', checksum=None, type='BASELINE', success=True)]
     history += [dict(version=r['version'], script=r['script'], checksum=r['checksum'], type='SQL', success=True)
                 for r in m['migrations'] if prepared or int(r['version']) <= 16]
-    indexes = [['products', 'PRIMARY', 0, 1, 'id', None, 'BTREE']]
+    indexes = [[t, 'PRIMARY', 0, 1, 'id', None, 'BTREE'] for t in ('products', 'users', 'family_profiles')]
     fks = []
     if prepared:
         indexes += [[table, name, non_unique, i, col, None, 'BTREE'] for table, rows in INDEXES.items()
                     for name, non_unique, cols in rows for i, col in enumerate(cols, 1)]
         fks = [[t, n, 1, c, 'jjikmuk', rt, rc, 'RESTRICT', 'CASCADE'] for t, n, c, rt, rc in FOREIGN_KEYS]
-    return {'columns': columns, 'indexes': indexes, 'history': history, 'foreign_keys': fks}
+    return {'columns': columns, 'indexes': indexes, 'history': history, 'foreign_keys': fks,
+            'tables': [[t, 'InnoDB', 'Dynamic'] for t in sorted({r[0] for r in columns})]}
 
 
 class InitialSchemaTests(unittest.TestCase):
@@ -60,6 +61,15 @@ class InitialSchemaTests(unittest.TestCase):
             if change == 'hash': next(r for r in m['migrations'] if r['version'] == '19')['sha256'] = '0' * 64
             else: m['migrations'].append(dict(m['migrations'][0], version='21'))
             with self.assertRaises(ValueError): schema.validate_source(m)
+
+    def test_fulltext_and_incompatible_fk_parent_stop_before_any_ddl(self):
+        for kind in ('fulltext', 'type', 'key', 'engine'):
+            value = metadata()
+            if kind == 'fulltext': value['indexes'].append(['products', 'ft', 1, 1, 'search_keywords', None, 'FULLTEXT'])
+            if kind == 'type': next(r for r in value['columns'] if r[0] == 'users')[3] = 'bigint unsigned'
+            if kind == 'key': value['indexes'] = [r for r in value['indexes'] if r[0] != 'users']
+            if kind == 'engine': next(r for r in value['tables'] if r[0] == 'family_profiles')[1] = 'MyISAM'
+            with self.subTest(kind=kind), self.assertRaises(ValueError): schema.verify_schema(manifest(), value, False)
 
     def test_missing_old_history_failed_checksum_or_partial_ddl_is_rejected(self):
         for kind in ('missing', 'checksum', 'failure', 'partial', 'baseline'):

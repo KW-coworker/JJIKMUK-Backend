@@ -45,12 +45,27 @@ def verify_schema(manifest, metadata, prepared):
             'SCHEMA_METADATA_LIMIT')
     pairs = {(r[0], r[1]): r for r in columns}
     tables = {r[0] for r in columns}
+    engines = {r[0]: r for r in metadata['tables']}
     require({'products', 'products_rollback', 'users', 'family_profiles'} <= tables
             and 'products_staging' not in tables, 'INITIAL_TABLE_SET_CHANGED')
     expected = dict(manifest, migrations=[m for m in manifest['migrations'] if prepared or int(m['version']) <= 16])
     require(sum(r['type'] == 'BASELINE' for r in history) == 1, 'INITIAL_BASELINE_COUNT')
     require_database(expected, history)
     require((NEW_TABLES <= tables) if prepared else not (NEW_TABLES & tables), 'INITIAL_TABLE_STATE')
+    for table in ('users', 'family_profiles'):
+        row = pairs.get((table, 'id'))
+        unique = {}
+        for idx in indexes:
+            if idx[0] == table and idx[2] == 0:
+                unique.setdefault(idx[1], []).append(idx)
+        require(row is not None and row[3:5] == ['bigint', 'NO']
+                and any(len(rows) == 1 and rows[0][3:6] == [1, 'id', None] for rows in unique.values())
+                and engines.get(table, [None, None])[1] == 'InnoDB', 'INITIAL_FK_PARENT_INCOMPATIBLE')
+    if not prepared:
+        for table in ('products', 'products_rollback'):
+            require(engines.get(table, [None, None, None])[1:] == ['InnoDB', 'Dynamic'], 'V17_TABLE_ENGINE_REQUIRES_REVIEW')
+            require(not any(r[0] == table and r[6] == 'FULLTEXT' for r in indexes),
+                    'V17_FULLTEXT_REQUIRES_SEPARATE_MAINTENANCE')
     for table, column, kind, nullable in [('products', 'nutrition_basis_raw', 'varchar(255)', 'YES'),
             ('products_rollback', 'nutrition_basis_raw', 'varchar(255)', 'YES'),
             ('users', 'profile_version', 'bigint', 'NO')]:
@@ -107,6 +122,9 @@ def read_from_connection(conn):
         with conn.cursor() as cur:
             cur.execute('SET SESSION MAX_EXECUTION_TIME=10000')
             cur.execute('START TRANSACTION READ ONLY')
+            cur.execute('SELECT TABLE_NAME,ENGINE,ROW_FORMAT FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME LIMIT 102', ('jjikmuk',))
+            tables = cur.fetchmany(102)
+            require(len(tables) <= 101, 'SCHEMA_TABLE_LIMIT')
             cur.execute('SELECT TABLE_NAME,COLUMN_NAME,ORDINAL_POSITION,COLUMN_TYPE,IS_NULLABLE,CHARACTER_MAXIMUM_LENGTH,COLUMN_DEFAULT,EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME,ORDINAL_POSITION LIMIT 4097', ('jjikmuk',))
             columns = cur.fetchmany(4097)
             cur.execute('SELECT TABLE_NAME,INDEX_NAME,NON_UNIQUE,SEQ_IN_INDEX,COLUMN_NAME,SUB_PART,INDEX_TYPE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX LIMIT 4097', ('jjikmuk',))
@@ -116,7 +134,7 @@ def read_from_connection(conn):
             cur.execute('SELECT version,script,checksum,success,type FROM flyway_schema_history ORDER BY installed_rank LIMIT 102')
             history = [dict(version=v, script=s, checksum=c, success=bool(ok), type=t)
                        for v, s, c, ok, t in cur.fetchmany(102)]
-            return {'columns': columns, 'indexes': indexes, 'history': history, 'foreign_keys': foreign_keys}
+            return {'columns': columns, 'indexes': indexes, 'history': history, 'foreign_keys': foreign_keys, 'tables': tables}
     finally:
         conn.rollback()
 
