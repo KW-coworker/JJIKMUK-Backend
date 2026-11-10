@@ -1,0 +1,49 @@
+name: Initial Schema Rehearsal
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'ops/cd/initial_*.py'
+      - 'ops/cd/java/**'
+      - 'ops/cd/tests/java/**'
+      - 'ops/cd/tests/rehearse_initial_schema.py'
+      - 'ops/cd/tests/check_initial_cgroup.py'
+      - 'ops/operations/initial_db_runner.py'
+      - '.github/workflows/initial-schema-checks.yml'
+permissions:
+  contents: read
+jobs:
+  mysql-schema-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mysql:
+        image: mysql:8.4.11@sha256:0f51e63e537a1f176423fa03ef559aabe6fa4372a53160a44bc7e75da7d15364
+        env:
+          MYSQL_ROOT_PASSWORD: rehearsal_only
+          MYSQL_DATABASE: jjikmuk
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -prehearsal_only"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+      - run: ./gradlew bootJar
+      - name: 시간 초과 시 분리된 자식 프로세스까지 종료
+        run: sudo python3 -B ops/cd/tests/check_initial_cgroup.py
+      - name: 원본 V17~V20 MySQL 적용·기존 행 보존·재실행 거절
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/cd/requirements-db.lock
+          python3 -B ops/cd/tests/rehearse_initial_schema.py
+      - name: 설치 없이 고정 SDK 압축 해제와 서비스 모델 검증
+        run: |
+          PYTHONPATH=ops/cd:ops/operations python3 -B -c 'import os; from pathlib import Path; from initial_db_runner import build_payload; build_payload(Path.cwd(),os.environ["GITHUB_SHA"])'
+          sudo python3 -I -S -B ops/cd/tests/check_initial_sdk.py
