@@ -118,6 +118,12 @@ class ReadProbeTest(unittest.TestCase):
         self.assertNotIn('PRIVATE_TEXT',json.dumps(left.finish()))
         self.assertNotIn('sample',json.dumps(left.finish()))
 
+    def test_reused_encoder_matches_existing_canonical_bytes(self):
+        from catalog_compare import canonical
+        summary=FieldSummary([('name','text')])
+        for value in (None,'','가나다\n"',1,-12,1.2,1.2e-20,0.0,['sample',123]):
+            self.assertEqual(summary.canonical(value),canonical(value))
+
     def test_field_hashes_are_never_compared_when_key_order_differs(self):
         columns=[('barcode','text'),('product_id','bigint'),('name','text')]
         a={'barcode':'a','product_id':1,'name':'x'};b={'barcode':'b','product_id':2,'name':'y'}

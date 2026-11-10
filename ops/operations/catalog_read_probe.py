@@ -25,7 +25,9 @@ class FieldSummary:
     def __init__(self,columns):
         from catalog_compare import NON_IDENTITY, canonical, normalized, present
         self.fields=[(name,kind) for name,kind in columns if name not in NON_IDENTITY]
-        self.canonical=canonical;self.normalized=normalized
+        encoder=json.JSONEncoder(ensure_ascii=False,separators=(',',':'),allow_nan=False)
+        self.canonical=lambda value:encoder.encode(value).encode('utf-8')
+        self.normalized=normalized
         self.hashes={name:hashlib.sha256() for name,_ in self.fields}
         self.nonnull={name:0 for name,_ in self.fields}
         self.keys=hashlib.sha256();self.rows=0
