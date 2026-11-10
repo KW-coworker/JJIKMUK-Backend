@@ -23,12 +23,13 @@ PROVENANCE_COLUMNS = {
 class FieldSummary:
     """Column stream hashes are comparable only with equal ordered product keys."""
     def __init__(self,columns):
-        from catalog_compare import NON_IDENTITY, canonical, normalized
+        from catalog_compare import NON_IDENTITY, canonical, normalized, present
         self.fields=[(name,kind) for name,kind in columns if name not in NON_IDENTITY]
         self.canonical=canonical;self.normalized=normalized
         self.hashes={name:hashlib.sha256() for name,_ in self.fields}
         self.nonnull={name:0 for name,_ in self.fields}
         self.keys=hashlib.sha256();self.rows=0
+        self.present=present;self.images=0;self.bases=0
     def consume(self,row):
         need(type(row['product_id']) is int and row['product_id']>0 and
              isinstance(row['barcode'],str) and row['barcode'],'PRODUCT_KEY')
@@ -38,8 +39,11 @@ class FieldSummary:
             self.hashes[name].update(self.canonical(value)+b'\n')
             self.nonnull[name]+=value is not None
         self.rows+=1
+        self.images+=self.present(row.get('image_url'))
+        self.bases+=self.present(row.get('nutrition_basis_raw'))
     def finish(self):
-        return {'counts':{'operating_rows':self.rows,**{'nonnull.'+k:v for k,v in self.nonnull.items()}},
+        return {'counts':{'operating_rows':self.rows,'operating_image_filled':self.images,
+                          'operating_basis_filled':self.bases,**{'nonnull.'+k:v for k,v in self.nonnull.items()}},
                 'hashes':{'ordered_product_keys':self.keys.hexdigest(),
                           **{'field.'+k:v.hexdigest() for k,v in self.hashes.items()}}}
 
