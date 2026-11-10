@@ -17,7 +17,7 @@ public final class InitialSchemaRehearsal {
         // Only this disposable test database uses a synthetic baseline at 16.
         // Production preflight requires the real V1-V16 SQL history and baseline 0.
         Flyway.configure().dataSource(url, "root", "rehearsal_only").baselineVersion("16")
-            .loggers("console").load().baseline();
+            .loggers("slf4j").load().baseline();
         var flyway = InitialSchema.configured(Path.of(args[0]), url, "root", "rehearsal_only");
         InitialSchema.apply(flyway);
         try (var c = DriverManager.getConnection(url, "root", "rehearsal_only"); var s = c.createStatement()) {

@@ -23,7 +23,7 @@ public final class InitialSchema {
             .placeholderReplacement(false).skipDefaultCallbacks(true)
             .ignoreMigrationPatterns(new String[0]).connectRetries(0).lockRetryCount(0)
             .initSql("SET SESSION lock_wait_timeout=10, innodb_lock_wait_timeout=10")
-            .loggers("console").load();
+            .loggers("slf4j").load();
     }
 
     static void apply(Flyway flyway) {
