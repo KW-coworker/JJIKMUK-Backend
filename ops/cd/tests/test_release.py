@@ -43,11 +43,24 @@ def release_fixture():
             Path('release').mkdir();fixture_jar('release/backend.jar')
             m=make_manifest('release/backend.jar','a'*40,'12','1')
             Path('release/manifest.json').write_text(json.dumps(m))
-            with patch('release.guard'),patch('release.identity',return_value=('a'*40,'12','1')),patch('sys.stdout',new_callable=io.StringIO),patch('release.time.sleep'):
+            # A normal-release fixture must not inherit the live resume workflow's
+            # request ID or write synthetic outcomes into its GitHub summary.
+            with patch.dict(os.environ, {'MAINTENANCE_ID':'','GITHUB_STEP_SUMMARY':''}),patch('release.guard'),patch('release.identity',return_value=('a'*40,'12','1')),patch('sys.stdout',new_callable=io.StringIO),patch('release.time.sleep'):
                 yield
         finally:os.chdir(old)
 
 class ReleaseTests(unittest.TestCase):
+    def test_normal_fixture_isolated_from_resume_workflow_and_restores_environment(self):
+        clients=self.setup_clients()
+        inherited={'MAINTENANCE_ID':'b'*32,'GITHUB_EVENT_NAME':'workflow_dispatch',
+                   'GITHUB_STEP_SUMMARY':'must-not-create-live-summary'}
+        with patch.dict(os.environ,inherited):
+            with release_fixture(),patch('release.clients',return_value=clients),patch('release.select_snapshot',return_value={'arn':'backup'}):
+                self.assertEqual('SUCCEEDED',dispatch()['status'])
+                self.assertFalse(Path(inherited['GITHUB_STEP_SUMMARY']).exists())
+            for name,value in inherited.items():self.assertEqual(os.environ[name],value)
+        clients['ssm'].send_command.assert_called_once()
+
     def setup_clients(self):
         self.s3=FakeS3();self.ssm=Mock();self.sts=Mock();self.rds=Mock()
         self.sts.get_caller_identity.return_value={'Account':ACCOUNT,'Arn':f'arn:aws:sts::{ACCOUNT}:assumed-role/JjikmukBackendAutoDeploy/test'}
