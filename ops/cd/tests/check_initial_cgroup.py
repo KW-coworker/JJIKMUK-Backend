@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='jjikmuk-initial-timeout-') as td:
     parent = "import subprocess,sys,time;assert sys.stdin.buffer.read()==b'pipe-proof';print('PIPE_OK',flush=True);subprocess.Popen([sys.executable,'-c'," + repr(child) + "],start_new_session=True);time.sleep(20)"
     result = subprocess.run(['/usr/bin/systemd-run', '--quiet', '--wait', '--pipe', '--collect',
         '--service-type=exec', '--unit=jjikmuk-ci-timeout-' + uuid.uuid4().hex,
-        '--property=RuntimeMaxSec=1', '--property=JobTimeoutSec=30',
+        '--property=RuntimeMaxSec=1', '--property=TimeoutStartSec=30',
         '--property=TimeoutStopSec=1', '--property=KillMode=control-group',
         '--property=Restart=no', sys.executable, '-c', parent], input=b'pipe-proof', capture_output=True, timeout=15)
     assert b'PIPE_OK' in result.stdout and Path(started).read_text() == 'started', 'transient service did not actually run'

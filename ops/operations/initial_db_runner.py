@@ -153,7 +153,7 @@ try:
    os.chmod(path,0o644)
  r=subprocess.run(['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect','--service-type=exec',
   '--unit=jjikmuk-initial-db-{archive_sha[:16]}','--property=RuntimeMaxSec=420',
-  '--property=JobTimeoutSec=30','--property=TimeoutStopSec=5','--property=KillMode=control-group',
+  '--property=TimeoutStartSec=30','--property=TimeoutStopSec=5','--property=KillMode=control-group',
   '--property=UMask=0077','--property=Restart=no',
   '/usr/bin/python3.12','-I','-S','-B',str(stage/'bin/initial_db_host.py')],
   input={canonical(binding)!r},capture_output=True,timeout=480,cwd='/',env={{'PATH':'/usr/bin:/bin','LANG':'C'}})

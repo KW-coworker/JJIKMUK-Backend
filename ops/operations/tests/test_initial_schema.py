@@ -140,7 +140,7 @@ class InitialSchemaTests(unittest.TestCase):
         self.assertEqual('report', doc['mainSteps'][-1]['name'])
         self.assertLess(len(json.dumps(doc)), 60000)
         self.assertNotIn('spring.datasource.password', json.dumps(doc))
-        for value in ('RuntimeMaxSec=420', 'JobTimeoutSec=30', 'TimeoutStopSec=5', 'KillMode=control-group', 'Restart=no'):
+        for value in ('RuntimeMaxSec=420', 'TimeoutStartSec=30', 'TimeoutStopSec=5', 'KillMode=control-group', 'Restart=no'):
             self.assertIn(value, json.dumps(doc))
 
 
