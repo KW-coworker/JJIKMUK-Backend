@@ -61,16 +61,20 @@ def stopped():
 
 def previous_freeze_record():
     """Preserve the consumed pre-DDL attempt; never reset its journal."""
-    path=Path('/var/lib/jjikmuk-backend-initial-db-20261110/state.json')
+    path=Path('/var/lib/jjikmuk-backend-initial-db-stop-proof-20261110/state.json')
     secure(path)
     require(path.is_file() and path.stat().st_size<1024**2,'PREVIOUS_FREEZE_RECORD_SIZE')
     raw=path.read_bytes();state=json.loads(raw)
     require(state['status']=='OLD_SERVICES_RESTORED_WITHOUT_DB_WRITES'
-            and state['binding']['commit']=='54557e2f16e05733a2d44bfe5add944d1c60e146'
-            and state['binding']['request_id']=='b496c0b3366640079ec8937673142c3e'
-            and state.get('operations',[])==[]
-            and not {'snapshot','frozen_epoch','data','failure_observed'} & state.keys(),
+            and state['restore_origin']=='FROZEN_NO_DB_WRITES'
+            and state['binding']['commit']=='fdfb752309157ef512a2ff998c9be5cceb47315b'
+            and state['binding']['request_id']=='461c0f630e8841f7b7c7d3c6b38e91e4'
+            and not {'snapshot','failure_observed'} & state.keys(),
             'PREVIOUS_FREEZE_NOT_PROVEN_PRE_DDL')
+    operations=state.get('operations',[])
+    require(isinstance(operations,list) and len(operations)<=2 and all(
+        op.get('status') in {'FLYWAY_CANCEL_INTENT','FLYWAY_SESSIONS_ENDED'} for op in operations),
+        'PREVIOUS_FREEZE_HAS_DB_MUTATION')
     require_inputs(state)
     return hashlib.sha256(raw).hexdigest()
 
