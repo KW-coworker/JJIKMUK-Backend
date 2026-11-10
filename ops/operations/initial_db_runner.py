@@ -70,7 +70,7 @@ def build_payload(repo, commit):
     files['vendor/sdk-lock.json'] = canonical(sdk_lock)
     for name in ('manifest', 'host', 'database_probe', 'runtime_contract', 'initial_contract',
                  'initial_schema', 'initial_schema_contract', 'initial_db_host', 'package_install',
-                 'initial_guard', 'initial_preservation', 'initial_ddl', 'initial_flyway',
+                 'initial_guard', 'initial_preservation', 'initial_ddl', 'initial_flyway', 'initial_service_state',
                  'initial_db_facts', 'initial_maintenance_host'):
         files['bin/' + name + '.py'] = (repo / 'ops/cd' / (name + '.py')).read_bytes()
     for name in ('readiness_paths', 'readiness_probe', 'fulltext_definition'):
