@@ -178,6 +178,32 @@ class ProductVariantServiceTest @Autowired constructor(
 
     private fun analysis(option: ProductCapacityOption) = option.data["analysis"] as Map<*, *>
 
+    @Test
+    fun `imported evidence keeps duplicate capacity group unverified`() {
+        val user = userRepository.save(User(email = "variant-source@example.test", nickname = "원자료", password = "test", allergies = "milk"))
+        save(product("SOURCE-GROUP-01", "100g", name = "원자료묶음", evidence = AllergyEvidenceLevel.DECLARED_LABEL),
+            product("SOURCE-GROUP-02", "100g", name = "원자료묶음", evidence = AllergyEvidenceLevel.SOURCE_INGREDIENTS))
+        val result = service.getVariants("SOURCE-GROUP-01", user.id).options.single()
+        assertEquals("UNKNOWN", analysis(result)["status"])
+        assertEquals("SOURCE_INGREDIENTS", analysis(result)["evidenceLevel"])
+        assertEquals(true, analysis(result)["verificationRequired"])
+    }
+
+    @Test
+    fun `imported evidence shares unknown priority instead of enum declaration order`() {
+        val user = userRepository.save(User(email = "variant-source-priority@example.test", nickname = "원자료순위", password = "test", allergies = "milk"))
+        save(product("SOURCE-PRIORITY-01", "100g", name = "원자료순위", evidence = AllergyEvidenceLevel.UNKNOWN),
+            product("SOURCE-PRIORITY-02", "100g", name = "원자료순위", evidence = AllergyEvidenceLevel.SOURCE_INGREDIENTS))
+        val result = service.getVariants("SOURCE-PRIORITY-01", user.id).options.single()
+        assertEquals("UNKNOWN", analysis(result)["status"])
+        assertEquals("UNKNOWN", analysis(result)["evidenceLevel"])
+        save(product("SOURCE-PRIORITY-03", "100g", name = "원자료추정", evidence = AllergyEvidenceLevel.INFERRED),
+            product("SOURCE-PRIORITY-04", "100g", name = "원자료추정", evidence = AllergyEvidenceLevel.SOURCE_INGREDIENTS))
+        val inferred = service.getVariants("SOURCE-PRIORITY-03", user.id).options.single()
+        assertEquals("UNKNOWN", analysis(inferred)["status"])
+        assertEquals("SOURCE_INGREDIENTS", analysis(inferred)["evidenceLevel"])
+    }
+
     private fun save(vararg products: Product) { productRepository.saveAllAndFlush(products.toList()) }
 
     private fun product(

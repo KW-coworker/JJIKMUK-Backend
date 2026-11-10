@@ -14,12 +14,14 @@ enum class ProductDataOrigin {
  * Reliability category for the evidence used by allergy evaluation.
  * UNKNOWN is deliberately the default for legacy rows.
  */
-enum class AllergyEvidenceLevel {
-    VERIFIED_SOURCE,
-    DECLARED_LABEL,
-    INGREDIENT_DERIVED,
-    INFERRED,
-    UNKNOWN
+enum class AllergyEvidenceLevel(val aggregationPriority: Int) {
+    VERIFIED_SOURCE(0),
+    DECLARED_LABEL(1),
+    INGREDIENT_DERIVED(2),
+    INFERRED(3),
+    UNKNOWN(4),
+    // Preserve the imported label without treating it as verified evidence.
+    SOURCE_INGREDIENTS(4)
 }
 
 /** Conservative classification for legacy rows that do not carry lineage columns. */
@@ -44,7 +46,8 @@ object ProductDataQualityClassifier {
         AllergyEvidenceLevel.INGREDIENT_DERIVED ->
             rawMaterialMatchScore?.asRatio()?.coerceIn(0.50, 0.90) ?: 0.70
         AllergyEvidenceLevel.INFERRED -> 0.50
-        AllergyEvidenceLevel.UNKNOWN -> null
+        AllergyEvidenceLevel.UNKNOWN,
+        AllergyEvidenceLevel.SOURCE_INGREDIENTS -> null
     }
 
     fun nutritionOrigin(
