@@ -89,5 +89,31 @@ class RunnerTests(unittest.TestCase):
         result=wait_result(ssm,'c',HOSTS['backend'],'doc',lambda _:None)
         self.assertNotIn('SENTINEL',str(result));self.assertNotIn('secret',str(result));self.assertNotIn('report',result)
 
+    def failed_report(self,stdout):
+        ssm=MagicMock();doc='JjikmukOperationsApproved-'+'a'*64
+        ssm.list_command_invocations.return_value={'CommandInvocations':[{
+            'Status':'Failed','CommandPlugins':[{'Name':'report','ResponseCode':1}]}]}
+        ssm.get_command_invocation.return_value={'CommandId':'c','InstanceId':HOSTS['backend'],
+            'DocumentName':doc,'Status':'Failed','ResponseCode':1,
+            'StandardErrorContent':'PRIVATE_SENTINEL','StandardOutputContent':stdout}
+        result=wait_result(ssm,'c',HOSTS['backend'],doc,lambda _:None)
+        ssm.send_command.assert_not_called()
+        self.assertEqual(result['status'],'Failed')
+        self.assertNotIn('PRIVATE_SENTINEL',str(result))
+        return result
+
+    def test_collect_failed_single_report_keeps_safe_codes_and_failure(self):
+        from run import operation_succeeded
+        result=self.failed_report(json.dumps({'status':'STOPPED','codes':['SOURCE_HASH']}))
+        self.assertEqual(result['diagnostic'],{'status':'STOPPED','codes':['SOURCE_HASH']})
+        self.assertFalse(operation_succeeded(result))
+
+    def test_failed_diagnostic_never_exports_arbitrary_or_success_output(self):
+        for raw in ('secret password',json.dumps({'status':'STOPPED','password':'secret'}),
+                    json.dumps({'status':'STOPPED','codes':['password=secret']}),
+                    json.dumps({'status':'VERIFIED','codes':['NOT_A_FAILURE']})):
+            result=self.failed_report(raw)
+            self.assertNotIn('diagnostic',result);self.assertNotIn('secret',str(result))
+
 
 if __name__=='__main__':unittest.main()

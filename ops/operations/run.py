@@ -124,8 +124,24 @@ def wait_result(ssm,cid,target,document,sleep=time.sleep,*,max_polls=360):
             overall=invocations[0]
             if overall['Status'] in ('Pending','InProgress','Delayed'):sleep(5);continue
             if overall['Status']!='Success':
-                return {'command_id':cid,'instance':target,'document':document,'status':overall['Status'],
+                failed={'command_id':cid,'instance':target,'document':document,'status':overall['Status'],
                         'response_code':-1,'plugin_count':len(overall.get('CommandPlugins',[]))}
+                plugins=overall.get('CommandPlugins',[])
+                # Only the fixed, single report plugin can supply a sanitized failure code.
+                # Never turn command failure into success or expose arbitrary stdout/stderr.
+                if (overall['Status']=='Failed' and document.startswith(DOCUMENT_PREFIX) and
+                    len(plugins)==1 and plugins[0].get('Name')=='report'):
+                    observed=ssm.get_command_invocation(CommandId=cid,InstanceId=target,PluginName='report')
+                    need(observed.get('CommandId')==cid and observed.get('InstanceId')==target and
+                         observed.get('DocumentName')==document,'COMMAND_IDENTITY_MISMATCH')
+                    if observed.get('Status')=='Failed' and observed.get('ResponseCode',0)!=0:
+                        try:
+                            diagnostic=safe_report(observed.get('StandardOutputContent',''))
+                            if diagnostic.get('status') in ('STOPPED','FAILED','PREFLIGHT_FAILED','MANUAL_RECOVERY_REQUIRED'):
+                                failed['diagnostic']={'status':diagnostic['status'],'codes':diagnostic.get('codes',[])}
+                        except (ValueError,TypeError,KeyError,AttributeError):
+                            pass
+                return failed
             result=ssm.get_command_invocation(CommandId=cid,InstanceId=target,
                 PluginName='inspectHost' if document==READ_DOCUMENT else 'report')
         except Exception as error:
