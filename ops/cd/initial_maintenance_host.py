@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -30,6 +31,12 @@ import readiness_probe as probe
 
 UNITS = ('jjikmuk-backend.service', 'food-chatbot-team.service')
 REQUIRED_BYTES = 5 * 1024**3
+CURRENT_CHECK = 'ENTRY'
+
+
+def mark(name):
+    global CURRENT_CHECK
+    CURRENT_CHECK=name
 
 
 def systemctl(*args):
@@ -90,16 +97,30 @@ def chatbot_files():
     return result
 
 
+def observed_properties():
+    # This is the existing ubuntu-owned app configuration, not a root-owned
+    # executable. Bind the opened inode and exact previously observed content.
+    with os.fdopen(probe.open_regular(PROPS),'rb') as stream:
+        before=os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_uid==1000 and before.st_gid==1000
+                and stat.S_IMODE(before.st_mode)==0o600 and before.st_size<=65536,
+                'OBSERVED_APP_PROPERTIES_METADATA_CHANGED')
+        raw=stream.read(65537)
+        after=os.fstat(stream.fileno())
+    require((before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns,before.st_uid,before.st_gid,before.st_mode)
+            ==(after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns,after.st_uid,after.st_gid,after.st_mode)
+            and len(raw)<=65536 and hashlib.sha256(raw).hexdigest()==OBSERVED_PROPERTIES,
+            'DATABASE_PROPERTIES_CHANGED')
+    return probe.properties(raw)
+
+
 def connect(stage,*,read_timeout=5):
     from package_install import WHEEL_NAME, WHEEL_SHA
-    from database_probe import properties
     path=stage/'vendor'/WHEEL_NAME;secure(path)
     require(digest(path)==WHEEL_SHA,'INITIAL_DB_VENDOR_CHANGED')
     if str(path) not in sys.path:sys.path.insert(0,str(path))
     import pymysql
-    secure(PROPS)
-    require(digest(Path(PROPS))==OBSERVED_PROPERTIES,'DATABASE_PROPERTIES_CHANGED')
-    p=properties(PROPS)
+    p=observed_properties()
     return pymysql.connect(host=DB_HOST, port=3306, database='jjikmuk',
         user=p['spring.datasource.username'], password=p['spring.datasource.password'],
         ssl_ca='/opt/food-chatbot/rds-global-bundle.pem', ssl_verify_cert=True, ssl_verify_identity=True,
@@ -191,22 +212,28 @@ def phase_guard(stage,binding,seconds):
 
 
 def freeze(stage,binding):
+    mark('ABSENCE')
     require(not JOURNAL_ROOT.exists() and not JOURNAL_ROOT.is_symlink(),'INITIAL_DB_JOURNAL_EXISTS_NO_RETRY')
     require(not Path('/opt/jjikmuk-cd').exists() and not Path('/etc/jjikmuk-cd').exists()
             and not Path('/var/lib/jjikmuk-operations').exists(),'INITIAL_INSTALL_ALREADY_PRESENT')
     require(binding['required_bytes']==REQUIRED_BYTES,'MAINTENANCE_FIXED_RESERVE')
+    mark('STORAGE_AND_SDK')
     guard=phase_guard(stage,binding,600)
     manifest=make_manifest(stage/'backend.jar',binding['commit'],'1','1')
     require(manifest['jar_sha256']==binding['jar_sha256'],'INITIAL_JAR_CHANGED')
     schema.validate_source(manifest)
+    mark('EXISTING_APP_INPUTS')
     host=old_host();protected=host.protected();host.require_protected_references(protected)
     inputs=probe.database_inputs()
     environment=host.environment(int(inputs[0][0]),OLD_ARGV)
     require(probe.jar_digest()==OLD_SHA and hashlib.sha256(facts.canonical(protected)).hexdigest()==OBSERVED_PROTECTED
             and environment==OBSERVED_ENVIRONMENT and hashlib.sha256(inputs[2]).hexdigest()==OBSERVED_PROPERTIES,
             'OBSERVED_INPUTS_CHANGED')
+    mark('INITIAL_DB_METADATA')
     before=schema.metadata(stage);schema.verify_schema(manifest,before,False,fulltext_maintenance=True)
+    mark('DB_CERTIFICATES')
     trusted_certificates()
+    mark('DB_CAPABILITIES')
     with connect(stage) as conn:
         facts.require_observation_privileges(conn)
         definition=facts.fulltext_definition(conn)
@@ -214,10 +241,13 @@ def freeze(stage,binding):
             cur.execute('SELECT DATA_LENGTH+INDEX_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s',('jjikmuk','products'))
             table_bytes=int(cur.fetchone()[0])
         require(3*table_bytes+1024**3 <= REQUIRED_BYTES,'TABLE_GREW_BEYOND_REVIEWED_RESERVE')
+    mark('EXISTING_HEALTH')
     for check in host.config['health_checks']:http_check(check)
+    mark('CHATBOT_INPUTS')
     chat_files=chatbot_files()
     require(systemctl('show',UNITS[1],'--property=ActiveState','--value')=='active','CHATBOT_NOT_ACTIVE')
     probe.unchanged(inputs);guard()
+    mark('RUNTIME_EXTRACTION')
     schema.extract_runtime(stage/'backend.jar',stage)
     JOURNAL_ROOT.mkdir(mode=0o700);os.chmod(JOURNAL_ROOT,0o700)
     state={'status':'STOP_INTENT','binding':binding,'stage':str(stage),'candidate':manifest,
@@ -227,6 +257,7 @@ def freeze(stage,binding):
            'fulltext_definition':definition,'before_schema':before,'projection':preservation.projection(before)}
     atomic_json(JOURNAL_ROOT/'state.json',state)
     try:
+        mark('SERVICE_FREEZE')
         for unit in UNITS:systemctl('stop',unit)
         stopped();guard();require_inputs(state)
         with connect(stage) as conn:
@@ -278,8 +309,8 @@ def verify_preserved(stage,state,guard):
 
 
 def apply(stage,binding,backup):
+    mark('APPLY')
     from datetime import datetime,timezone
-    from database_probe import properties
     from initial_flyway import apply as flyway_apply
     state=private_state();verify_binding(stage,binding,state)
     require(state['status']=='FROZEN_NO_DB_WRITES','MAINTENANCE_APPLY_STATE_NO_REPLAY')
@@ -311,7 +342,7 @@ def apply(stage,binding,backup):
         set_state(state,'PRODUCTS_REBUILT')
         with connect(stage) as conn:facts.quiescent(conn)
         require_inputs(state)
-        flyway_apply(stage,properties(PROPS),guard,lambda:connect(stage),lambda event:record(state,event))
+        flyway_apply(stage,observed_properties(),guard,lambda:connect(stage),lambda event:record(state,event))
         set_state(state,'ORIGINAL_V17_V20_APPLIED')
         execute('ALTER TABLE products ADD FULLTEXT KEY ft_products_search_keywords (search_keywords) WITH PARSER ngram')
         set_state(state,'FULLTEXT_RESTORED')
@@ -331,6 +362,7 @@ def apply(stage,binding,backup):
 
 
 def recover(stage,binding):
+    mark('RECOVERY')
     state=private_state();verify_binding(stage,binding,state)
     origin=state['status']
     require(state['status'] in ('FROZEN_NO_DB_WRITES','FREEZE_FAILED_NO_DB_WRITES',
@@ -374,4 +406,4 @@ if __name__=='__main__':
     except Exception as error:
         code=str(error) if isinstance(error,ValueError) else type(error).__name__.upper()
         if not re.fullmatch('[A-Z][A-Z0-9_]{0,79}',code):code='MAINTENANCE_FAILED_KEEP_RECORDS'
-        print(json.dumps({'status':'STOPPED','codes':[code]}))
+        print(json.dumps({'status':'STOPPED','codes':[code,'PHASE_'+CURRENT_CHECK]}))

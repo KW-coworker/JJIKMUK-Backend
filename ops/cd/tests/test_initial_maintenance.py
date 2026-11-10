@@ -1,9 +1,11 @@
 import copy
+import hashlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import time
 import unittest
 from unittest.mock import MagicMock,patch
@@ -13,6 +15,23 @@ import initial_flyway as flyway
 
 
 class MaintenanceTests(unittest.TestCase):
+    def test_existing_app_config_uses_observed_owner_and_content_not_root_policy(self):
+        raw=b'spring.datasource.username=synthetic\nspring.datasource.password=synthetic\n'
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'properties';path.write_bytes(raw)
+            info=SimpleNamespace(st_mode=0o100600,st_uid=1000,st_gid=1000,st_size=len(raw),
+                                 st_ino=1,st_mtime_ns=2,st_ctime_ns=3)
+            with patch.object(host.probe,'open_regular',side_effect=lambda p:os.open(path,os.O_RDONLY)), \
+                    patch.object(host.os,'fstat',return_value=info), \
+                    patch.object(host,'OBSERVED_PROPERTIES',hashlib.sha256(raw).hexdigest()):
+                self.assertEqual(host.observed_properties()['spring.datasource.username'],'synthetic')
+                for key,value in (('st_uid',0),('st_gid',0),('st_mode',0o100644)):
+                    saved=getattr(info,key);setattr(info,key,value)
+                    with self.assertRaisesRegex(ValueError,'METADATA_CHANGED'):host.observed_properties()
+                    setattr(info,key,saved)
+                with patch.object(host,'OBSERVED_PROPERTIES','f'*64),self.assertRaisesRegex(ValueError,'PROPERTIES_CHANGED'):
+                    host.observed_properties()
+
     def test_failed_backend_stop_still_attempts_chatbot_stop_and_marks_uncertain(self):
         state={'status':'DB_VERIFIED_SERVICES_STOPPED'}
         def command(*args):
