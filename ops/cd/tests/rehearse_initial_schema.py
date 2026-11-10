@@ -93,8 +93,31 @@ print('MYSQL_STREAMING_GUARD_FAILURE_CLOSES_CONNECTION_WITHOUT_DRAIN_PASSED')
 import threading,time
 from initial_flyway import settle
 def local_connection():
-    return pymysql.connect(host='127.0.0.1',port=3306,database='jjikmuk',user='root',
-                           password='rehearsal_only',autocommit=True,read_timeout=5)
+    return pymysql.connect(host='127.0.0.1',port=3306,database='jjikmuk',user='project_only',
+                           password='fixture_only',autocommit=True,read_timeout=5)
+
+from initial_db_facts import project_idle,logical_extras
+with local_connection() as conn:
+    with conn.cursor() as cur:
+        try:cur.execute('SELECT COUNT(*) FROM information_schema.INNODB_TRX')
+        except pymysql.Error as error:assert error.args[0]==1227
+        else:raise AssertionError('fixture unexpectedly has global PROCESS')
+    project_idle(conn,timeout=0)
+    logical_extras(conn)
+    with local_connection() as other:
+        with other.cursor() as cur:cur.execute('USE information_schema')
+        try:project_idle(conn,timeout=0)
+        except ValueError as error:assert str(error)=='PROJECT_ACCOUNT_CONNECTIONS_REMAIN'
+        else:raise AssertionError('same-account other-schema connection was missed')
+    with conn.cursor() as cur:
+        cur.execute('CREATE EVENT scope_probe ON SCHEDULE AT CURRENT_TIMESTAMP + INTERVAL 1 DAY DO SELECT 1')
+    try:project_idle(conn,timeout=0)
+    except ValueError as error:assert str(error)=='PROJECT_SCHEDULED_EVENT_PRESENT'
+    else:raise AssertionError('enabled project event was missed')
+    with conn.cursor() as cur:cur.execute('DROP EVENT scope_probe')
+    project_idle(conn,timeout=0)
+print('MYSQL_SCHEMA_ONLY_PRIVILEGES_PROJECT_DRAIN_AND_EVENTS_PASSED')
+
 owned=local_connection();identity=owned.thread_id();outcome=[]
 def query():
     try:

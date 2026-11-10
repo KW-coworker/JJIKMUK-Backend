@@ -7,6 +7,8 @@ public final class InitialSchemaRehearsal {
     public static void main(String[] args) throws Exception {
         String url = "jdbc:mysql://127.0.0.1:3306/jjikmuk?sslMode=DISABLED&allowPublicKeyRetrieval=true";
         try (var c = DriverManager.getConnection(url, "root", "rehearsal_only"); var s = c.createStatement()) {
+            s.execute("CREATE USER 'project_only'@'%' IDENTIFIED BY 'fixture_only'");
+            s.execute("GRANT ALL PRIVILEGES ON jjikmuk.* TO 'project_only'@'%'");
             s.execute("CREATE TABLE products (id BIGINT PRIMARY KEY, note VARCHAR(20), search_keywords TEXT, FULLTEXT KEY ft_products_search_keywords(search_keywords) WITH PARSER ngram) ENGINE=InnoDB COMMENT='preserve-dataset-marker'");
             s.execute("CREATE TABLE products_rollback LIKE products");
             s.execute("ALTER TABLE products_rollback DROP INDEX ft_products_search_keywords");
@@ -23,6 +25,9 @@ public final class InitialSchemaRehearsal {
             try (var r = s.executeQuery("SELECT id FROM products WHERE MATCH(search_keywords) AGAINST('우유' IN BOOLEAN MODE)")) {
                 if (!r.next() || r.getLong(1) != 1 || r.next()) throw new IllegalStateException("original search fixture failed");
             }
+        }
+        // All maintenance DDL, Flyway and verification use schema-only grants.
+        try (var c = DriverManager.getConnection(url, "project_only", "fixture_only"); var s = c.createStatement()) {
             s.execute("ALTER TABLE products DROP INDEX ft_products_search_keywords, ALGORITHM=INPLACE");
             try (var r = s.executeQuery("OPTIMIZE TABLE products")) {
                 boolean ok = false;
@@ -35,18 +40,18 @@ public final class InitialSchemaRehearsal {
         }
         // Only this disposable test database uses a synthetic baseline at 16.
         // Production preflight requires the real V1-V16 SQL history and baseline 0.
-        Flyway.configure().dataSource(url, "root", "rehearsal_only").baselineVersion("16")
+        Flyway.configure().dataSource(url, "project_only", "fixture_only").baselineVersion("16")
             .loggers("slf4j").load().baseline();
         var ownership=Path.of(args[0]).resolve("owned-connections");
         java.nio.file.Files.createFile(ownership);
         var flyway = InitialSchema.configured(Path.of(args[0]),
-            new InitialSchema.TrackedSource(url,"root","rehearsal_only",ownership));
+            new InitialSchema.TrackedSource(url,"project_only","fixture_only",ownership));
         InitialSchema.apply(flyway);
         var registered=java.nio.file.Files.readAllLines(ownership);
         if(registered.isEmpty() || registered.size()>32 ||
                 registered.stream().anyMatch(x->!x.matches("[1-9][0-9]{0,18}")))
             throw new IllegalStateException("owned sessions were not registered");
-        try (var c = DriverManager.getConnection(url, "root", "rehearsal_only"); var s = c.createStatement()) {
+        try (var c = DriverManager.getConnection(url, "project_only", "fixture_only"); var s = c.createStatement()) {
             s.execute("ALTER TABLE products ADD FULLTEXT INDEX ft_products_search_keywords(search_keywords) WITH PARSER ngram");
             try (var r = s.executeQuery("SELECT id FROM products WHERE MATCH(search_keywords) AGAINST('우유' IN BOOLEAN MODE)")) {
                 if (!r.next() || r.getLong(1) != 1 || r.next()) throw new IllegalStateException("restored search changed");
