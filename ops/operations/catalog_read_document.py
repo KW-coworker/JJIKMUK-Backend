@@ -5,7 +5,9 @@ import re
 from pathlib import Path
 
 
-def document(binding):
+def document(binding, *, purpose='compare'):
+    if purpose not in ('compare','fields'):
+        raise ValueError('INVALID_COMPARISON_PURPOSE')
     if (set(binding) != {'key','version','bytes','sha256','source_sha256'} or
         not re.fullmatch(r'operations/private/[a-f0-9]{32}/[a-f0-9]{64}\.zip',binding['key']) or
         not re.fullmatch(r'[A-Za-z0-9._~+/-]{1,1024}',binding['version']) or binding['version']=='null' or
@@ -15,9 +17,9 @@ def document(binding):
         raise ValueError('INVALID_COMPARISON_OBJECT')
     probe=(Path(__file__).parent/'catalog_read_probe.py').read_text(encoding='utf-8')
     probe_sha=hashlib.sha256(probe.encode()).hexdigest()
-    stage_id=hashlib.sha256((json.dumps(binding,sort_keys=True)+probe+LAUNCHER).encode()).hexdigest()[:20]
+    stage_id=hashlib.sha256((json.dumps(binding,sort_keys=True)+purpose+probe+LAUNCHER).encode()).hexdigest()[:20]
     script = ('BINDING = '+repr(binding)+'\nSTAGE_ID = '+repr(stage_id)+
-              '\nREVIEWED_PROBE = '+repr(probe)+'\nREVIEWED_PROBE_SHA = '+repr(probe_sha)+'\n'+LAUNCHER)
+              '\nREVIEWED_PROBE = '+repr(probe)+'\nREVIEWED_PROBE_SHA = '+repr(probe_sha)+'\nPURPOSE = '+repr(purpose)+'\n'+LAUNCHER)
     command = "/usr/bin/python3 -I -S -B <<'JJIKMUK_READONLY_COMPARE'\n"+script+"\nJJIKMUK_READONLY_COMPARE"
     result = {'schemaVersion':'2.2','description':'Compare product handoff in one read-only snapshot; no deploy or DB mutation',
         'parameters':{},'mainSteps':[{'action':'aws:runShellScript','name':'report',
@@ -124,7 +126,7 @@ def run():
         mem=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())
         need(int(mem['MemAvailable'].split()[0])*1024>=512*1024**2,'MEMORY_RESERVE')
         request={'source_sha256':BINDING['source_sha256'],'database':config['database'],
-                 'migrations':host.baseline['manifest']['migrations']}
+                 'migrations':host.baseline['manifest']['migrations'],'purpose':PURPOSE}
         child=subprocess.Popen(['/usr/sbin/runuser','-u','ubuntu','--','/usr/bin/python3.12','-I','-S','-B',
             str(probe_path)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
             start_new_session=True,preexec_fn=restricted,env={'PATH':'/usr/bin:/bin','HOME':'/home/ubuntu'})

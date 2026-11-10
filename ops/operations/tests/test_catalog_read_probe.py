@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
-from catalog_read_probe import compare_connection, product_query, retire, query_columns, PROVENANCE_COLUMNS
+from catalog_read_probe import compare_connection, product_query, retire, query_columns, PROVENANCE_COLUMNS, FieldSummary, field_differences
 from catalog_read_document import document, LAUNCHER
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'cd'))
@@ -108,6 +108,33 @@ class ReadProbeTest(unittest.TestCase):
             elif kind=='missing':del conn.extra_columns['label_source_id']
             else:conn.extra_columns['label_source_id']='text'
             with self.assertRaises(ValueError):query_columns(conn,COLUMNS)
+
+    def test_field_summaries_identify_changed_field_without_values(self):
+        columns=[('barcode','varchar(255)'),('product_id','bigint'),('name','text'),('flag','bit(1)')]
+        a={'barcode':'sample','product_id':1,'name':'PRIVATE_TEXT','flag':1}
+        left=FieldSummary(columns);left.consume(a)
+        right=FieldSummary(columns);right.consume(dict(a,name='CHANGED',flag=b'\x01'))
+        self.assertEqual(field_differences(left.finish(),right.finish()),['name'])
+        self.assertNotIn('PRIVATE_TEXT',json.dumps(left.finish()))
+        self.assertNotIn('sample',json.dumps(left.finish()))
+
+    def test_field_hashes_are_never_compared_when_key_order_differs(self):
+        columns=[('barcode','text'),('product_id','bigint'),('name','text')]
+        a={'barcode':'a','product_id':1,'name':'x'};b={'barcode':'b','product_id':2,'name':'y'}
+        left=FieldSummary(columns);right=FieldSummary(columns)
+        for row in (a,b):left.consume(row)
+        for row in (b,a):right.consume(row)
+        with self.assertRaisesRegex(ValueError,'KEYS_OR_ORDER_CHANGED'):field_differences(left.finish(),right.finish())
+
+    def test_field_summary_mode_is_readonly_and_not_an_update_candidate_report(self):
+        path,_=self.sidecar([row()]);c=Comparison(path);conn=Connection()
+        try:r=compare_connection(conn,c,object,[{'version':'1','script':'V1.sql','checksum':123}],fields_only=True)
+        finally:c.close()
+        self.assertEqual(r['counts']['operating_rows'],1)
+        self.assertNotIn('basis_fill_candidate',r['counts'])
+        self.assertNotIn('basis_fill_with_ingestion_binding',r['counts'])
+        self.assertTrue(r['checks']['per_column_fingerprints_only'])
+        self.assertTrue(conn.closed and conn.rolled_back)
 
     def test_identifier_injection_is_rejected(self):
         with self.assertRaises(ValueError):product_query(['barcode` FROM users;--'])
