@@ -17,14 +17,17 @@ import initial_flyway as flyway
 class MaintenanceTests(unittest.TestCase):
     def test_previous_attempt_must_be_restored_before_ddl_with_exact_binding(self):
         import json
-        value={'status':'OLD_SERVICES_RESTORED_WITHOUT_DB_WRITES','binding':{
-            'commit':'54557e2f16e05733a2d44bfe5add944d1c60e146',
-            'request_id':'b496c0b3366640079ec8937673142c3e'}}
+        value={'status':'OLD_SERVICES_RESTORED_WITHOUT_DB_WRITES','restore_origin':'FROZEN_NO_DB_WRITES',
+            'operations':[{'status':'FLYWAY_SESSIONS_ENDED','connection_ids':[17]}],
+            'data':{'fixture':{}},'frozen_epoch':1000,'binding':{
+            'commit':'fdfb752309157ef512a2ff998c9be5cceb47315b',
+            'request_id':'461c0f630e8841f7b7c7d3c6b38e91e4'}}
         path=MagicMock();path.is_file.return_value=True;path.stat.return_value.st_size=1024
         with patch.object(host,'Path',return_value=path),patch.object(host,'secure'),patch.object(host,'require_inputs'):
             path.read_bytes.return_value=json.dumps(value).encode()
             self.assertEqual(len(host.previous_freeze_record()),64)
-            for key,new in [('snapshot',{}),('data',{}),('frozen_epoch',1),('operations',[{}]),
+            for key,new in [('snapshot',{}),('restore_origin','MAINTENANCE_APPLY_INTENT'),('failure_observed',True),
+                            ('operations',[{'status':'ORIGINAL_FLYWAY_INTENT'}]),('operations',[{}]),
                             ('status','FULLTEXT_DROPPED'),('binding',{'commit':'a'*40,'request_id':'b'*32})]:
                 path.read_bytes.return_value=json.dumps({**value,key:new}).encode()
                 with self.subTest(key=key),self.assertRaises(ValueError):host.previous_freeze_record()

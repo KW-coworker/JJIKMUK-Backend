@@ -1,5 +1,9 @@
 # 최초 DB 구조 준비
 
+2026-11-10 실행 `42798585519`는 동결·원본 지문 기록·스냅샷 준비 후 AWS 연결 종료 오류로 DB 변경 전에 중단했고, 기존 두 서비스가 복귀했다. 기존 실행·스냅샷·호스트 기록은 보존한다. 새 요청은 그 정확한 이전 기록이 `FROZEN_NO_DB_WRITES`에서 복귀했고 DDL 기록이 없음을 확인한 뒤 별도 `jjikmuk-backend-initial-db-receipt-20261110` 폴더에서 다시 동결·백업한다.
+
+실행 기록을 S3에 저장하다 응답을 잃으면 같은 내용을 조회해 확인한다. 아직 없거나 조회 연결이 끊겼을 때만 같은 `If-None-Match: *` 조건부 기록 저장을 최대 3회로 제한한다. 최초 요청부터 기존 기록이 있으면 여전히 재실행을 거부한다. 이 처리로 스냅샷 생성·SSM 명령·SQL을 재전송하지 않는다. 근거: [S3 조건부 쓰기](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html), [일관성](https://aws.amazon.com/s3/consistency/).
+
 원본 V17의 INSTANT 컬럼 추가는 운영 products의 기존 FULLTEXT 구조와 충돌한다. SQL·체크섬·업무 데이터를 고치지 않고, 승인된 운영 정비 후 원본 V17~V20을 적용한다. 일반 검색은 기존 search_keywords/ngram 인덱스로 복원한다.
 
 `backend-initial-db.yml`은 CD가 비활성인 정확한 main에서만 실행한다. 같은 요청의 재실행은 금지하며 S3 실행 의도와 호스트 상태 파일을 보존한다.
