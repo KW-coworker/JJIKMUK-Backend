@@ -1,10 +1,11 @@
 import ast
+import hashlib
 import json
 from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
-from catalog_read_probe import compare_connection, product_query, retire
+from catalog_read_probe import compare_connection, product_query, retire, query_columns, PROVENANCE_COLUMNS
 from catalog_read_document import document, LAUNCHER
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'cd'))
@@ -29,9 +30,9 @@ class Cursor:
         elif 'FROM information_schema.STATISTICS' in sql:
             self.rows=[('PRIMARY','BTREE',1,'barcode'),('ft','FULLTEXT',1,'raw_materials')]
         elif 'FROM information_schema.COLUMNS' in sql:
-            self.rows=list(COLUMNS)
+            self.rows=list(COLUMNS)+list(self.owner.extra_columns.items())
         elif 'FROM `products`' in sql:
-            self.rows=[tuple(self.owner.product[n] for n,_ in COLUMNS)]
+            self.rows=[tuple(self.owner.product[n] for n,_ in COLUMNS)+(self.owner.product.get('ingested_content_revision_sha256'),)]
     def fetchone(self):return self.rows.pop(0)
     def fetchmany(self,n):
         if self.stream and self.owner.fail_stream:raise TimeoutError('synthetic')
@@ -44,6 +45,7 @@ class Connection:
         self.queries=[];self.closed=False;self.rolled_back=False;self.readonly=1
         self.product=row(image_url=None,nutrition_basis_raw=None);self.fail_stream=False
         self.stream=None
+        self.extra_columns=dict(PROVENANCE_COLUMNS)
     def cursor(self,kind=None):
         c=Cursor(self,kind is not None)
         if kind is not None:self.stream=c
@@ -90,6 +92,23 @@ class ReadProbeTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'PRODUCT_SCHEMA_CHANGED'):self.probe(conn)
         self.assertIsNone(conn.stream)
 
+    def test_observed_provenance_columns_are_preserved_and_binding_counted(self):
+        conn=Connection();conn.product['ingested_content_revision_sha256']='f'*64
+        result=self.probe(conn)
+        self.assertEqual(result['counts']['recognized_ai_columns'],10)
+        self.assertEqual(result['counts']['existing_ingestion_binding_rows'],1)
+        self.assertEqual(result['counts']['basis_fill_with_ingestion_binding'],1)
+        self.assertEqual(result['counts']['image_fill_with_ingestion_binding'],1)
+        self.assertNotIn('f'*64,json.dumps(result))
+
+    def test_unknown_missing_and_changed_provenance_are_rejected(self):
+        for kind in ('unknown','missing','type'):
+            conn=Connection()
+            if kind=='unknown':conn.extra_columns['unexpected']='text'
+            elif kind=='missing':del conn.extra_columns['label_source_id']
+            else:conn.extra_columns['label_source_id']='text'
+            with self.assertRaises(ValueError):query_columns(conn,COLUMNS)
+
     def test_identifier_injection_is_rejected(self):
         with self.assertRaises(ValueError):product_query(['barcode` FROM users;--'])
 
@@ -109,6 +128,18 @@ class ReadProbeTest(unittest.TestCase):
         self.assertNotIn('run',imports)
         self.assertIn('host',imports)
         self.assertNotIn('systemctl restart',LAUNCHER)
+
+    def test_document_binds_reviewed_probe_and_uses_distinct_stage(self):
+        binding={'key':'operations/private/'+'a'*32+'/'+'b'*64+'.zip',
+                 'version':'fixture-version','bytes':1024,'sha256':'b'*64,'source_sha256':'c'*64}
+        command=document(binding)['mainSteps'][0]['inputs']['runCommand'][0]
+        tree=ast.parse('\n'.join(command.splitlines()[1:-1]))
+        values={n.targets[0].id:ast.literal_eval(n.value) for n in tree.body[:4]}
+        self.assertNotEqual(values['STAGE_ID'],binding['sha256'][:20])
+        self.assertEqual(hashlib.sha256(values['REVIEWED_PROBE'].encode()).hexdigest(),values['REVIEWED_PROBE_SHA'])
+        self.assertIn('PROVENANCE_COLUMNS',values['REVIEWED_PROBE'])
+        self.assertIn("stage/'catalog_read_probe_reviewed.py'",LAUNCHER)
+        self.assertIn('str(probe_path)',LAUNCHER)
 
     def test_launcher_rejects_untrusted_diagnostic_text(self):
         # Extract just the pure validators, never execute the root launcher.

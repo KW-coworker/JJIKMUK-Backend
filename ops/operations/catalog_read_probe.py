@@ -12,6 +12,13 @@ import sys
 import time
 from urllib.parse import urlsplit
 
+PROVENANCE_COLUMNS = {
+    'content_revision_sha256':'char(64)', 'ingested_content_revision_sha256':'char(64)',
+    'label_covered_fact_groups':'json', 'label_lineage_status':'varchar(16)',
+    'label_observed_at':'datetime(6)', 'label_source_id':'varchar(128)',
+    'label_source_record_id':'varchar(256)', 'label_source_type':'varchar(32)',
+    'upstream_revision':'varchar(256)', 'upstream_updated_at':'datetime(6)'}
+
 
 def need(ok, code):
     if not ok:
@@ -33,7 +40,7 @@ def query_columns(conn, expected):
                     ('jjikmuk', 'products'))
         actual = dict(cur.fetchmany(101))
     from catalog_compare import IMAGE_META
-    wanted = dict(expected)
+    wanted = {**dict(expected), **PROVENANCE_COLUMNS}
     need(len(actual) <= 100 and set(actual) <= set(wanted) and
          set(wanted)-set(IMAGE_META) <= set(actual), 'PRODUCT_SCHEMA_CHANGED')
     need(all(actual[k] == wanted[k] for k in actual), 'PRODUCT_COLUMN_TYPE_CHANGED')
@@ -90,7 +97,10 @@ def compare_connection(conn, comparison, cursor_class, migrations, clock=time.mo
             need(len(indexes) <= 100 and [(r[2],r[3]) for r in indexes if r[0]=='PRIMARY'] == [(1,'barcode')],
                  'PRODUCT_PRIMARY_KEY_CHANGED')
         actual = query_columns(conn, comparison.columns)
-        selected = list(actual)
+        # Provenance is retained independently; only its binding presence is counted.
+        compared = {name for name,_ in comparison.columns}
+        selected = [name for name in actual if name in compared or name=='ingested_content_revision_sha256']
+        bound_rows = basis_bound = image_bound = 0
         cursor = conn.cursor(cursor_class)
         cursor.execute(product_query(selected))
         while True:
@@ -102,7 +112,15 @@ def compare_connection(conn, comparison, cursor_class, migrations, clock=time.mo
                 row = dict(zip(selected,value))
                 for name in IMAGE_META:
                     row.setdefault(name,None)
+                before_basis = comparison.counts['basis_fill_candidate']
+                before_image = (comparison.counts['image_fill_representative_candidate']+
+                                comparison.counts['image_fill_category_candidate'])
                 comparison.consume(row)
+                if row.get('ingested_content_revision_sha256') is not None:
+                    bound_rows += 1
+                    basis_bound += comparison.counts['basis_fill_candidate']-before_basis
+                    image_bound += (comparison.counts['image_fill_representative_candidate']+
+                                    comparison.counts['image_fill_category_candidate']-before_image)
                 need(comparison.counts['operating_rows'] <= 2000000, 'OPERATING_ROW_LIMIT')
         cursor.close(); cursor = None
         report = comparison.finish()
@@ -110,11 +128,16 @@ def compare_connection(conn, comparison, cursor_class, migrations, clock=time.mo
         report['counts'].update(image_columns_present=len(set(actual)&set(IMAGE_META)),
             fulltext_columns=sum(r[1]=='FULLTEXT' for r in indexes),
             successful_migrations=sum(r['type']=='SQL' for r in history),
+            recognized_ai_columns=len(set(actual)&set(PROVENANCE_COLUMNS)),
+            existing_ingestion_binding_rows=bound_rows,basis_fill_with_ingestion_binding=basis_bound,
+            image_fill_with_ingestion_binding=image_bound,
             db_connections=1, db_writes=0, paid_ai_calls=0)
         report['hashes']['product_schema'] = hashlib.sha256(json.dumps([actual,indexes],sort_keys=True).encode()).hexdigest()
         report['checks'] = {'read_only_snapshot':True,'no_application_rows_exported':True,
             'exact_product_identity_required':True,'existing_values_preserved_in_plan':True,
             'db_history_matches_installed_backend':True}
+        report['checks']['existing_ai_columns_recognized']=True
+        report['checks']['no_provenance_values_exported']=True
         conn.rollback()
         return report
     except BaseException:
