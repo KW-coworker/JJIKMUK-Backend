@@ -1,5 +1,6 @@
 """Fixed read-only comparison document. Generation alone never calls AWS."""
 import json
+import hashlib
 import re
 from pathlib import Path
 
@@ -12,7 +13,11 @@ def document(binding):
         binding['key'].split('/')[-1] != binding['sha256']+'.zip' or
         type(binding['bytes']) is not int or not 0<binding['bytes']<=1024**3):
         raise ValueError('INVALID_COMPARISON_OBJECT')
-    script = 'BINDING = '+repr(binding)+'\n'+LAUNCHER
+    probe=(Path(__file__).parent/'catalog_read_probe.py').read_text(encoding='utf-8')
+    probe_sha=hashlib.sha256(probe.encode()).hexdigest()
+    stage_id=hashlib.sha256((json.dumps(binding,sort_keys=True)+probe+LAUNCHER).encode()).hexdigest()[:20]
+    script = ('BINDING = '+repr(binding)+'\nSTAGE_ID = '+repr(stage_id)+
+              '\nREVIEWED_PROBE = '+repr(probe)+'\nREVIEWED_PROBE_SHA = '+repr(probe_sha)+'\n'+LAUNCHER)
     command = "/usr/bin/python3 -I -S -B <<'JJIKMUK_READONLY_COMPARE'\n"+script+"\nJJIKMUK_READONLY_COMPARE"
     result = {'schemaVersion':'2.2','description':'Compare product handoff in one read-only snapshot; no deploy or DB mutation',
         'parameters':{},'mainSteps':[{'action':'aws:runShellScript','name':'report',
@@ -68,7 +73,7 @@ def restricted():
 def run():
     need(os.geteuid()==0,'ROOT_LAUNCHER_REQUIRED')
     root=secure('/opt/jjikmuk-cd')
-    stage=Path('/opt')/('jjikmuk-db-compare-'+BINDING['sha256'][:20])
+    stage=Path('/opt')/('jjikmuk-db-compare-'+STAGE_ID)
     need(not stage.exists() and not stage.is_symlink(),'COMPARISON_ALREADY_STAGED_NO_REPLAY')
     need(shutil.disk_usage('/opt').free>=BINDING['bytes']*3+1024**3,'DISK_RESERVE')
     stage.mkdir(mode=0o755)
@@ -99,6 +104,12 @@ def run():
             os.chmod(path,0o444)
             need(digest(path)==wanted['sha256'],'BUNDLE_FILE_HASH')
     need(digest(stage/'source-fingerprints.sqlite')==BINDING['source_sha256'],'SOURCE_HASH')
+    # The previously uploaded data and code remain intact. Run the reviewed main
+    # probe as a distinct file, bound into this fixed document's hash.
+    probe_path=stage/'catalog_read_probe_reviewed.py'
+    with probe_path.open('xb') as f:f.write(REVIEWED_PROBE.encode())
+    os.chmod(probe_path,0o444)
+    need(digest(probe_path)==REVIEWED_PROBE_SHA,'REVIEWED_PROBE_HASH')
     sys.path[:0]=[str(secure(root/'bin'))]
     from host import Host
     from coordination import TERMINAL
@@ -115,7 +126,7 @@ def run():
         request={'source_sha256':BINDING['source_sha256'],'database':config['database'],
                  'migrations':host.baseline['manifest']['migrations']}
         child=subprocess.Popen(['/usr/sbin/runuser','-u','ubuntu','--','/usr/bin/python3.12','-I','-S','-B',
-            str(stage/'catalog_read_probe.py')],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
+            str(probe_path)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
             start_new_session=True,preexec_fn=restricted,env={'PATH':'/usr/bin:/bin','HOME':'/home/ubuntu'})
         try:
             stdout,stderr=child.communicate(json.dumps(request).encode(),timeout=540)
