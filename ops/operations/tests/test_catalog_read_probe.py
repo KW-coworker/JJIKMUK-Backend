@@ -110,5 +110,17 @@ class ReadProbeTest(unittest.TestCase):
         self.assertIn('host',imports)
         self.assertNotIn('systemctl restart',LAUNCHER)
 
+    def test_launcher_rejects_untrusted_diagnostic_text(self):
+        # Extract just the pure validators, never execute the root launcher.
+        tree=ast.parse(LAUNCHER)
+        definitions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in ('need','safe_report')]
+        namespace={'json':json,'re':__import__('re')}
+        exec(compile(ast.Module(body=definitions,type_ignores=[]),'validators','exec'),namespace)
+        validate=namespace['safe_report']
+        self.assertEqual(validate('{"status":"STOPPED","codes":["SOURCE_HASH"]}')['codes'],['SOURCE_HASH'])
+        for value in ({'status':'STOPPED','codes':['password=secret']},
+                      {'status':'anything'}, {'status':'VERIFIED','counts':{'bad':-1}}):
+            with self.assertRaises(ValueError):validate(json.dumps(value))
+
 
 if __name__=='__main__':unittest.main()

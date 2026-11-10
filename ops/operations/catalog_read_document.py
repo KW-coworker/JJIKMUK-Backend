@@ -44,7 +44,12 @@ def digest(path):
 
 def safe_report(raw):
     value=json.loads(raw)
+    need(type(value) is dict,'REPORT_OBJECT')
     need(set(value)<={'status','checks','hashes','counts','codes'},'REPORT_FIELDS')
+    need(value.get('status') in ('VERIFIED','STOPPED'),'REPORT_STATUS')
+    codes=value.get('codes',[])
+    need(type(codes) is list and len(codes)<=8 and all(type(x) is str and
+         re.fullmatch('[A-Z][A-Z0-9_]{0,69}',x) for x in codes),'REPORT_CODES')
     for group in ('checks','hashes','counts'):
         items=value.get(group,{})
         need(type(items) is dict and len(items)<=100,'REPORT_MAP')
@@ -120,6 +125,8 @@ def run():
             raise ValueError('PROBE_DEADLINE')
         need(not stderr and len(stdout)<=16384,'PROBE_OUTPUT_LIMIT')
         report=safe_report(stdout.decode())
+        if report['status']=='STOPPED':
+            raise ValueError(report.get('codes',['PROBE_NOT_VERIFIED'])[0] if report.get('codes') else 'PROBE_NOT_VERIFIED')
         need(child.returncode==0 and report['status']=='VERIFIED','PROBE_NOT_VERIFIED')
         host.runtime(host.baseline)
         need(host.identity()==before,'BACKEND_PROCESS_CHANGED')
@@ -131,6 +138,7 @@ def run():
 
 try: print(json.dumps(run()))
 except BaseException as error:
-    print(json.dumps({'status':'STOPPED','codes':['READONLY_COMPARISON_STOPPED_KEEP_STAGE']}))
+    code=str(error) if isinstance(error,ValueError) and re.fullmatch('[A-Z][A-Z0-9_]{0,69}',str(error)) else 'UNEXPECTED_READONLY_COMPARISON_FAILURE'
+    print(json.dumps({'status':'STOPPED','codes':['READONLY_COMPARISON_STOPPED_KEEP_STAGE',code]}))
     raise SystemExit(1)
 '''
