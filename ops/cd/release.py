@@ -1,5 +1,6 @@
 """Exact-main build and automatic, duplicate-resistant fixed SSM deployment."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,7 @@ import re
 import shutil
 import time
 from auto_context import (ACCOUNT, REGION, BUCKET, PREFIX, INSTANCE, DOCUMENT,
-                          identity, guard, select_snapshot, check_snapshot)
+                          identity, guard, select_snapshot, check_snapshot, resume_id)
 from manifest import make_manifest, read_json, require
 
 
@@ -160,9 +161,18 @@ def dispatch():
     caller = c['sts'].get_caller_identity()
     require(caller['Account'] == ACCOUNT and caller['Arn'].startswith(
         f'arn:aws:sts::{ACCOUNT}:assumed-role/JjikmukBackendAutoDeploy/'), 'WRONG_AWS_IDENTITY')
+    from maintenance_gate import Gate
+    gate = Gate(c['s3']); owner = resume_id(); maintenance = gate.admission(owner)
+    if not owner and maintenance is not None and maintenance['state'] != 'OPEN':
+        outcome = {'status': 'DEFERRED_MAINTENANCE', 'commit': sha, 'run_id': run, 'attempt': attempt}
+        report(outcome)
+        return outcome
     s3 = c['s3']; root = 'receipts/backend-cd/' + sha
     intent = get_receipt(s3, root + '/intent.json')
     if intent:
+        if owner:
+            require(maintenance['backend_commit_sha256'] == hashlib.sha256(sha.encode()).hexdigest(),
+                    'MAINTENANCE_OLD_RECEIPT_NOT_CURRENT')
         result = collect(c, intent, root)
     else:
         backup = select_snapshot(c['rds'])
@@ -193,6 +203,8 @@ def dispatch():
             result = collect(c, intent, root)
     report(result)
     require(result['status'] == 'SUCCEEDED', 'DEPLOYMENT_NOT_SUCCESSFUL')
+    if owner:
+        gate.deployed(owner, sha)  # Only a separate fresh host verification can reopen the gate.
     return result
 
 

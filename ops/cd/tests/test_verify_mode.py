@@ -43,11 +43,20 @@ class AutoContextTests(unittest.TestCase):
     def test_manual_run_only_verifies_and_never_deploys(self):
         with patch.dict(os.environ,{**self.env,'GITHUB_EVENT_NAME':'workflow_dispatch','CD_ENABLED':'false'},clear=True),patch('auto_context.main_head',return_value='a'*40):
             guard(deployment=False)
-            with self.assertRaisesRegex(ValueError,'AUTOMATIC_PUSH_ONLY'):guard()
+            with self.assertRaisesRegex(ValueError,'AUTOMATIC_PUSH_OR_VERIFIED_RESUME_ONLY'):guard()
 
     def test_changed_main_blocks_deployment(self):
         with patch.dict(os.environ,self.env,clear=True),patch('auto_context.main_head',return_value='b'*40):
             with self.assertRaisesRegex(ValueError,'MAIN_MOVED'):guard()
+
+    def test_resume_event_requires_exact_main_and_fresh_attempt(self):
+        base = {**self.env, 'GITHUB_EVENT_NAME': 'workflow_dispatch', 'MAINTENANCE_ID': 'b'*32, 'EXPECTED_SHA': 'a'*40}
+        with patch.dict(os.environ, base, clear=True), patch('auto_context.main_head', return_value='a'*40):
+            guard()  # Dispatch still has to validate the durable VERIFIED gate before AWS SendCommand.
+        for key, value in [('EXPECTED_SHA', 'c'*40), ('GITHUB_RUN_ATTEMPT', '2'), ('MAINTENANCE_ID', '../bad')]:
+            with patch.dict(os.environ, {**base, key: value}, clear=True), patch('auto_context.main_head') as network:
+                with self.assertRaises(ValueError): guard()
+                network.assert_not_called()
 
     def snapshot(self, age=1, **changes):
         now=datetime(2026,11,9,tzinfo=timezone.utc)

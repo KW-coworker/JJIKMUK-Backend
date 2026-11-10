@@ -36,8 +36,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: jjikmuk-server-operations
+  group: backend-production-deployment
   cancel-in-progress: false
+  queue: max
 
 env:
   EXPECTED_SHA: ${{ inputs.expected_sha }}

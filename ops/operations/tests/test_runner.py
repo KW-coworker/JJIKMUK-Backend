@@ -64,8 +64,8 @@ class RunnerTests(unittest.TestCase):
         api['ssm'].get_document.return_value={'Content':json.dumps(doc)}
         api['ssm'].send_command.side_effect=TimeoutError('outcome unknown')
         with patch('run.save_local'):
-            with self.assertRaises(TimeoutError):execute(api,{'commit':'a'*40},plan(),'b'*64,HOSTS['backend'])
-            with self.assertRaises(AwsError):execute(api,{'commit':'a'*40},plan(),'b'*64,HOSTS['backend'])
+            with self.assertRaises(TimeoutError):execute(api,{'commit':'a'*40,'request_id':'c'*32},plan(),'b'*64,HOSTS['backend'])
+            with self.assertRaises(AwsError):execute(api,{'commit':'a'*40,'request_id':'c'*32},plan(),'b'*64,HOSTS['backend'])
         self.assertEqual(1,api['ssm'].send_command.call_count)
         self.assertEqual(1,len(records))
 
