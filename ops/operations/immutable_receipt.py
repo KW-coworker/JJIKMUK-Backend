@@ -1,5 +1,5 @@
 """Reconcile only ambiguous immutable S3 receipts, never repeat a server command."""
-import time
+import time,uuid
 from connection import ACCOUNT,BUCKET,canonical
 from bootstrap import need
 
@@ -11,11 +11,13 @@ def transient(error):
 
 def put_once(s3,key,value,*,sleep=time.sleep):
     body=canonical(value)
+    nonce=uuid.uuid4().hex
     ambiguous=False
     for attempt in range(3):
         try:
             return s3.put_object(Bucket=BUCKET,Key=key,Body=body,ContentType='application/json',
-                ServerSideEncryption='AES256',ExpectedBucketOwner=ACCOUNT,IfNoneMatch='*')
+                ServerSideEncryption='AES256',ExpectedBucketOwner=ACCOUNT,IfNoneMatch='*',
+                Metadata={'jjikmuk-receipt-attempt':nonce})
         except Exception as error:
             code=(getattr(error,'response',None) or {}).get('Error',{}).get('Code')
             # An already-existing intent on the first request is always a replay.
@@ -23,6 +25,8 @@ def put_once(s3,key,value,*,sleep=time.sleep):
             ambiguous=True
         try:
             response=s3.get_object(Bucket=BUCKET,Key=key,ExpectedBucketOwner=ACCOUNT)
+            need(response.get('Metadata',{}).get('jjikmuk-receipt-attempt')==nonce,
+                 'IMMUTABLE_RECEIPT_BELONGS_TO_ANOTHER_ATTEMPT')
             need(response['ContentLength']==len(body),'IMMUTABLE_RECEIPT_CHANGED')
             with response['Body'] as stream:actual=stream.read(len(body)+1)
             need(actual==body,'IMMUTABLE_RECEIPT_CHANGED')

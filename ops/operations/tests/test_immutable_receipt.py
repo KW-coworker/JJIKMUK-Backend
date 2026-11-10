@@ -1,5 +1,6 @@
 import io,unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock,patch
+from types import SimpleNamespace
 from botocore.exceptions import ClientError,ConnectionClosedError
 from immutable_receipt import put_once
 from connection import canonical
@@ -11,9 +12,14 @@ class ReceiptTests(unittest.TestCase):
     def setUp(self):
         self.s3=MagicMock();self.value={'request_id':'a'*32,'status':'intent'}
         self.body=canonical(self.value)
-        self.s3.get_object.return_value={'ContentLength':len(self.body),'Body':io.BytesIO(self.body)}
+        self.s3.get_object.return_value=self.response(self.body)
 
-    def write(self):return put_once(self.s3,'receipts/fixed/intent.json',self.value,sleep=lambda _:None)
+    def response(self,body):
+        return {'ContentLength':len(body),'Body':io.BytesIO(body),'Metadata':{'jjikmuk-receipt-attempt':'f'*32}}
+
+    def write(self):
+        with patch('immutable_receipt.uuid.uuid4',return_value=SimpleNamespace(hex='f'*32)):
+            return put_once(self.s3,'receipts/fixed/intent.json',self.value,sleep=lambda _:None)
 
     def test_lost_response_reads_exact_saved_receipt_without_rewriting(self):
         self.s3.put_object.side_effect=closed()
@@ -29,7 +35,7 @@ class ReceiptTests(unittest.TestCase):
 
     def test_late_first_write_conflict_requires_identical_content(self):
         self.s3.put_object.side_effect=[closed(),error('PreconditionFailed')]
-        self.s3.get_object.side_effect=[error('NoSuchKey'),{'ContentLength':len(self.body),'Body':io.BytesIO(self.body)}]
+        self.s3.get_object.side_effect=[error('NoSuchKey'),self.response(self.body)]
         self.assertTrue(self.write()['confirmed_after_transport_error'])
 
     def test_existing_intent_always_blocks_fresh_execution(self):
@@ -37,9 +43,16 @@ class ReceiptTests(unittest.TestCase):
         with self.assertRaises(ClientError):self.write()
         self.s3.get_object.assert_not_called()
 
+    def test_lost_conflict_response_cannot_adopt_another_attempts_identical_intent(self):
+        self.s3.put_object.side_effect=closed()
+        for metadata in ({},{'jjikmuk-receipt-attempt':'e'*32}):
+            with self.subTest(metadata=metadata):
+                self.s3.get_object.return_value={**self.response(self.body),'Metadata':metadata}
+                with self.assertRaisesRegex(ValueError,'ANOTHER_ATTEMPT'):self.write()
+
     def test_conflicting_saved_content_and_denied_access_never_retry(self):
         self.s3.put_object.side_effect=closed()
-        self.s3.get_object.return_value={'ContentLength':len(self.body),'Body':io.BytesIO(b'x'*len(self.body))}
+        self.s3.get_object.return_value=self.response(b'x'*len(self.body))
         with self.assertRaisesRegex(ValueError,'CHANGED'):self.write()
         self.assertEqual(self.s3.put_object.call_count,1)
         self.s3.reset_mock();self.s3.put_object.side_effect=error('AccessDenied')
