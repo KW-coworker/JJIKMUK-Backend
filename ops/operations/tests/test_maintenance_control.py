@@ -23,9 +23,10 @@ class ControlTests(unittest.TestCase):
     def wait(self, api, workflow, inputs, folder, **kwargs):
         self.calls.append((workflow, inputs, kwargs))
         run = dict(id=100+len(self.calls), head_sha=inputs['expected_sha'], run_attempt=1, conclusion='success')
-        if inputs.get('mode') == 'apply':
+        if inputs.get('mode') in ('apply', 'rehearse'):
+            work_sha, verify_sha = control.plan_hashes(inputs)
             result = dict(status='VERIFIED_AWAITING_LATEST_MAIN', request_id='b'*32, commit='a'*40,
-                          run_id=str(run['id']), work_sha256='c'*64, verify_sha256='d'*64,
+                          run_id=str(run['id']), work_sha256=work_sha, verify_sha256=verify_sha,
                           backend_commit_sha256=sha(('a'*40).encode()))
         elif workflow == 'backend-cd.yml':
             result = dict(status='SUCCEEDED', commit=inputs['expected_sha'], run_id=str(run['id']), attempt='1')
@@ -53,6 +54,13 @@ class ControlTests(unittest.TestCase):
         self.main = 'a'*40
         self.execute()
         self.assertEqual([x[1]['mode'] for x in self.calls], ['apply', 'finish'])
+
+    def test_rehearsal_needs_explicit_bound_approval_and_uses_fixed_plans(self):
+        inputs = dict(mode='rehearse', expected_sha='a'*40, request_id='b'*32, confirm=True)
+        self.request = {'inputs': inputs, 'approval': {'status': 'APPROVED', 'input_sha256': sha(canonical(inputs))}}
+        self.main = 'a'*40
+        self.assertEqual(self.execute()['status'], 'RESUMED_LATEST_MAIN_VERIFIED')
+        self.assertEqual([x[1]['mode'] for x in self.calls], ['rehearse', 'finish'])
 
     def test_new_merge_during_deploy_is_followed_before_finish(self):
         def moving(*args, **kwargs):

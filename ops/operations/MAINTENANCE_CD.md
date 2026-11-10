@@ -40,7 +40,7 @@ python -B ops/operations/maintenance_control.py --request <승인된-요청.json
 python -B ops/operations/maintenance_control.py --collect --journal <기존-기록-폴더>
 ```
 
-DB/OCR 실데이터 변경 없이 시험하려면 별도로 승인된 고정 조회 전용 작업·검증 계획을 사용한다. 조회 리허설 성공이 새 SQL/모델의 품질·복구 가능성을 대신 증명하지는 않는다.
+DB/OCR 실데이터 변경 없이 시험하려면 별도로 승인된 요청의 `inputs`를 `mode=rehearse`, `expected_sha`, `request_id`, `confirm=true` 네 항목으로 구성한다. 작업·검증 계획은 main에 있는 고정 생성기가 만든 설치된 백엔드의 상태·DB 읽기 검사만 사용한다. 재시작·SQL 변경·모델 교체는 없으며 SSM 자체 파일·검증 기록과 S3 중단 상태는 생성한다. 조회 리허설 성공이 새 SQL/모델의 품질·복구 가능성을 대신 증명하지는 않는다.
 
 ## 검사와 도입
 

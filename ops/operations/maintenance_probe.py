@@ -5,7 +5,8 @@ from bootstrap import need
 
 def plan(request_id, phase):
     need(re.fullmatch('[a-f0-9]{32}', request_id) and
-         (phase in ('before', 'after') or re.fullmatch('finish-[1-9][0-9]{0,19}', phase)), 'MAINTENANCE_PROBE_ID')
+         (phase in ('before', 'after', 'rehearse-work', 'rehearse-verify') or
+          re.fullmatch('finish-[1-9][0-9]{0,19}', phase)), 'MAINTENANCE_PROBE_ID')
     script = '''import hashlib,json,os,re,stat,sys
 from pathlib import Path
 root=Path('/opt/jjikmuk-cd/bin')
@@ -59,3 +60,14 @@ def drained(ssm, instances):
         else:
             raise ValueError('SSM_HISTORY_LIMIT')
     return not busy
+
+
+def rehearsal(request_id):
+    """Only installed runtime/DB/health reads, no SQL mutation, model change or restart."""
+    from connection import canonical, sha, HOSTS
+    rows = []
+    for phase in ('rehearse-work', 'rehearse-verify'):
+        value = plan(request_id, phase)
+        value.update(component='db', approval_id='MAINTENANCE_REHEARSAL_' + request_id.upper())
+        rows.append(((value, HOSTS['backend']), sha(canonical(value))))
+    return rows

@@ -7,7 +7,7 @@ import sys
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cd'))
 from maintenance_gate import Gate
-from maintenance_probe import plan as probe_plan, drained
+from maintenance_probe import plan as probe_plan, drained, rehearsal
 from connection import REPO, REPO_ID, HOSTS, canonical, sha
 from bootstrap import need, github
 from run import clients, execute, load_plan, save_local
@@ -101,10 +101,13 @@ if __name__ == '__main__':
             result = action(clients(True), ctx)
             save_local('maintenance-result.json', result)
         else:
-            need(os.environ.get('MAINTENANCE_MODE') == 'apply', 'MAINTENANCE_MODE')
-            work_sha, verify_sha = os.environ['WORK_SHA256'], os.environ['VERIFY_SHA256']
-            work = load_plan(os.environ['WORK_PLAN'], work_sha)
-            verification = load_plan(os.environ['VERIFY_PLAN'], verify_sha)
+            need(os.environ.get('MAINTENANCE_MODE') in ('apply', 'rehearse'), 'MAINTENANCE_MODE')
+            if os.environ['MAINTENANCE_MODE'] == 'rehearse':
+                (work, work_sha), (verification, verify_sha) = rehearsal(ctx['request_id'])
+            else:
+                work_sha, verify_sha = os.environ['WORK_SHA256'], os.environ['VERIFY_SHA256']
+                work = load_plan(os.environ['WORK_PLAN'], work_sha)
+                verification = load_plan(os.environ['VERIFY_PLAN'], verify_sha)
             result = perform(clients(True), ctx, work, verification, work_sha, verify_sha)
         print(json.dumps(result))
     except Exception:

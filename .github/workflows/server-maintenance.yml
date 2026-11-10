@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [apply, finish, collect]
+        options: [apply, rehearse, finish, collect]
         required: true
       expected_sha:
         type: string

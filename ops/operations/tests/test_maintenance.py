@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'cd/tests'))
 from test_maintenance_gate import MemoryS3
 import maintenance as m
 from maintenance_gate import Gate
-from maintenance_probe import drained, plan as probe
+from maintenance_probe import drained, plan as probe, rehearsal
 from connection import HOSTS, sha
 
 
@@ -108,3 +108,14 @@ class MaintenanceTests(unittest.TestCase):
         self.assertIn("host.verify(host.baseline,'')", script)
         self.assertIn('with deployment_lock', script)
         self.assertNotIn('restart(', script)
+
+    def test_readonly_rehearsal_has_distinct_approved_fixed_read_plans(self):
+        rows = rehearsal('a'*32)
+        self.assertNotEqual(rows[0][1], rows[1][1])
+        for (plan, target), digest in rows:
+            self.assertEqual(target, HOSTS['backend'])
+            self.assertEqual(plan['operation'], 'verify')
+            command = plan['document']['mainSteps'][0]['inputs']['runCommand'][0]
+            self.assertIn('host.verify(', command)
+            self.assertNotIn('host.restart(', command)
+            self.assertNotIn('host.commit(', command)

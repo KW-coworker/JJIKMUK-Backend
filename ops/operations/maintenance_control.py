@@ -97,15 +97,22 @@ def start_and_wait(api, workflow, inputs, folder, *, approve=False, sleep=time.s
 def execute(api, request, folder, sleep=time.sleep):
     need(set(request) == {'inputs', 'approval'}, 'MAINTENANCE_REQUEST_SCHEMA')
     inputs, approval = request['inputs'], request['approval']
-    need(set(inputs) == {'mode', 'expected_sha', 'request_id', 'work_plan', 'work_sha256',
-                        'verify_plan', 'verify_sha256', 'confirm'} and inputs['mode'] == 'apply'
+    fields = {'mode', 'expected_sha', 'request_id', 'confirm'}
+    if inputs.get('mode') == 'apply': fields |= {'work_plan', 'work_sha256', 'verify_plan', 'verify_sha256'}
+    need(set(inputs) == fields and inputs['mode'] in ('apply', 'rehearse')
          and inputs['confirm'] is True and re.fullmatch('[a-f0-9]{32}', inputs['request_id'])
          and re.fullmatch('[a-f0-9]{40}', inputs['expected_sha']), 'MAINTENANCE_INPUTS')
     need(approval.get('status') == 'APPROVED' and approval.get('input_sha256') == sha(canonical(inputs)),
          'MAINTENANCE_EXACT_APPROVAL_REQUIRED')
     need(api.call(PREFIX + '/actions/variables/BACKEND_CD_ENABLED')['value'] == 'true', 'CD_NOT_ENABLED')
-    work = read_plan(api, inputs['work_plan'], inputs['work_sha256'], inputs['expected_sha'])
-    verify = read_plan(api, inputs['verify_plan'], inputs['verify_sha256'], inputs['expected_sha'])
+    work_sha, verify_sha = plan_hashes(inputs)
+    if inputs['mode'] == 'rehearse':
+        from maintenance_probe import rehearsal
+        (work_pair, _), (verify_pair, _) = rehearsal(inputs['request_id'])
+        work, verify = work_pair[0], verify_pair[0]
+    else:
+        work = read_plan(api, inputs['work_plan'], work_sha, inputs['expected_sha'])
+        verify = read_plan(api, inputs['verify_plan'], verify_sha, inputs['expected_sha'])
     need(work['component'] in ('db', 'ocr') and verify['component'] == work['component']
          and work['operation'] in ('deploy', 'install', 'verify') and verify['operation'] == 'verify'
          and work['approval_id'] == verify['approval_id'], 'MAINTENANCE_PLAN_SCOPE')
@@ -116,7 +123,7 @@ def execute(api, request, folder, sleep=time.sleep):
     result = artifact(api, run, 'maintenance', 'maintenance-result.json')
     need(result.get('status') == 'VERIFIED_AWAITING_LATEST_MAIN' and result['request_id'] == inputs['request_id']
          and result['commit'] == inputs['expected_sha'] and result['run_id'] == str(run['id'])
-         and result['work_sha256'] == inputs['work_sha256'] and result['verify_sha256'] == inputs['verify_sha256'],
+         and result['work_sha256'] == work_sha and result['verify_sha256'] == verify_sha,
          'MAINTENANCE_RESULT_IDENTITY')
     save(folder, 'verified-work.json', result)
     current_hash = result['backend_commit_sha256']
@@ -190,13 +197,22 @@ def collect(api, folder, sleep=time.sleep):
          'MAINTENANCE_COLLECTION_IDENTITY')
     from maintenance_gate import validate
     value = validate(result['gate'])
+    work_sha, verify_sha = plan_hashes(inputs)
     need(value['request_id'] == inputs['request_id'] and value['commit'] == inputs['expected_sha']
-         and value['work_sha256'] == inputs['work_sha256'] and value['verify_sha256'] == inputs['verify_sha256']
+         and value['work_sha256'] == work_sha and value['verify_sha256'] == verify_sha
          and re.fullmatch('[a-f0-9]{40}', result['current_main'])
          and result['current_main_verified'] is (value['state'] == 'OPEN' and
              value['backend_commit_sha256'] == sha(result['current_main'].encode())), 'MAINTENANCE_COLLECTION_PROOF')
     save(target, 'collected-state.json', result)
     return result
+
+
+def plan_hashes(inputs):
+    if inputs['mode'] == 'rehearse':
+        from maintenance_probe import rehearsal
+        rows = rehearsal(inputs['request_id'])
+        return rows[0][1], rows[1][1]
+    return inputs['work_sha256'], inputs['verify_sha256']
 
 
 if __name__ == '__main__':
