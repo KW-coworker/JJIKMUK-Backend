@@ -72,6 +72,10 @@ class MaintenanceMonitoringTests(unittest.TestCase):
         self.assertNotIn('unrelated_secret', json.dumps(result))
         self.assertEqual(result, safe_report(json.dumps(result)))
         self.assertFalse(summarize(ddl.replace('ngram','mecab'))['checks']['normalized_exact_ngram_definition'])
+        private = summarize(ddl.replace('*/  ,', "*/ COMMENT 'PRIVATE_MARKER_ABC' ,"))
+        self.assertNotIn('PRIVATE_MARKER', json.dumps(private))
+        self.assertEqual(private['counts']['unrecognized_tokens'], 1)
+        self.assertFalse(private['checks']['normalized_exact_ngram_definition'])
         with self.assertRaises(ValueError): summarize(ddl.replace('search_keywords','different_column'))
 
     def test_storage_dispatch_requires_confirmation(self):
