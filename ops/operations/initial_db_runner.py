@@ -1,4 +1,4 @@
-"""Exact-main, initial-schema-only workflow. Backup before one fixed host command."""
+"""Exact-main maintenance: quiesce, encrypted snapshot, original schema, restore."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -51,8 +51,9 @@ def build_payload(repo, commit):
         need(response.url == WHEEL_URL, 'WHEEL_REDIRECT_REJECTED')
         wheel = response.read(46741)
     need(len(wheel) == 46740 and sha(wheel) == WHEEL_SHA, 'PINNED_WHEEL_CHANGED')
-    files = {'backend.jar': jars[0].read_bytes(), 'vendor/' + WHEEL_NAME: wheel,
-             'bin/java/InitialSchema.class': (compiler / 'InitialSchema.class').read_bytes()}
+    files = {'backend.jar': jars[0].read_bytes(), 'vendor/' + WHEEL_NAME: wheel}
+    for item in compiler.glob('InitialSchema*.class'):
+        files['bin/java/' + item.name] = item.read_bytes()
     sdk_folder = folder / 'sdk-wheels'
     subprocess.run([sys.executable, '-m', 'pip', 'download', '--require-hashes', '--only-binary=:all:',
                     '--dest', str(sdk_folder), '-r', str(repo / 'ops/operations/requirements.lock')],
@@ -69,9 +70,10 @@ def build_payload(repo, commit):
     files['vendor/sdk-lock.json'] = canonical(sdk_lock)
     for name in ('manifest', 'host', 'database_probe', 'runtime_contract', 'initial_contract',
                  'initial_schema', 'initial_schema_contract', 'initial_db_host', 'package_install',
-                 'initial_guard', 'initial_preservation', 'initial_ddl'):
+                 'initial_guard', 'initial_preservation', 'initial_ddl', 'initial_flyway',
+                 'initial_db_facts', 'initial_maintenance_host'):
         files['bin/' + name + '.py'] = (repo / 'ops/cd' / (name + '.py')).read_bytes()
-    for name in ('readiness_paths', 'readiness_probe'):
+    for name in ('readiness_paths', 'readiness_probe', 'fulltext_definition'):
         files['bin/' + name + '.py'] = (repo / 'ops/operations' / (name + '.py')).read_bytes()
     envelope = {'format': 1, 'commit': commit, 'jar_sha256': manifest['jar_sha256'],
                 'files': {name: {'sha256': sha(raw), 'bytes': len(raw)} for name, raw in files.items()}}
@@ -83,10 +85,11 @@ def build_payload(repo, commit):
     return archive, envelope
 
 
-def rds_client():
+def aws_client(service):
     import boto3
     from botocore.config import Config
-    return boto3.client('rds', region_name=REGION, aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+    need(service in ('rds','cloudwatch'),'INITIAL_AWS_SERVICE')
+    return boto3.client(service, region_name=REGION, aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
         aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'], aws_session_token=os.environ['AWS_SESSION_TOKEN'],
         config=Config(connect_timeout=10, read_timeout=30, retries={'total_max_attempts': 1}))
 
@@ -110,12 +113,15 @@ def check_database(rds):
                 ('DBInstanceIdentifier', 'Engine', 'EngineVersion', 'BackupRetentionPeriod', 'PreferredBackupWindow')}))}}
 
 
-def snapshot(rds, api, ctx, sleep=time.sleep):
+def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:None):
+    need(type(frozen_epoch) is int and 0<frozen_epoch<=int(time.time()),'FROZEN_DATABASE_REQUIRED')
+    guard()
     name = 'jjikmuk-ops-initial-db-' + ctx['run_id']
     key = 'receipts/initial-db/' + ctx['run_id'] + '/snapshot-intent.json'
     put_once(api['s3'], key, {'snapshot': name, 'commit': ctx['commit'], 'request_id': ctx['request_id']})
     rds.create_db_snapshot(DBSnapshotIdentifier=name, DBInstanceIdentifier=DB)
-    for _ in range(120):
+    for _ in range(60):
+        guard()
         rows = rds.describe_db_snapshots(DBSnapshotIdentifier=name)['DBSnapshots']
         need(len(rows) == 1, 'INITIAL_SNAPSHOT_MISSING')
         row = rows[0]
@@ -124,6 +130,7 @@ def snapshot(rds, api, ctx, sleep=time.sleep):
         if row['Status'] == 'available':
             from auto_context import check_snapshot
             check_snapshot(row, ACCOUNT, DB, datetime.now(timezone.utc))
+            need(row['SnapshotCreateTime'].timestamp()>=frozen_epoch,'SNAPSHOT_PREDATES_FREEZE')
             result = {'id': name, 'arn': row['DBSnapshotArn'], 'created_at': row['SnapshotCreateTime'].isoformat()}
             save_local('snapshot-ready.json', result)
             put_once(api['s3'], 'receipts/initial-db/' + ctx['run_id'] + '/snapshot-ready.json', result)
@@ -133,82 +140,52 @@ def snapshot(rds, api, ctx, sleep=time.sleep):
     raise ValueError('SNAPSHOT_WAIT_LIMIT_NO_RECREATE')
 
 
-def document(key, archive_sha, envelope, binding):
-    need(key == 'operations/bootstrap/' + archive_sha + '/payload.zip', 'INITIAL_PAYLOAD_KEY')
-    stage = '/opt/jjikmuk-initial-' + archive_sha[:16]
-    download = '/var/lib/amazon/ssm/jjikmuk-initial-' + archive_sha[:16]
-    setup = f'''from pathlib import Path
-import os
-p=Path({download!r})
-for parent in p.parents:
- s=parent.lstat();assert not parent.is_symlink() and s.st_uid==0 and not s.st_mode&0o022
-p.mkdir(mode=0o700);os.chmod(p,0o700)
-'''
-    apply = f'''import hashlib,json,os,subprocess,zipfile
-from pathlib import Path,PurePosixPath
-try:
- archive=Path({download!r})/'payload.zip'
- assert not archive.is_symlink() and archive.stat().st_size<268435456
- assert hashlib.sha256(archive.read_bytes()).hexdigest()=={archive_sha!r}
- stage=Path({stage!r});assert not stage.exists() and not stage.is_symlink()
- with zipfile.ZipFile(archive) as z:
-  expected={envelope!r}
-  assert json.loads(z.read('payload-manifest.json'))==expected
-  names=z.namelist();assert len(names)==len(set(names)) and set(names)==set(expected['files'])|{{'payload-manifest.json'}}
-  assert sum(i.file_size for i in z.infolist())<400*1024**2
-  for name,meta in expected['files'].items():
-   p=PurePosixPath(name);assert not p.is_absolute() and '..' not in p.parts and str(p)==name
-   assert z.getinfo(name).file_size==meta['bytes'] and hashlib.sha256(z.read(name)).hexdigest()==meta['sha256']
-  stage.mkdir(mode=0o755);os.chmod(stage,0o755)
-  for name in expected['files']:
-   path=stage/name
-   for parent in reversed(path.parents):
-    if stage in parent.parents and not parent.exists():parent.mkdir(mode=0o755);os.chmod(parent,0o755)
-   with path.open('xb') as f:f.write(z.read(name));f.flush();os.fsync(f.fileno())
-   os.chmod(path,0o644)
- r=subprocess.run(['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect','--service-type=exec',
-  '--unit=jjikmuk-initial-db-{archive_sha[:16]}','--property=RuntimeMaxSec=420',
-  '--property=TimeoutStartSec=30','--property=TimeoutStopSec=5','--property=KillMode=control-group',
-  '--property=UMask=0077','--property=Restart=no',
-  '/usr/bin/python3.12','-I','-S','-B',str(stage/'bin/initial_db_host.py')],
-  input={canonical(binding)!r},capture_output=True,timeout=480,cwd='/',env={{'PATH':'/usr/bin:/bin','LANG':'C'}})
- assert r.returncode==0 and not r.stderr and len(r.stdout)<12000
- value=json.loads(r.stdout);assert isinstance(value,dict)
- print(json.dumps(value))
-except Exception:
- print('{{"status":"STOPPED","codes":["INITIAL_DB_STAGE_FAILED_KEEP_RECORDS"]}}')
-'''
-    def shell(code): return ["/usr/bin/python3.12 -I -S -B - <<'INITIAL_SCHEMA_FIXED'\n" + code + '\nINITIAL_SCHEMA_FIXED']
-    return {'schemaVersion': '2.2', 'parameters': {}, 'description': 'Approved original V17-V20 only after verified encrypted snapshot; no app restart',
-            'mainSteps': [
-                {'name': 'prepareStage', 'action': 'aws:runShellScript', 'inputs': {'timeoutSeconds': '30', 'runCommand': shell(setup)}},
-                {'name': 'downloadOriginal', 'action': 'aws:downloadContent', 'inputs': {'sourceType': 'S3',
-                 'sourceInfo': json.dumps({'path': 'https://s3.ap-northeast-2.amazonaws.com/' + BUCKET + '/' + key}), 'destinationPath': download}},
-                {'name': 'report', 'action': 'aws:runShellScript', 'inputs': {'timeoutSeconds': '540', 'runCommand': shell(apply)}}]}
+from initial_document import document
+
+
+def maintain(api,ctx,rds,monitor,phase):
+    try:
+        frozen=phase('freeze')
+        need(frozen.get('success'),'FREEZE_FAILED_NO_SCHEMA_APPLY')
+        backup=snapshot(rds,api,ctx,frozen_epoch=frozen['report']['counts']['frozen_epoch'],guard=monitor.check)
+        need(validate_context()==ctx,'CONTEXT_CHANGED_AFTER_SNAPSHOT')
+        monitor.check()
+        result=phase('apply',backup)
+        need(result.get('success'),'MAINTENANCE_APPLY_FAILED_KEEP_RECORDS')
+        return result
+    except BaseException:
+        # Recovery verifies the host journal and refuses partial/uncertain DDL.
+        try:save_local('recovery-summary.json',phase('recover'))
+        except Exception:save_local('recovery-unconfirmed.json',{'status':'KEEP_RECORDS_INSPECT_NO_REPLAY'})
+        raise
 
 
 def main():
+    from initial_monitor import Monitor
     ctx = validate_context()
     api = clients(True)
-    rds = rds_client()
+    rds = aws_client('rds')
     save_local('rds-preflight.json', check_database(rds))
     archive, envelope = build_payload(Path.cwd(), ctx['commit'])
     archive_sha = digest(archive)
     key = 'operations/bootstrap/' + archive_sha + '/payload.zip'
     api['s3'].put_object(Bucket=BUCKET, Key=key, Body=archive.read_bytes(), ServerSideEncryption='AES256',
         ExpectedBucketOwner=ACCOUNT, IfNoneMatch='*', ContentType='application/zip')
-    backup = snapshot(rds, api, ctx)
-    need(validate_context() == ctx, 'CONTEXT_CHANGED_AFTER_SNAPSHOT')
-    binding = {'commit': ctx['commit'], 'jar_sha256': envelope['jar_sha256'], 'snapshot': backup,
-               'archive_sha256': archive_sha, 'request_id': ctx['request_id']}
-    doc = document(key, archive_sha, envelope, binding)
-    plan = {'format': 1, 'component': 'db', 'operation': 'deploy', 'approved': True,
-            'approval_id': 'USER_SCHEMA_AND_CD_COMPLETION_20261110', 'document': doc}
-    need(len(canonical(plan)) <= 60000, 'INITIAL_DOCUMENT_SIZE')
-    save_local('initial-schema-plan.json', plan)
-    result = execute(api, ctx, plan, sha(canonical(plan)), HOSTS['backend'])
+    binding = {'commit': ctx['commit'], 'jar_sha256': envelope['jar_sha256'],
+               'archive_sha256': archive_sha, 'request_id': ctx['request_id'],'required_bytes':5*1024**3}
+    def phase(name,backup=None):
+        doc=document(key,archive_sha,envelope,binding,name,backup)
+        plan={'format':1,'component':'db','operation':'deploy','approved':True,
+              'approval_id':'USER_FULLTEXT_MAINTENANCE_AND_CD_20261110','document':doc}
+        need(len(canonical(plan))<=60000,'INITIAL_DOCUMENT_SIZE')
+        save_local(name+'-plan.json',plan)
+        result=execute(api,ctx,plan,sha(canonical(plan)),HOSTS['backend'],output_prefix=name+'-')
+        result['report']=json.loads(Path('operation-results/'+name+'-result.json').read_bytes()).get('report',{})
+        return result
+    with Monitor(api['s3'],aws_client('cloudwatch'),binding,binding['required_bytes']) as monitor:
+        result=maintain(api,ctx,rds,monitor,phase)
     print(json.dumps(result))
-    raise SystemExit(0 if result.get('success') else 1)
+    raise SystemExit(0)
 
 
 if __name__ == '__main__':

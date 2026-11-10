@@ -116,8 +116,9 @@ def read_object(s3,key):
     return json.loads(raw)
 
 
-def wait_result(ssm,cid,target,document,sleep=time.sleep):
-    for _ in range(360):
+def wait_result(ssm,cid,target,document,sleep=time.sleep,*,max_polls=360):
+    need(max_polls in (360,450),'COMMAND_WAIT_BOUND')
+    for _ in range(max_polls):
         try:
             invocations=ssm.list_command_invocations(CommandId=cid,InstanceId=target,Details=True)['CommandInvocations']
             if not invocations:sleep(5);continue
@@ -171,14 +172,15 @@ def inspect(api):
             'observation_completed':completed,'required_services_healthy':healthy,'success':healthy}
 
 
-def execute(api,context_data,plan,plan_hash,target):
+def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
+    need(output_prefix in ('','freeze-','apply-','recover-'),'OPERATION_OUTPUT_PREFIX')
     op_id=sha(canonical({'commit':context_data['commit'],'plan_sha256':plan_hash,'target':target}))
     doc=plan['document'];content=canonical(doc).decode();name=DOCUMENT_PREFIX+sha(canonical(doc))
     # S3 precondition makes reruns fail before any second command, including a lost SendCommand response.
     intent={'operation_id':op_id,'document':name,'target':target,'plan_sha256':plan_hash,
             'component':plan['component'],'operation':plan['operation'],'context':context_data}
     put_once(api['s3'],'receipts/'+op_id+'/intent.json',intent)
-    save_local('intent.json',intent)
+    save_local(output_prefix+'intent.json',intent)
     try:info=api['ssm'].describe_document(Name=name)['Document']
     except Exception as error:
         if getattr(error,'response',{}).get('Error',{}).get('Code')!='InvalidDocument':raise
@@ -190,9 +192,9 @@ def execute(api,context_data,plan,plan_hash,target):
         CloudWatchOutputConfig={'CloudWatchOutputEnabled':False},Comment='jjikmuk-ops:'+op_id)
     cid=response['Command']['CommandId']
     put_once(api['s3'],'receipts/'+op_id+'/sent.json',dict(intent,command_id=cid))
-    save_local('sent.json',{'operation_id':op_id,'command_id':cid})
-    result=wait_result(api['ssm'],cid,target,name)
-    put_once(api['s3'],'receipts/'+op_id+'/result.json',result);save_local('result.json',result)
+    save_local(output_prefix+'sent.json',{'operation_id':op_id,'command_id':cid})
+    result=wait_result(api['ssm'],cid,target,name,max_polls=450 if output_prefix=='apply-' else 360)
+    put_once(api['s3'],'receipts/'+op_id+'/result.json',result);save_local(output_prefix+'result.json',result)
     return {'status':'OPERATION_FINISHED','operation_id':op_id,'command_id':cid,
             'success':operation_succeeded(result)}
 

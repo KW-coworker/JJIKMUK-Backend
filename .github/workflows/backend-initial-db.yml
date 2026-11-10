@@ -13,7 +13,7 @@ on:
         type: string
         required: true
       confirm:
-        description: 백업 후 원본 V17~V20 최초 적용 승인
+        description: 서비스 동결·백업·FULLTEXT 보존 정비·원본 V17~V20·기존 서비스 복귀 승인
         type: boolean
         default: false
         required: true
@@ -30,7 +30,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.confirm
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 65
     permissions:
       contents: read
       id-token: write
@@ -65,7 +65,7 @@ jobs:
           role-duration-seconds: 3600
           role-session-name: initial-db-${{ github.run_id }}
           retry-max-attempts: 1
-      - name: 백업 확인 후 원본 V17~V20 한 번 적용
+      - name: 공간 감시·서비스 동결·백업 후 원본 정비와 보존 검증
         run: python3 -B ops/operations/initial_db_runner.py
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: always()

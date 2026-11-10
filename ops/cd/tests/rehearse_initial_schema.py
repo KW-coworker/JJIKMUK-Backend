@@ -84,3 +84,22 @@ finally:
     if guard_conn.open:
         guard_conn.close()
 print('MYSQL_STREAMING_GUARD_FAILURE_CLOSES_CONNECTION_WITHOUT_DRAIN_PASSED')
+
+# Real server cancellation must end the registered session, not just its local thread.
+import threading,time
+from initial_flyway import settle
+def local_connection():
+    return pymysql.connect(host='127.0.0.1',port=3306,database='jjikmuk',user='root',
+                           password='rehearsal_only',autocommit=True,read_timeout=5)
+owned=local_connection();identity=owned.thread_id();outcome=[]
+def query():
+    try:
+        with owned.cursor() as cur:cur.execute('SELECT SLEEP(30)')
+    except pymysql.Error:outcome.append('cancelled')
+worker=threading.Thread(target=query);worker.start()
+time.sleep(.2)
+settle(local_connection,[identity],lambda event:None,cancel=True,timeout=10)
+worker.join(timeout=5)
+assert not worker.is_alive() and outcome==['cancelled']
+if owned.open:owned.close()
+print('MYSQL_OWNED_SESSION_CANCELLATION_CONFIRMED_ON_SERVER_PASSED')

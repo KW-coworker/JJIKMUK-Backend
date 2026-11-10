@@ -1,6 +1,7 @@
 """Private host-only schema/search facts for the approved maintenance."""
 import hashlib
 import json
+import re
 from manifest import require
 
 
@@ -8,7 +9,30 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
 
 
+def require_observation_privileges(conn):
+    """SHOW metadata must not silently hide triggers/events owned by other users."""
+    with conn.cursor() as cur:
+        cur.execute('SELECT CURRENT_ROLE()')
+        role = cur.fetchone()[0]
+        if role == 'NONE':
+            cur.execute('SHOW GRANTS FOR CURRENT_USER')
+        else:
+            require(role == '`rds_superuser_role`@`%`', 'UNREVIEWED_ACTIVE_DB_ROLE')
+            cur.execute('SHOW GRANTS FOR CURRENT_USER USING `rds_superuser_role`@`%`')
+        rows = cur.fetchmany(102)
+    require(len(rows) <= 101 and not any(row[0].startswith('REVOKE ') for row in rows),
+            'DB_METADATA_PRIVILEGES_RESTRICTED')
+    global_rights = set()
+    for row in rows:
+        match = re.fullmatch(r'GRANT (.+) ON \*\.\* TO .+', row[0])
+        if match:
+            names = set(match[1].split(', '))
+            global_rights.update({'PROCESS','TRIGGER','EVENT'} if 'ALL PRIVILEGES' in names else names)
+    require({'PROCESS','TRIGGER','EVENT'} <= global_rights, 'DB_METADATA_VISIBILITY_NOT_PROVEN')
+
+
 def logical_extras(conn):
+    require_observation_privileges(conn)
     with conn.cursor() as cur:
         cur.execute('SELECT TABLE_NAME,TABLE_COLLATION,TABLE_COMMENT,CREATE_OPTIONS,AUTO_INCREMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s ORDER BY TABLE_NAME LIMIT 102', ('jjikmuk',))
         tables = cur.fetchmany(102)
@@ -51,13 +75,17 @@ def search_fingerprint(conn):
 
 
 def quiescent(conn):
+    require_observation_privileges(conn)
     with conn.cursor() as cur:
         # This also proves effective PROCESS access; observing only our own sessions is insufficient.
         cur.execute('SELECT COUNT(*) FROM information_schema.INNODB_TRX')
         transactions = int(cur.fetchone()[0])
-        cur.execute("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND (DB=%s OR DB IS NULL) AND USER NOT IN ('rdsadmin','event_scheduler','system user')", ('jjikmuk',))
+        # Another default schema does not prevent fully-qualified writes to jjikmuk.
+        cur.execute("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND USER NOT IN ('rdsadmin','event_scheduler','system user')")
         sessions = int(cur.fetchone()[0])
-    require(transactions == 0 and sessions == 0, 'DATABASE_WRITERS_NOT_QUIESCENT')
+        cur.execute("SELECT COUNT(*) FROM information_schema.EVENTS WHERE STATUS='ENABLED' AND NOT (EVENT_SCHEMA='mysql' AND DEFINER LIKE 'rdsadmin@%')")
+        events = int(cur.fetchone()[0])
+    require(transactions == 0 and sessions == 0 and events == 0, 'DATABASE_WRITERS_NOT_QUIESCENT')
 
 
 def history_bound(conn):

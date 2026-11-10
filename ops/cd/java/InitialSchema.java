@@ -10,13 +10,26 @@ import java.util.Set;
 import java.util.TreeSet;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
+import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.io.PrintWriter;
+import java.nio.channels.FileChannel;
+import java.nio.ByteBuffer;
+import java.nio.file.StandardOpenOption;
+import java.util.logging.Logger;
 
 /** One-time, V17-V20 only. Credentials are supplied through a private stdin pipe. */
 public final class InitialSchema {
     private static String phase = "INPUT";
     static Flyway configured(Path stage, String url, String user, String password) {
+        return configured(stage, new TrackedSource(url, user, password, null));
+    }
+
+    static Flyway configured(Path stage, DataSource source) {
         return Flyway.configure()
-            .dataSource(url, user, password)
+            .dataSource(source)
             .locations("filesystem:" + stage.resolve("sql"))
             .target("20").cleanDisabled(true).baselineOnMigrate(false)
             .outOfOrder(false).validateOnMigrate(true).validateMigrationNaming(true)
@@ -24,6 +37,44 @@ public final class InitialSchema {
             .ignoreMigrationPatterns(new String[0]).connectRetries(0).lockRetryCount(0)
             .initSql("SET SESSION lock_wait_timeout=10, innodb_lock_wait_timeout=10")
             .loggers("slf4j").load();
+    }
+
+    /** Persist ownership before Flyway can execute SQL on any connection. */
+    static final class TrackedSource implements DataSource {
+        private final String url, user, password;
+        private final Path journal;
+        TrackedSource(String url, String user, String password, Path journal) {
+            this.url=url; this.user=user; this.password=password; this.journal=journal;
+        }
+        public Connection getConnection() throws SQLException {
+            Connection connection = DriverManager.getConnection(url, user, password);
+            try {
+                if (journal != null) {
+                    long id;
+                    try (var statement = connection.createStatement();
+                         var row = statement.executeQuery("SELECT CONNECTION_ID()")) {
+                        if (!row.next() || (id=row.getLong(1)) <= 0 || row.next()) throw new SQLException();
+                    }
+                    byte[] bytes=(Long.toString(id)+"\n").getBytes(StandardCharsets.US_ASCII);
+                    try (FileChannel channel=FileChannel.open(journal, StandardOpenOption.WRITE, StandardOpenOption.APPEND)) {
+                        ByteBuffer buffer=ByteBuffer.wrap(bytes);
+                        while(buffer.hasRemaining()) channel.write(buffer);
+                        channel.force(true);
+                    }
+                }
+                return connection;
+            } catch (Exception error) {
+                connection.close(); throw new SQLException("CONNECTION_REGISTRATION_FAILED");
+            }
+        }
+        public Connection getConnection(String u,String p) throws SQLException { throw new SQLException(); }
+        public PrintWriter getLogWriter() { return null; }
+        public void setLogWriter(PrintWriter writer) { }
+        public int getLoginTimeout() { return 5; }
+        public void setLoginTimeout(int seconds) { }
+        public Logger getParentLogger() { return Logger.getGlobal(); }
+        public boolean isWrapperFor(Class<?> type) { return false; }
+        public <T> T unwrap(Class<T> type) throws SQLException { throw new SQLException(); }
     }
 
     static void apply(Flyway flyway) {
@@ -67,7 +118,10 @@ public final class InitialSchema {
                     !(target.getPort() == -1 || target.getPort() == 3306) ||
                     !"/jjikmuk".equals(target.getPath()) || target.getUserInfo() != null || target.getFragment() != null)
                 throw new IllegalArgumentException();
-            apply(configured(stage, url, user, password));
+            Path journal=stage.resolve("flyway-owned/connections");
+            if (!java.nio.file.Files.isRegularFile(journal, java.nio.file.LinkOption.NOFOLLOW_LINKS))
+                throw new IllegalArgumentException();
+            apply(configured(stage, new TrackedSource(url, user, password, journal)));
             publicOutput.println("{\"status\":\"SCHEMA_PREPARED\",\"migrations\":4}");
         } catch (Throwable error) {
             // Database URLs, credentials, SQL and driver messages never reach SSM output.

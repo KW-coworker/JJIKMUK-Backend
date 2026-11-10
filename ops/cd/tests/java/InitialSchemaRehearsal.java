@@ -37,8 +37,15 @@ public final class InitialSchemaRehearsal {
         // Production preflight requires the real V1-V16 SQL history and baseline 0.
         Flyway.configure().dataSource(url, "root", "rehearsal_only").baselineVersion("16")
             .loggers("slf4j").load().baseline();
-        var flyway = InitialSchema.configured(Path.of(args[0]), url, "root", "rehearsal_only");
+        var ownership=Path.of(args[0]).resolve("owned-connections");
+        java.nio.file.Files.createFile(ownership);
+        var flyway = InitialSchema.configured(Path.of(args[0]),
+            new InitialSchema.TrackedSource(url,"root","rehearsal_only",ownership));
         InitialSchema.apply(flyway);
+        var registered=java.nio.file.Files.readAllLines(ownership);
+        if(registered.isEmpty() || registered.size()>32 ||
+                registered.stream().anyMatch(x->!x.matches("[1-9][0-9]{0,18}")))
+            throw new IllegalStateException("owned sessions were not registered");
         try (var c = DriverManager.getConnection(url, "root", "rehearsal_only"); var s = c.createStatement()) {
             s.execute("ALTER TABLE products ADD FULLTEXT INDEX ft_products_search_keywords(search_keywords) WITH PARSER ngram");
             try (var r = s.executeQuery("SELECT id FROM products WHERE MATCH(search_keywords) AGAINST('우유' IN BOOLEAN MODE)")) {

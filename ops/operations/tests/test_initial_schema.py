@@ -124,7 +124,7 @@ class InitialSchemaTests(unittest.TestCase):
         rds, api = MagicMock(), {'s3': MagicMock()}
         rds.create_db_snapshot.side_effect = RuntimeError('lost response')
         with patch.object(runner, 'put_once') as intent, self.assertRaises(RuntimeError):
-            runner.snapshot(rds, api, {'run_id': '123', 'commit': 'a' * 40, 'request_id': 'b' * 32})
+            runner.snapshot(rds, api, {'run_id': '123', 'commit': 'a' * 40, 'request_id': 'b' * 32},frozen_epoch=1)
         intent.assert_called_once()
         rds.create_db_snapshot.assert_called_once()
         rds.describe_db_snapshots.assert_not_called()
@@ -150,7 +150,7 @@ class InitialSchemaTests(unittest.TestCase):
         self.assertEqual('report', doc['mainSteps'][-1]['name'])
         self.assertLess(len(json.dumps(doc)), 60000)
         self.assertNotIn('spring.datasource.password', json.dumps(doc))
-        for value in ('RuntimeMaxSec=420', 'TimeoutStartSec=30', 'TimeoutStopSec=5', 'KillMode=control-group', 'Restart=no'):
+        for value in ('RuntimeMaxSec=1200', 'TimeoutStartSec=30', 'TimeoutStopSec=5', 'KillMode=control-group', 'Restart=no'):
             self.assertIn(value, json.dumps(doc))
 
 

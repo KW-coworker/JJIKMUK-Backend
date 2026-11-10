@@ -10,7 +10,9 @@ repo=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(repo/'ops/cd'))
 from initial_guard import load_sdk
 
-with tempfile.TemporaryDirectory(prefix='jjikmuk-sdk-rehearsal-',dir='/opt') as folder:
+# Hosted runners can make /opt group-writable. Use the root-owned fixture tree;
+# do not weaken the production path ownership check or change the runner's /opt.
+with tempfile.TemporaryDirectory(prefix='jjikmuk-sdk-rehearsal-',dir='/root') as folder:
     stage=Path(folder);os.chmod(stage,0o755)
     vendor=stage/'vendor';vendor.mkdir(mode=0o755)
     with zipfile.ZipFile(repo/'build/initial-db/payload.zip') as archive:
