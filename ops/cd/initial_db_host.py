@@ -21,7 +21,7 @@ from initial_contract import config, OLD_ARGV, OLD_SHA, OLD_JAR
 import initial_schema as schema
 import readiness_probe as probe
 
-JOURNAL_ROOT = Path('/var/lib/jjikmuk-backend-initial-db-stop-proof-20261110')
+JOURNAL_ROOT = Path('/var/lib/jjikmuk-backend-initial-db-receipt-20261110')
 OBSERVED_PROTECTED = '3524793b8fa9ae80d15ab0e15405828d575e088f6c92f43a8eed58372e68da35'
 OBSERVED_ENVIRONMENT = 'ad8ce08a545eb7311ebb39e69af76c0ea8d1e782fe6359eec77d94d004b91e92'
 OBSERVED_PROPERTIES = 'f3126204c538099eec347ad1354481c8454e05853e3a83d7f4f7577cf19ae822'

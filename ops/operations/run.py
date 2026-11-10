@@ -104,9 +104,7 @@ def operation_succeeded(result):
             {'OK', 'VERIFIED', 'INSTALLED_DISABLED', 'SUCCEEDED'})
 
 
-def put_once(s3,key,value):
-    return s3.put_object(Bucket=BUCKET,Key=key,Body=canonical(value),ContentType='application/json',
-        ServerSideEncryption='AES256',ExpectedBucketOwner=ACCOUNT,IfNoneMatch='*')
+from immutable_receipt import put_once
 
 
 def read_object(s3,key):
