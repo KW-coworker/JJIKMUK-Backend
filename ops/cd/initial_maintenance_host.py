@@ -235,7 +235,7 @@ def freeze(stage,binding):
     trusted_certificates()
     mark('DB_CAPABILITIES')
     with connect(stage) as conn:
-        facts.require_observation_privileges(conn)
+        facts.project_events_clear(conn)
         definition=facts.fulltext_definition(conn)
         with conn.cursor() as cur:
             cur.execute('SELECT DATA_LENGTH+INDEX_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s',('jjikmuk','products'))
@@ -261,7 +261,7 @@ def freeze(stage,binding):
         for unit in UNITS:systemctl('stop',unit)
         stopped();guard();require_inputs(state)
         with connect(stage) as conn:
-            facts.quiescent(conn)
+            facts.project_idle(conn,guard=guard)
             frozen_schema=schema.read_from_connection(conn)
             schema.verify_schema(manifest,frozen_schema,False,fulltext_maintenance=True)
             require(frozen_schema==before,'SCHEMA_CHANGED_DURING_FREEZE')
@@ -271,11 +271,12 @@ def freeze(stage,binding):
             state['logical']=facts.logical_extras(conn)
             state['search']=facts.search_fingerprint(conn)
         state['data']=capture_data(stage,state,guard)
-        with connect(stage) as conn:facts.quiescent(conn)
+        with connect(stage) as conn:facts.project_idle(conn,guard=guard)
         stopped();require_inputs(state);guard()
         state['frozen_epoch']=int(time.time())
         set_state(state,'FROZEN_NO_DB_WRITES')
-        return {'status':'SUCCEEDED','checks':{'writers_quiescent':True,'original_data_recorded':True,
+        return {'status':'SUCCEEDED','checks':{'known_services_stopped':True,'current_account_sessions_clear':True,
+                'project_events_clear':True,'global_visibility_not_proven':True,'original_data_recorded':True,
                 'app_files_unchanged':True},'counts':{'frozen_epoch':state['frozen_epoch'],
                 'tables':len(state['data']),'history_rank':state['history_rank']}}
     except BaseException:
@@ -298,12 +299,12 @@ def verify_preserved(stage,state,guard):
     schema.verify_schema(state['candidate'],after,True)
     schema.verify_preservation(state['before_schema'],after)
     with connect(stage) as conn:
-        facts.quiescent(conn)
+        facts.project_idle(conn,guard=guard)
         facts.verify_logical(state['logical'],facts.logical_extras(conn))
         require(facts.fulltext_definition(conn)==state['fulltext_definition'],'FULLTEXT_DEFINITION_CHANGED')
         require(facts.search_fingerprint(conn)==state['search'],'GENERAL_SEARCH_CHANGED')
     preservation.verify(state['data'],capture_data(stage,state,guard))
-    with connect(stage) as conn:facts.quiescent(conn)
+    with connect(stage) as conn:facts.project_idle(conn,guard=guard)
     stopped();guard();require_inputs(state)
     atomic_json(JOURNAL_ROOT/'after-schema.json',after)
 
@@ -321,11 +322,11 @@ def apply(stage,binding,backup):
             'FROZEN_SNAPSHOT_REQUIRED')
     guard=phase_guard(stage,binding,1200);stopped()
     state['snapshot']=backup
-    with connect(stage) as conn:facts.quiescent(conn)
+    with connect(stage) as conn:facts.project_idle(conn,guard=guard)
     # Snapshot was taken after the captured baseline; reject any intervening write.
     preservation.verify(state['data'],capture_data(stage,state,guard))
     with connect(stage) as conn:
-        facts.quiescent(conn)
+        facts.project_idle(conn,guard=guard)
         require(schema.read_from_connection(conn)==state['before_schema'],'SCHEMA_CHANGED_DURING_SNAPSHOT')
         require(facts.logical_extras(conn)==state['logical'],'LOGICAL_OPTIONS_CHANGED_DURING_SNAPSHOT')
         require(facts.fulltext_definition(conn)==state['fulltext_definition'],'FULLTEXT_CHANGED_DURING_SNAPSHOT')
@@ -333,14 +334,14 @@ def apply(stage,binding,backup):
     def execute(sql):
         stopped();guard();require_inputs(state)
         with connect(stage,read_timeout=610) as conn:
-            facts.quiescent(conn)
+            facts.project_idle(conn,guard=guard)
             guarded_sql(conn,lambda:connect(stage),sql,guard,lambda event:record(state,event),timeout=600)
     try:
         execute('ALTER TABLE products DROP INDEX ft_products_search_keywords, ALGORITHM=INPLACE')
         set_state(state,'FULLTEXT_DROPPED')
         execute('OPTIMIZE TABLE products')
         set_state(state,'PRODUCTS_REBUILT')
-        with connect(stage) as conn:facts.quiescent(conn)
+        with connect(stage) as conn:facts.project_idle(conn,guard=guard)
         require_inputs(state)
         flyway_apply(stage,observed_properties(),guard,lambda:connect(stage),lambda event:record(state,event))
         set_state(state,'ORIGINAL_V17_V20_APPLIED')
