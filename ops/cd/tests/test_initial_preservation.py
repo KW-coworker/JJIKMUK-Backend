@@ -35,5 +35,17 @@ class InitialPreservationTests(unittest.TestCase):
         conn.rollback.assert_called_once()
         conn.cursor.return_value.__enter__.return_value.execute.assert_any_call('START TRANSACTION READ ONLY')
 
+    def test_guard_failure_does_not_drain_streaming_rows(self):
+        conn=MagicMock();stream=MagicMock()
+        conn.cursor.side_effect=[MagicMock(),stream]
+        stream.fetchmany.side_effect=[[('a'*64,)], [('b'*64,)]]
+        guard=MagicMock(side_effect=[None,ValueError('STALE_GUARD')])
+        with self.assertRaisesRegex(ValueError,'STALE_GUARD'):
+            capture(conn,{'users':{'columns':['id'],'primary_key':['id']}},17,guard,cursor_class=object)
+        conn.close.assert_called_once()
+        conn.rollback.assert_not_called()
+        stream.close.assert_not_called()
+        self.assertEqual(stream.fetchmany.call_count,1)
+
 
 if __name__ == '__main__':unittest.main()

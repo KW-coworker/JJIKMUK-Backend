@@ -58,6 +58,7 @@ def capture(connection, original_projection, history_rank, guard, *, cursor_clas
     require(callable(guard), 'LIVE_MAINTENANCE_GUARD_REQUIRED')
     started = clock()
     result = {}
+    failed = False
     try:
         with connection.cursor() as cur:
             cur.execute('SET SESSION MAX_EXECUTION_TIME=180000')
@@ -67,7 +68,8 @@ def capture(connection, original_projection, history_rank, guard, *, cursor_clas
             require(clock() - started < 900, 'PRESERVATION_DEADLINE')
             sql, parameters = row_hash_sql(table, shape, history_rank)
             count, digest = 0, hashlib.sha256()
-            with connection.cursor(cursor_class) as cur:
+            cur = connection.cursor(cursor_class)
+            try:
                 cur.execute(sql, parameters)
                 while True:
                     rows = cur.fetchmany(1024)
@@ -81,11 +83,29 @@ def capture(connection, original_projection, history_rank, guard, *, cursor_clas
                         digest.update(row[0].encode('ascii'))
                     count += len(rows)
                     require(count <= 3_000_000, 'PRESERVATION_ROW_LIMIT')
+            except BaseException:
+                # SSCursor.close() drains unread rows. Close the dedicated connection
+                # first and never close/drain this cursor on a guard failure.
+                failed = True
+                try:
+                    connection.close()
+                finally:
+                    # PyMySQL 1.2.3 finalizers otherwise retry draining the dead socket.
+                    # This only retires local protocol objects; it is not proof of
+                    # server-side query termination (the caller must verify that).
+                    cur.connection = None
+                    result_object = getattr(cur, '_result', None)
+                    if result_object is not None:
+                        result_object.unbuffered_active = False
+                raise
+            else:
+                cur.close()
             result[table] = {'rows': count, 'sha256': digest.hexdigest()}
         guard()
         return result
     finally:
-        connection.rollback()
+        if not failed:
+            connection.rollback()
 
 
 def verify(before, after):

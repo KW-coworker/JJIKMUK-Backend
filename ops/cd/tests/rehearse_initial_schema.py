@@ -62,3 +62,25 @@ with pymysql.connect(host='127.0.0.1', port=3306, database='jjikmuk', user='root
         cur.execute('ALTER TABLE preservation_fixture ADD COLUMN new_column BIGINT NOT NULL DEFAULT 0, ALGORITHM=INSTANT')
     verify(before, sample())
 print('MYSQL_ORIGINAL_PROJECTION_CASE_NULL_BINARY_AND_ADDITIVE_COLUMN_PROOF_PASSED')
+
+guard_conn = pymysql.connect(host='127.0.0.1', port=3306, database='jjikmuk', user='root',
+                            password='rehearsal_only', autocommit=True)
+try:
+    with guard_conn.cursor() as cur:
+        cur.execute("INSERT INTO preservation_fixture(id,text_value) WITH d AS (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) SELECT 10+a.n+10*b.n+100*c.n+1000*d.n,'cancel-fixture' FROM d a CROSS JOIN d b CROSS JOIN d c CROSS JOIN d")
+    checks = [0]
+    def fail_after_first_stream_batch():
+        checks[0] += 1
+        if checks[0] == 2:
+            raise ValueError('SYNTHETIC_STALE_GUARD')
+    try:
+        capture(guard_conn, shape, 17, fail_after_first_stream_batch, cursor_class=pymysql.cursors.SSCursor)
+    except ValueError as error:
+        assert str(error) == 'SYNTHETIC_STALE_GUARD'
+    else:
+        raise AssertionError('live guard failure was ignored')
+    assert not guard_conn.open
+finally:
+    if guard_conn.open:
+        guard_conn.close()
+print('MYSQL_STREAMING_GUARD_FAILURE_CLOSES_CONNECTION_WITHOUT_DRAIN_PASSED')
