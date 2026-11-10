@@ -20,6 +20,46 @@ PROVENANCE_COLUMNS = {
     'upstream_revision':'varchar(256)', 'upstream_updated_at':'datetime(6)'}
 
 
+class FieldSummary:
+    """Column stream hashes are comparable only with equal ordered product keys."""
+    def __init__(self,columns):
+        from catalog_compare import NON_IDENTITY, canonical, normalized, present
+        self.fields=[(name,kind) for name,kind in columns if name not in NON_IDENTITY]
+        encoder=json.JSONEncoder(ensure_ascii=False,separators=(',',':'),allow_nan=False)
+        self.canonical=lambda value:encoder.encode(value).encode('utf-8')
+        self.normalized=normalized
+        self.hashes={name:hashlib.sha256() for name,_ in self.fields}
+        self.nonnull={name:0 for name,_ in self.fields}
+        self.keys=hashlib.sha256();self.rows=0
+        self.present=present;self.images=0;self.bases=0
+    def consume(self,row):
+        need(type(row['product_id']) is int and row['product_id']>0 and
+             isinstance(row['barcode'],str) and row['barcode'],'PRODUCT_KEY')
+        self.keys.update(self.canonical([row['barcode'],row['product_id']])+b'\n')
+        for name,kind in self.fields:
+            value=self.normalized(row[name],kind)
+            self.hashes[name].update(self.canonical(value)+b'\n')
+            self.nonnull[name]+=value is not None
+        self.rows+=1
+        self.images+=self.present(row.get('image_url'))
+        self.bases+=self.present(row.get('nutrition_basis_raw'))
+    def finish(self):
+        return {'counts':{'operating_rows':self.rows,'operating_image_filled':self.images,
+                          'operating_basis_filled':self.bases,**{'nonnull.'+k:v for k,v in self.nonnull.items()}},
+                'hashes':{'ordered_product_keys':self.keys.hexdigest(),
+                          **{'field.'+k:v.hexdigest() for k,v in self.hashes.items()}}}
+
+
+def field_differences(source,operating):
+    need(source['counts']['operating_rows']==operating['counts']['operating_rows'] and
+         source['hashes']['ordered_product_keys']==operating['hashes']['ordered_product_keys'],
+         'FIELD_COMPARISON_KEYS_OR_ORDER_CHANGED')
+    left={k:v for k,v in source['hashes'].items() if k.startswith('field.')}
+    right={k:v for k,v in operating['hashes'].items() if k.startswith('field.')}
+    need(set(left)==set(right),'FIELD_COMPARISON_COLUMNS_CHANGED')
+    return sorted(k.removeprefix('field.') for k in left if left[k]!=right[k])
+
+
 def need(ok, code):
     if not ok:
         raise ValueError(code)
@@ -67,12 +107,13 @@ def retire(conn, cursor):
             result.unbuffered_active = False
 
 
-def compare_connection(conn, comparison, cursor_class, migrations, clock=time.monotonic):
+def compare_connection(conn, comparison, cursor_class, migrations, clock=time.monotonic, *, fields_only=False):
     from catalog_compare import IMAGE_META
     from manifest import require_database
     started = clock()
     cursor = None
     failed = False
+    summary = FieldSummary(comparison.columns) if fields_only else None
     try:
         with conn.cursor() as cur:
             cur.execute('SET SESSION MAX_EXECUTION_TIME=240000')
@@ -112,6 +153,11 @@ def compare_connection(conn, comparison, cursor_class, migrations, clock=time.mo
                 row = dict(zip(selected,value))
                 for name in IMAGE_META:
                     row.setdefault(name,None)
+                if summary is not None:
+                    summary.consume(row)
+                    bound_rows += row.get('ingested_content_revision_sha256') is not None
+                    need(summary.rows<=2000000,'OPERATING_ROW_LIMIT')
+                    continue
                 before_basis = comparison.counts['basis_fill_candidate']
                 before_image = (comparison.counts['image_fill_representative_candidate']+
                                 comparison.counts['image_fill_category_candidate'])
@@ -123,19 +169,22 @@ def compare_connection(conn, comparison, cursor_class, migrations, clock=time.mo
                                     comparison.counts['image_fill_category_candidate']-before_image)
                 need(comparison.counts['operating_rows'] <= 2000000, 'OPERATING_ROW_LIMIT')
         cursor.close(); cursor = None
-        report = comparison.finish()
+        report = summary.finish() if summary is not None else comparison.finish()
         report['status'] = 'VERIFIED'
         report['counts'].update(image_columns_present=len(set(actual)&set(IMAGE_META)),
             fulltext_columns=sum(r[1]=='FULLTEXT' for r in indexes),
             successful_migrations=sum(r['type']=='SQL' for r in history),
             recognized_ai_columns=len(set(actual)&set(PROVENANCE_COLUMNS)),
-            existing_ingestion_binding_rows=bound_rows,basis_fill_with_ingestion_binding=basis_bound,
-            image_fill_with_ingestion_binding=image_bound,
+            existing_ingestion_binding_rows=bound_rows,
             db_connections=1, db_writes=0, paid_ai_calls=0)
+        if summary is None:
+            report['counts'].update(basis_fill_with_ingestion_binding=basis_bound,
+                                    image_fill_with_ingestion_binding=image_bound)
         report['hashes']['product_schema'] = hashlib.sha256(json.dumps([actual,indexes],sort_keys=True).encode()).hexdigest()
         report['checks'] = {'read_only_snapshot':True,'no_application_rows_exported':True,
-            'exact_product_identity_required':True,'existing_values_preserved_in_plan':True,
+            'existing_values_preserved_in_plan':True,
             'db_history_matches_installed_backend':True}
+        report['checks']['per_column_fingerprints_only' if fields_only else 'exact_product_identity_required']=True
         report['checks']['existing_ai_columns_recognized']=True
         report['checks']['no_provenance_values_exported']=True
         conn.rollback()
@@ -156,6 +205,7 @@ def main():
     raw = sys.stdin.buffer.read(65537)
     need(len(raw)<=65536, 'INPUT_LIMIT')
     config = json.loads(raw)
+    purpose=config.get('purpose','compare');need(purpose in ('compare','fields'),'UNKNOWN_READ_PURPOSE')
     source = trusted(stage/'source-fingerprints.sqlite')
     digest = hashlib.sha256()
     with source.open('rb') as f:
@@ -185,7 +235,7 @@ def main():
             user=props['spring.datasource.username'],password=props['spring.datasource.password'],
             ssl_ca=db['ca_file'],ssl_verify_cert=True,ssl_verify_identity=True,
             connect_timeout=5,read_timeout=30,write_timeout=5,autocommit=True,charset='utf8mb4')
-        return compare_connection(conn,comparison,pymysql.cursors.SSCursor,config['migrations'])
+        return compare_connection(conn,comparison,pymysql.cursors.SSCursor,config['migrations'],fields_only=purpose=='fields')
     finally:
         comparison.close()
 
