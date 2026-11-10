@@ -171,7 +171,15 @@ def inspect(api):
 
 
 def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
-    need(output_prefix in ('','freeze-','apply-','recover-','install-','activate-'),'OPERATION_OUTPUT_PREFIX')
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        # A cancelled maintenance workflow must also block the older generic executor.
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'cd'))
+        from maintenance_gate import Gate
+        Gate(api['s3']).manual_admission(context_data['request_id'], os.environ.get('GITHUB_WORKFLOW_REF', ''))
+    need(output_prefix in ('','freeze-','apply-','recover-','install-','activate-',
+                          'maintenance-before-','maintenance-work-','maintenance-verify-','maintenance-after-'),
+         'OPERATION_OUTPUT_PREFIX')
     op_id=sha(canonical({'commit':context_data['commit'],'plan_sha256':plan_hash,'target':target}))
     doc=plan['document'];content=canonical(doc).decode();name=DOCUMENT_PREFIX+sha(canonical(doc))
     # S3 precondition makes reruns fail before any second command, including a lost SendCommand response.

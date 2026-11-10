@@ -1,0 +1,85 @@
+name: Server maintenance
+run-name: Maintenance ${{ inputs.mode }} at ${{ inputs.expected_sha }} [${{ inputs.request_id }}] [${{ inputs.dispatch_id }}]
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        type: choice
+        options: [apply, finish, collect]
+        required: true
+      expected_sha:
+        type: string
+        required: true
+      request_id:
+        type: string
+        required: true
+      dispatch_id:
+        description: Unique invocation ID; the maintenance request ID remains unchanged
+        type: string
+        required: true
+      work_plan:
+        type: string
+      work_sha256:
+        type: string
+      verify_plan:
+        type: string
+      verify_sha256:
+        type: string
+      confirm:
+        description: User approved the pinned work, verification and CD pause/resume
+        type: boolean
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: backend-production-deployment
+  cancel-in-progress: false
+  queue: max
+jobs:
+  maintenance:
+    if: github.ref == 'refs/heads/main' && inputs.confirm
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      AWS_EC2_METADATA_DISABLED: 'true'
+      CD_ENABLED: ${{ vars.BACKEND_CD_ENABLED }}
+      MAINTENANCE_MODE: ${{ inputs.mode }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      OPERATIONS_REQUEST_ID: ${{ inputs.request_id }}
+      OPERATIONS_DISPATCH_ID: ${{ inputs.dispatch_id }}
+      OPERATIONS_CONFIRM: ${{ inputs.confirm }}
+      WORK_PLAN: ${{ inputs.work_plan }}
+      WORK_SHA256: ${{ inputs.work_sha256 }}
+      VERIFY_PLAN: ${{ inputs.verify_plan }}
+      VERIFY_SHA256: ${{ inputs.verify_sha256 }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate pinned maintenance request
+        run: |
+          python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements.lock
+          PYTHONPATH=ops/operations python3 -B -c 'from maintenance import context; context()'
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 3600
+          role-session-name: maintenance-${{ github.run_id }}
+          retry-max-attempts: 1
+      - name: Hold CD, perform approved work and verify; or verify latest main and resume
+        run: python3 -B ops/operations/maintenance.py
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        if: always()
+        with:
+          name: maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: operation-results/
+          retention-days: 14
+          if-no-files-found: error
