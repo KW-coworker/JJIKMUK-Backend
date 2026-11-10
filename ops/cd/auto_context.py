@@ -61,9 +61,21 @@ def guard(deployment=True):
                 payload.get('deleted') is False and payload.get('forced') is False and
                 payload.get('repository', {}).get('id') == 1300060655, 'PUSH_EVENT_MISMATCH')
     if deployment:
-        require(event == 'push', 'AUTOMATIC_PUSH_ONLY')
+        require(event == 'push' or resume_id(), 'AUTOMATIC_PUSH_OR_VERIFIED_RESUME_ONLY')
         require(os.environ.get('CD_ENABLED') == 'true', 'CD_DISABLED')
+    if event == 'workflow_dispatch' and os.environ.get('MAINTENANCE_ID'):
+        resume_id()
+        require(os.environ.get('EXPECTED_SHA') == sha and os.environ.get('GITHUB_RUN_ATTEMPT') == '1',
+                'MAINTENANCE_RESUME_CONTEXT')
     require(main_head() == sha, 'MAIN_MOVED')
+
+
+def resume_id():
+    value = os.environ.get('MAINTENANCE_ID', '')
+    if value:
+        require(os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
+                re.fullmatch('[a-f0-9]{32}', value), 'MAINTENANCE_RESUME_ID')
+    return value
 
 
 def snapshot_time(snapshot):

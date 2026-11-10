@@ -21,8 +21,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: jjikmuk-server-operations
+  group: backend-production-deployment
   cancel-in-progress: false
+  queue: max
 jobs:
   initial-backend:
     if: github.ref == 'refs/heads/main' && inputs.confirm

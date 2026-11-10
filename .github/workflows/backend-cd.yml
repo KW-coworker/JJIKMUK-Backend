@@ -1,10 +1,17 @@
 name: Backend CD
-run-name: Backend CD ${{ github.sha }}
+run-name: Backend CD ${{ inputs.expected_sha || github.sha }}${{ inputs.maintenance_id && format(' [resume:{0}]', inputs.maintenance_id) || '' }}
 
 on:
   push:
     branches: [main]
-  workflow_dispatch: {} # Tests/build only; never dispatches a server deployment.
+  workflow_dispatch:
+    inputs:
+      maintenance_id:
+        description: Verified maintenance ID; empty means tests/build only
+        type: string
+      expected_sha:
+        description: Exact current main for a verified maintenance resume
+        type: string
 
 permissions:
   contents: read
@@ -12,10 +19,13 @@ permissions:
 concurrency:
   group: backend-production-deployment
   cancel-in-progress: false
+  queue: max
 
 env:
   CD_ENABLED: ${{ vars.BACKEND_CD_ENABLED }}
   AWS_EC2_METADATA_DISABLED: 'true'
+  MAINTENANCE_ID: ${{ inputs.maintenance_id }}
+  EXPECTED_SHA: ${{ inputs.expected_sha }}
 
 jobs:
   build:
@@ -27,6 +37,10 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Reject an obsolete main before the full build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PYTHONPATH=ops/cd python3 -B -c 'from auto_context import guard; guard(deployment=False)'
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
@@ -40,19 +54,19 @@ jobs:
       - name: Test and build the exact main commit
         run: ./gradlew test bootJar
       - name: Package immutable release
-        if: github.event_name == 'push' && vars.BACKEND_CD_ENABLED == 'true'
+        if: (github.event_name == 'push' || inputs.maintenance_id != '') && vars.BACKEND_CD_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B ops/cd/release.py package
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
-        if: github.event_name == 'push' && vars.BACKEND_CD_ENABLED == 'true'
+        if: (github.event_name == 'push' || inputs.maintenance_id != '') && vars.BACKEND_CD_ENABLED == 'true'
         with:
           name: backend-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: build/cd-release/
           if-no-files-found: error
           retention-days: 14
       - name: Explain build-only result
-        if: github.event_name != 'push' || vars.BACKEND_CD_ENABLED != 'true'
+        if: (github.event_name != 'push' && inputs.maintenance_id == '') || vars.BACKEND_CD_ENABLED != 'true'
         run: echo 'Tests and build only. No server deployment. Initial activation is still required.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         if: failure()
@@ -64,7 +78,7 @@ jobs:
 
   deploy:
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.BACKEND_CD_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.maintenance_id != '') && vars.BACKEND_CD_ENABLED == 'true'
     environment: backend-production
     runs-on: ubuntu-latest
     timeout-minutes: 40
