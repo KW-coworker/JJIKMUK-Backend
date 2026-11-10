@@ -49,6 +49,17 @@ def metadata(prepared=False):
 
 
 class InitialSchemaTests(unittest.TestCase):
+    def test_direct_mysql_tuple_rows_match_persisted_json_baseline(self):
+        before=metadata()
+        conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value
+        rows=[tuple(tuple(r) for r in before[k]) for k in ('tables','columns','indexes','foreign_keys')]
+        rows.append(tuple((r['version'],r['script'],r['checksum'],int(r['success']),r['type']) for r in before['history']))
+        cur.fetchmany.side_effect=rows
+        value=schema.read_from_connection(conn)
+        self.assertEqual(value,before)
+        self.assertEqual(value,json.loads(json.dumps(value)))
+        schema.verify_schema(manifest(),value,False)
+
     def test_exact_before_after_and_preservation(self):
         m, before, after = manifest(), metadata(), metadata(True)
         schema.verify_schema(m, before, False)

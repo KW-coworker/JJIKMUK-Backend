@@ -27,11 +27,15 @@ subprocess.run(['java', '-cp', str(stage / 'lib/*') + ':' + str(stage / 'classes
                 'InitialSchemaRehearsal', str(stage)], check=True, timeout=120)
 sys.path.insert(0, str(repo / 'ops/cd'))
 import pymysql
+import json
 from initial_schema import read_from_connection
 from initial_schema_contract import verify_new_tables
 with pymysql.connect(host='127.0.0.1', port=3306, database='jjikmuk', user='root',
                       password='rehearsal_only', autocommit=True) as conn:
-    verify_new_tables(read_from_connection(conn))
+    observed=read_from_connection(conn)
+    assert observed==json.loads(json.dumps(observed))
+    assert all(isinstance(row,list) for field in ('tables','columns','indexes','foreign_keys') for row in observed[field])
+    verify_new_tables(observed)
 print('MYSQL_REAL_COLUMNS_DEFAULTS_INDEXES_AND_FOREIGN_KEYS_PASSED')
 
 # Exercise preservation against real MySQL conversions, including NULL and binary.

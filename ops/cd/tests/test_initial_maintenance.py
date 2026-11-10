@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock,patch
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'operations'))
 import initial_maintenance_host as host
 import initial_flyway as flyway
 

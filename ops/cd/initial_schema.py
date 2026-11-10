@@ -136,7 +136,10 @@ def read_from_connection(conn):
             cur.execute('SELECT version,script,checksum,success,type FROM flyway_schema_history ORDER BY installed_rank LIMIT 102')
             history = [dict(version=v, script=s, checksum=c, success=bool(ok), type=t)
                        for v, s, c, ok, t in cur.fetchmany(102)]
-            return {'columns': columns, 'indexes': indexes, 'history': history, 'foreign_keys': foreign_keys, 'tables': tables}
+            # Direct reads and the isolated JSON subprocess share one representation.
+            # PyMySQL tuples must not compare unequal to the persisted list rows.
+            return json.loads(json.dumps({'columns': columns, 'indexes': indexes, 'history': history,
+                                          'foreign_keys': foreign_keys, 'tables': tables}))
     finally:
         conn.rollback()
 
