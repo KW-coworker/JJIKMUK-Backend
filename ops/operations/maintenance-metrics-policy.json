@@ -1,0 +1,198 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "ec2:DescribeInstanceStatus",
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeVolumes",
+        "ssm:DescribeInstanceInformation",
+        "ssm:GetCommandInvocation",
+        "ssm:ListCommands",
+        "ssm:ListCommandInvocations",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBSnapshots",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:ListStackResources"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketVersioning",
+        "s3:GetEncryptionConfiguration",
+        "s3:GetBucketPublicAccessBlock"
+      ],
+      "Resource": "arn:aws:s3:::jjikmuk-operations-076767081522-apne2"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/connection/*",
+        "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/receipts/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetDocument",
+        "ssm:DescribeDocument"
+      ],
+      "Resource": "arn:aws:ssm:ap-northeast-2:076767081522:document/JjikmukOperationsInspect-v1",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:ap-northeast-2:076767081522:document/JjikmukOperationsInspect-v1",
+        "arn:aws:ec2:ap-northeast-2:076767081522:instance/i-06350403fe0400e1b",
+        "arn:aws:ec2:ap-northeast-2:076767081522:instance/i-0feac4ca32779b098"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": [
+        "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/operations/*",
+        "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/artifacts/*",
+        "arn:aws:s3:::jjikmuk-operations-076767081522-apne2/receipts/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::jjikmuk-operations-076767081522-apne2",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": [
+            "operations/*",
+            "artifacts/*",
+            "receipts/*"
+          ]
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:CreateDocument",
+        "ssm:GetDocument",
+        "ssm:DescribeDocument"
+      ],
+      "Resource": "arn:aws:ssm:ap-northeast-2:076767081522:document/JjikmukOperationsApproved-*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:ap-northeast-2:076767081522:document/JjikmukOperationsApproved-*",
+        "arn:aws:ec2:ap-northeast-2:076767081522:instance/i-06350403fe0400e1b",
+        "arn:aws:ec2:ap-northeast-2:076767081522:instance/i-0feac4ca32779b098"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ssm:GetDocument",
+        "ssm:DescribeDocument"
+      ],
+      "Resource": "arn:aws:ssm:ap-northeast-2:076767081522:document/Jjikmuk-BackendDeploy-v1",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ssm:ap-northeast-2:076767081522:document/Jjikmuk-BackendDeploy-v1",
+        "arn:aws:ec2:ap-northeast-2:076767081522:instance/i-06350403fe0400e1b"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "rds:CreateDBSnapshot",
+      "Resource": [
+        "arn:aws:rds:ap-northeast-2:076767081522:db:jjikmuk-dev-db",
+        "arn:aws:rds:ap-northeast-2:076767081522:snapshot:jjikmuk-ops-*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "rds:AddTagsToResource",
+      "Resource": "arn:aws:rds:ap-northeast-2:076767081522:snapshot:jjikmuk-ops-*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    },
+    {
+      "Sid": "ReadSeoulRdsMaintenanceMetrics",
+      "Effect": "Allow",
+      "Action": "cloudwatch:GetMetricStatistics",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-northeast-2"
+        }
+      }
+    }
+  ]
+}

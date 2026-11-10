@@ -58,14 +58,14 @@ def check(api):
 def dispatch(api,request,journal):
     need(set(request)=={'workflow','inputs','approval'},'DISPATCH_SCHEMA')
     need(request['workflow']=='server-operations.yml','WORKFLOW_REJECTED')
-    inputs=request['inputs'];need(inputs.get('mode') in ('precheck','inspect','execute','collect'),'MODE_REJECTED')
+    inputs=request['inputs'];need(inputs.get('mode') in ('precheck','inspect','execute','collect','storage'),'MODE_REJECTED')
     need(set(inputs)<={'mode','expected_sha','plan','plan_sha256','operation_id','confirm','request_id'}
          and re.fullmatch('[0-9a-f]{32}',inputs.get('request_id','')),'REQUEST_FIELDS_REJECTED')
     need(re.fullmatch('[0-9a-f]{40}',inputs.get('expected_sha','')),'EXACT_SHA_REQUIRED')
     need(api.call('/repos/'+REPO+'/git/ref/heads/main')['object']['sha']==inputs['expected_sha'],'MAIN_CHANGED')
     approval=request['approval']
     need(approval.get('status')=='APPROVED' and approval.get('input_sha256')==sha(canonical(inputs)),'EXACT_USER_APPROVAL_REQUIRED')
-    if inputs['mode']=='execute':need(inputs.get('confirm') is True,'WRITE_CONFIRMATION_REQUIRED')
+    if inputs['mode'] in ('execute','storage'):need(inputs.get('confirm') is True,'WRITE_CONFIRMATION_REQUIRED')
     need(not journal.exists(),'DISPATCH_INTENT_EXISTS_DO_NOT_REPLAY')
     with journal.open('x',encoding='utf-8') as f:
         json.dump({'status':'DISPATCH_INTENT','workflow':request['workflow'],'inputs':inputs},f);f.flush();os.fsync(f.fileno())
@@ -81,7 +81,7 @@ def approve_environment(api,run_id,approval):
     need(run.get('path')=='.github/workflows/server-operations.yml' and run['head_branch']=='main'
          and run['head_sha']==approval.get('expected_sha'),'APPROVED_RUN_MISMATCH')
     request_id=approval.get('request_id','');need(re.fullmatch('[0-9a-f]{32}',request_id),'REQUEST_ID_REQUIRED')
-    mode=approval.get('mode','execute');need(mode in ('precheck','execute'),'ENVIRONMENT_MODE_REJECTED')
+    mode=approval.get('mode','execute');need(mode in ('precheck','execute','storage'),'ENVIRONMENT_MODE_REJECTED')
     need(run.get('display_title')=='Server operations '+mode+' at '+approval['expected_sha']+' ['+request_id+']',
          'APPROVED_REQUEST_MISMATCH')
     pending=api.call('/repos/'+REPO+'/actions/runs/'+run_id+'/pending_deployments')
