@@ -71,6 +71,16 @@ class InitialSchemaTests(unittest.TestCase):
             if kind == 'engine': next(r for r in value['tables'] if r[0] == 'family_profiles')[1] = 'MyISAM'
             with self.subTest(kind=kind), self.assertRaises(ValueError): schema.verify_schema(manifest(), value, False)
 
+    def test_maintenance_opt_in_allows_only_exact_existing_product_index(self):
+        value=metadata()
+        index=['products','ft_products_search_keywords',1,1,'search_keywords',None,'FULLTEXT']
+        value['indexes'].append(index)
+        with self.assertRaises(ValueError):schema.verify_schema(manifest(),value,False)
+        schema.verify_schema(manifest(),value,False,fulltext_maintenance=True)
+        for position,replacement in ((0,'products_rollback'),(1,'different_index'),(4,'nutrition_basis_raw')):
+            bad=copy.deepcopy(value);bad['indexes'][-1][position]=replacement
+            with self.assertRaises(ValueError):schema.verify_schema(manifest(),bad,False,fulltext_maintenance=True)
+
     def test_missing_old_history_failed_checksum_or_partial_ddl_is_rejected(self):
         for kind in ('missing', 'checksum', 'failure', 'partial', 'baseline'):
             value = metadata()

@@ -37,7 +37,7 @@ def validate_source(manifest):
             'APPROVED_INITIAL_SQL_CHANGED')
 
 
-def verify_schema(manifest, metadata, prepared):
+def verify_schema(manifest, metadata, prepared, *, fulltext_maintenance=False):
     validate_source(manifest)
     columns, indexes, history = metadata['columns'], metadata['indexes'], metadata['history']
     require(0 < len(columns) <= 4096 and len(indexes) <= 4096 and len(history) <= 101
@@ -64,7 +64,9 @@ def verify_schema(manifest, metadata, prepared):
     if not prepared:
         for table in ('products', 'products_rollback'):
             require(engines.get(table, [None, None, None])[1:] == ['InnoDB', 'Dynamic'], 'V17_TABLE_ENGINE_REQUIRES_REVIEW')
-            require(not any(r[0] == table and r[6] == 'FULLTEXT' for r in indexes),
+            fulltext = [r for r in indexes if r[0] == table and r[6] == 'FULLTEXT']
+            allowed = [['products', 'ft_products_search_keywords', 1, 1, 'search_keywords', None, 'FULLTEXT']]
+            require(not fulltext or (fulltext_maintenance and table == 'products' and fulltext == allowed),
                     'V17_FULLTEXT_REQUIRES_SEPARATE_MAINTENANCE')
     for table, column, kind, nullable in [('products', 'nutrition_basis_raw', 'varchar(255)', 'YES'),
             ('products_rollback', 'nutrition_basis_raw', 'varchar(255)', 'YES'),

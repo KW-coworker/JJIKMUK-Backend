@@ -53,8 +53,23 @@ def build_payload(repo, commit):
     need(len(wheel) == 46740 and sha(wheel) == WHEEL_SHA, 'PINNED_WHEEL_CHANGED')
     files = {'backend.jar': jars[0].read_bytes(), 'vendor/' + WHEEL_NAME: wheel,
              'bin/java/InitialSchema.class': (compiler / 'InitialSchema.class').read_bytes()}
+    sdk_folder = folder / 'sdk-wheels'
+    subprocess.run([sys.executable, '-m', 'pip', 'download', '--require-hashes', '--only-binary=:all:',
+                    '--dest', str(sdk_folder), '-r', str(repo / 'ops/operations/requirements.lock')],
+                   check=True, timeout=180, stdout=subprocess.DEVNULL)
+    pins = re.findall(r'^([a-z0-9-]+)==([^ ]+) --hash=sha256:([a-f0-9]{64})$',
+                      (repo / 'ops/operations/requirements.lock').read_text(), flags=re.M)
+    need(len(pins) == 7 and len(list(sdk_folder.iterdir())) == 7, 'INITIAL_SDK_LOCK_COUNT')
+    sdk_lock = {}
+    for package, version, expected in pins:
+        found = list(sdk_folder.glob(package.replace('-', '_') + '-' + version + '-*.whl'))
+        need(len(found) == 1 and digest(found[0]) == expected, 'INITIAL_SDK_LOCK_HASH')
+        sdk_lock[found[0].name] = expected
+        files['vendor/' + found[0].name] = found[0].read_bytes()
+    files['vendor/sdk-lock.json'] = canonical(sdk_lock)
     for name in ('manifest', 'host', 'database_probe', 'runtime_contract', 'initial_contract',
-                 'initial_schema', 'initial_schema_contract', 'initial_db_host', 'package_install'):
+                 'initial_schema', 'initial_schema_contract', 'initial_db_host', 'package_install',
+                 'initial_guard', 'initial_preservation', 'initial_ddl'):
         files['bin/' + name + '.py'] = (repo / 'ops/cd' / (name + '.py')).read_bytes()
     for name in ('readiness_paths', 'readiness_probe'):
         files['bin/' + name + '.py'] = (repo / 'ops/operations' / (name + '.py')).read_bytes()
