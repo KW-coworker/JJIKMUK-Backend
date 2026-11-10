@@ -71,7 +71,7 @@ class HostTests(unittest.TestCase):
             host=Host.__new__(Host); host.root=Path(tmp); (host.root/'releases').mkdir()
             host.config={'prefix':'releases','aws':'aws','region':'ap-northeast-2','bucket':'test'}
             req={'commit':'a'*40,'run_id':'1','attempt':'1','manifest_version':'v1','jar_version':'v2'}
-            with patch('host.command',return_value=json.dumps({'ContentLength':200000})) as cli:
+            with patch('host_aws.require_identity'),patch('host_aws.command',return_value=json.dumps({'ContentLength':200000})) as cli:
                 with self.assertRaisesRegex(ValueError,'S3_OBJECT_SIZE'): host.prepare(req)
                 self.assertEqual(1,cli.call_count)
                 self.assertIn('head-object',cli.call_args.args[0])
