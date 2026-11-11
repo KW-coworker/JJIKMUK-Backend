@@ -1,0 +1,24 @@
+{
+  "format": 1,
+  "component": "db",
+  "operation": "deploy",
+  "approval_id": "USER_SINGLE_PRODUCT_IMAGE_20261112",
+  "approved": true,
+  "document": {
+    "schemaVersion": "2.2",
+    "description": "Run only the separately approved immutable private package",
+    "parameters": {},
+    "mainSteps": [
+      {
+        "action": "aws:runShellScript",
+        "name": "report",
+        "inputs": {
+          "timeoutSeconds": "1800",
+          "runCommand": [
+            "/usr/bin/python3 -B /opt/jjikmuk-cd/bin/private_runner.py <<'JJIKMUK_PRIVATE_ENVELOPE'\neyJhcHByb3ZhbF9pZCI6IlVTRVJfU0lOR0xFX1BST0RVQ1RfSU1BR0VfMjAyNjExMTIiLCJieXRlcyI6MTM0OTEsImNvbXBvbmVudCI6ImRiIiwiZXhwaXJlcyI6MTc5NDQzNjM3NSwiZm9ybWF0IjoxLCJvcGVyYXRpb24iOiJkZXBsb3kiLCJyZWNvdmVyeV9zaGEyNTYiOm51bGwsInJlcXVlc3RfaWQiOiI4ZTlmODg1MWY3Y2M0MGYzYWE3OWZmOWUzYmI5NjU4MyIsInNoYTI1NiI6ImE4N2JlOWU3MDU4YTExOWUxODgzOTk1MDM4Mzg3NWRjODFlNzExMjRmN2ZkMjU4YjY4NmMyYWU4NzZlZjNmZmIiLCJ2ZXJzaW9uIjoib0RXWEpxeXN4UVJpenBZSDNDc29SM2FmZmRkQllfTjAifQ==\nJJIKMUK_PRIVATE_ENVELOPE"
+          ]
+        }
+      }
+    ]
+  }
+}

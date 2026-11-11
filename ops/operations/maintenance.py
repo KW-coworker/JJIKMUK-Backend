@@ -96,7 +96,11 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'catalog-preservation-read':
+        if os.environ.get('MAINTENANCE_MODE') == 'product-image':
+            from product_image_hold import perform as image_patch
+            result = image_patch(clients(True), ctx, os.environ['WORK_PLAN'], os.environ['WORK_SHA256'])
+            save_local('maintenance-result.json', result)
+        elif os.environ.get('MAINTENANCE_MODE') == 'catalog-preservation-read':
             from catalog_preservation_read import inspect
             result = inspect(clients(True), ctx)
             save_local('maintenance-result.json', result)
