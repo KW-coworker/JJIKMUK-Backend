@@ -113,7 +113,7 @@ def check_database(rds):
                 ('DBInstanceIdentifier', 'Engine', 'EngineVersion', 'BackupRetentionPeriod', 'PreferredBackupWindow')}))}}
 
 
-def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:None):
+def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:None,progress=lambda *args:None):
     need(type(frozen_epoch) is int and 0<frozen_epoch<=int(time.time()),'FROZEN_DATABASE_REQUIRED')
     guard()
     name = 'jjikmuk-ops-initial-db-' + ctx['run_id']
@@ -127,6 +127,9 @@ def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:No
         row = rows[0]
         need(row['DBSnapshotIdentifier'] == name and row['DBInstanceIdentifier'] == DB
              and row['Encrypted'] is True and row['SnapshotType'] == 'manual', 'INITIAL_SNAPSHOT_CHANGED')
+        percent=row.get('PercentProgress')
+        known=type(percent) is int and 0<=percent<=100
+        progress('SNAPSHOT_READY' if row['Status']=='available' else 'SNAPSHOT_WAIT',percent if known else 0,100 if known else None)
         if row['Status'] == 'available':
             from auto_context import check_snapshot
             check_snapshot(row, ACCOUNT, DB, datetime.now(timezone.utc))

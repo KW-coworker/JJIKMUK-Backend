@@ -56,7 +56,8 @@ class HostTests(unittest.TestCase):
         with patch.dict(sys.modules,{'pymysql':None}),patch.object(self.module,'capture',return_value={'verified':True}) as capture:
             self.assertEqual(work.preservation(),{'verified':True})
             self.assertIs(capture.call_args.args[0],connection)
-            self.assertIs(capture.call_args.args[-1],driver.cursors.SSCursor)
+        self.assertIs(capture.call_args.args[-2],driver.cursors.SSCursor)
+        self.assertEqual(capture.call_args.args[-1],work.progress)
 
     def test_preservation_is_first_db_entry_in_fresh_isolated_process(self):
         ops=Path(self.module.__file__).parent

@@ -20,6 +20,7 @@ from initial_monitor import Monitor
 from initial_db_runner import DB,check_database,snapshot
 from storage_metrics import observe
 from manifest import digest
+from catalog_progress import safe_error
 
 
 class Runtime:
@@ -31,6 +32,10 @@ class Runtime:
         config=Config(connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1})
         self.rds=shared.client('rds',config=config);self.cloudwatch=shared.client('cloudwatch',config=config)
         self.ctx,self.phase=ctx,phase
+        self.reporter=None
+
+    def progress(self,stage,done=0,total=None,**kwargs):
+        if self.reporter is not None:self.reporter.emit(stage,done=done,total=total,**kwargs)
 
     def monitor(self,binding):
         bound=lease_binding(binding,self.phase)
@@ -48,11 +53,23 @@ class Runtime:
         # Check AFTER preparation/drain: credentials never extend this deadline.
         seconds=1770 if self.phase=='freeze' else PHASE_SECONDS[self.phase]+150
         self.budget.admit(seconds+{'freeze':840,'apply':660,'recover':180}[self.phase])
+        self.drain()
+        self.budget.admit(seconds+{'freeze':840,'apply':660,'recover':180}[self.phase])
         plan={'format':1,'component':'db','operation':'deploy','approved':True,
               'approval_id':'USER_SOURCE_COMPATIBILITY_AND_DB_APPLY_20261111',
               'document':document(binding,envelope,self.phase,backup)}
-        result=execute(self.api,self.ctx,plan,sha(canonical(plan)),HOSTS['backend'],
-                       output_prefix=self.phase+'-',max_polls=1500 if self.phase!='freeze' else 450)
+        observer=None
+        reporter=getattr(self,'reporter',None)
+        if reporter is not None:
+            try:
+                from catalog_progress_reader import Reader
+                observer=Reader(self.api['ssm'],binding,self.phase,reporter)
+            except Exception as error:reporter.unavailable(error)
+        try:
+            result=execute(self.api,self.ctx,plan,sha(canonical(plan)),HOSTS['backend'],
+                           output_prefix=self.phase+'-',max_polls=1500 if self.phase!='freeze' else 450,observer=observer)
+        finally:
+            if observer is not None:observer.close()
         self.budget.check()
         result['report']=json.loads(Path('operation-results/'+self.phase+'-result.json').read_bytes()).get('report',{})
         return result
@@ -81,6 +98,8 @@ def capacity(runtime):
 
 def freeze(runtime):
     ctx,api=runtime.ctx,runtime.api
+    need(runtime.reporter is not None and runtime.reporter.ready,'PROGRESS_CHANNEL_UNAVAILABLE_BEFORE_WORK')
+    runtime.progress('PREPARING',force=True)
     work_sha=os.environ['WORK_SHA256'];verify_sha=sha(canonical({'catalog_verify':work_sha}))
     previous_gate(api,ctx,work_sha,verify_sha)
     plan=source_plan(os.environ['WORK_PLAN'],work_sha);capacity(runtime)
@@ -113,7 +132,9 @@ def freeze(runtime):
     with runtime.monitor(binding) as monitor:
         frozen=runtime.command(binding,envelope);need(frozen['success'],'REAPPLY_FREEZE_FAILED')
         runtime.budget.admit(720)
-        backup=snapshot(runtime.rds,api,ctx,frozen_epoch=frozen['report']['counts']['frozen_epoch'],guard=monitor.check)
+        runtime.progress('SNAPSHOT_WAIT',force=True)
+        backup=snapshot(runtime.rds,api,ctx,frozen_epoch=frozen['report']['counts']['frozen_epoch'],guard=monitor.check,
+                        progress=runtime.progress)
         put_once(api['s3'],'receipts/catalog/'+ctx['run_id']+'/frozen.json',{'binding':binding,'snapshot':backup})
     save_local('catalog-freeze-result.json',{'status':'FROZEN_AND_BACKUP_READY','request_id':ctx['request_id']})
 
@@ -160,9 +181,16 @@ def recover(runtime):
 
 
 if __name__=='__main__':
+    reporter=None
     try:
-        phase=os.environ.get('CATALOG_PHASE');runtime=Runtime(context(),phase)
+        from catalog_progress_github import Reporter
+        phase=os.environ.get('CATALOG_PHASE');ctx=context();reporter=Reporter(ctx,phase)
+        runtime=Runtime(ctx,phase);runtime.reporter=reporter
         {'freeze':freeze,'apply':apply,'recover':recover}[phase](runtime)
+        reporter.emit('DONE',force=True,terminal='success' if phase=='apply' else 'neutral' if phase=='recover' else None)
         print('REAPPLY_PHASE_VERIFIED_SEE_RECORDED_RESULT')
-    except Exception:
-        print('REAPPLY_STOPPED_KEEP_HOLD_AND_RECORDS');raise SystemExit(1)
+    except Exception as error:
+        code=safe_error(error)
+        save_local('catalog-'+str(os.environ.get('CATALOG_PHASE'))+'-failure.json',{'code':code})
+        if reporter is not None:reporter.emit('FAILED',error_code=code,force=True,terminal='failure')
+        print('REAPPLY_STOPPED_KEEP_HOLD_AND_RECORDS '+code);raise SystemExit(1)

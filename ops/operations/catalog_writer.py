@@ -77,11 +77,12 @@ class Journal:
 
 
 class Writer:
-    def __init__(self, connection, source, codec, journal, dataset, guard):
+    def __init__(self, connection, source, codec, journal, dataset, guard,progress=lambda *args:None):
         need(re.fullmatch(r'catalog-handoff-[a-f0-9]{32}', dataset), 'CATALOG_DATASET')
         self.connection, self.source, self.codec = connection, source, codec
         self.journal, self.dataset, self.guard = journal, dataset, guard
         self.counts = collections.Counter()
+        self.progress=progress
         self.fields = [n for n, _ in source.columns]
         need(len(self.fields) == 54 and all(re.fullmatch('[a-z][a-z0-9_]{0,63}', n) for n in self.fields), 'CATALOG_SOURCE_COLUMNS')
 
@@ -190,6 +191,7 @@ class Writer:
                     self.counts['changed'] += len(modified)
                     need(self.counts['scanned'] <= self.source.meta['source_rows'], 'CATALOG_ROW_BOUND')
                     after = rows[-1]['product_id']
+                    self.progress('PRODUCT_APPLY',self.counts['scanned'],self.source.meta['source_rows'])
             except BaseException:
                 try:self.connection.rollback()
                 except Exception:self.connection.close()
@@ -261,6 +263,7 @@ class Writer:
                     self.guard();self.connection.commit()
                     self.journal.mark(ids,'RESTORED_OR_NOT_COMMITTED')
                     restored+=len(wanted);after=ids[-1]
+                    self.progress('RECOVERY',restored+unchanged,None)
             except BaseException:
                 try:self.connection.rollback()
                 except Exception:self.connection.close()
