@@ -80,6 +80,9 @@ def migrate(stage,props,guard,open_control,record):
 def prepare_release(host,stage,candidate):
     release={'manifest':candidate,'protected':host.baseline['protected'],'environment_sha256':host.baseline['environment_sha256']}
     folder=host.release_path(release);folder.mkdir(mode=0o755)
+    # Maintenance units use UMask=0077; the unprivileged service must traverse
+    # this root-owned code-only folder. Private journals remain mode 0600.
+    os.chmod(folder,0o755)
     with (stage/'backend.jar').open('rb') as source,(folder/'backend.jar').open('xb') as output:
         shutil.copyfileobj(source,output);output.flush();os.fsync(output.fileno())
     os.chmod(folder/'backend.jar',0o644);atomic_json(folder/'manifest.json',candidate)
