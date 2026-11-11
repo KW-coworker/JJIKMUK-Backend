@@ -6,7 +6,7 @@ from bootstrap import need
 def plan(request_id, phase):
     need(re.fullmatch('[a-f0-9]{32}', request_id) and
          (phase in ('before', 'after', 'rehearse-work', 'rehearse-verify') or
-          re.fullmatch('finish-[1-9][0-9]{0,19}', phase)), 'MAINTENANCE_PROBE_ID')
+          re.fullmatch('(finish|after)-[1-9][0-9]{0,19}', phase)), 'MAINTENANCE_PROBE_ID')
     script = '''import hashlib,json,os,re,stat,sys
 from pathlib import Path
 root=Path('/opt/jjikmuk-cd/bin')

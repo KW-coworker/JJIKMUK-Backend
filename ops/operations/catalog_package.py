@@ -64,7 +64,7 @@ def build(repo,ctx):
     generated['vendor/sdk-lock.json']=canonical(lock)
     for path in compile_dir.glob('*.class'):files['bin/java/'+path.name]=path
     operations=('catalog_host','catalog_host_support','catalog_writer','catalog_checks','catalog_codec','catalog_delta','catalog_compare',
-                'catalog_preservation','readiness_probe','readiness_paths','fulltext_definition')
+                'catalog_preservation','catalog_followup_host','readiness_probe','readiness_paths','fulltext_definition')
     for name in operations:files['bin/'+name+'.py']=repo/'ops/operations'/(name+'.py')
     for name in ('initial_guard','initial_schema','initial_schema_contract','initial_contract','initial_db_facts','initial_service_state','initial_preservation','initial_flyway'):
         files['bin/'+name+'.py']=repo/'ops/cd'/(name+'.py')
