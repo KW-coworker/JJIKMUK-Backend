@@ -1,6 +1,6 @@
 import contextlib,io,json,types,unittest
 from unittest.mock import Mock,MagicMock,patch
-from catalog_live_sql import classify,collect
+from catalog_live_sql import classify,collect,explain_current
 
 
 class LiveSqlTests(unittest.TestCase):
@@ -19,12 +19,34 @@ class LiveSqlTests(unittest.TestCase):
         conn.rollback.assert_called_once();conn.commit.assert_not_called()
         for call in cur.execute.call_args_list:
             query=call.args[0]
-            self.assertTrue(query.startswith(('SET TRANSACTION READ ONLY','SELECT TIME,INFO FROM information_schema.PROCESSLIST','SHOW GLOBAL STATUS')))
+            self.assertTrue(query.startswith(('SET TRANSACTION READ ONLY','SELECT ID,TIME,INFO FROM information_schema.PROCESSLIST','SHOW GLOBAL STATUS')))
         self.assertEqual(cur.execute.call_count,11)
 
     def test_invalid_numeric_metadata_is_rejected(self):
         conn=MagicMock();conn.cursor.return_value.__enter__.return_value.fetchall.return_value=[{'TIME':-1,'INFO':'COMMIT'}]
         with self.assertRaises(AssertionError):collect(conn,Mock())
+
+    def test_explain_reports_only_fixed_access_types_and_numeric_estimates(self):
+        cur=Mock();cur.fetchall.return_value=[{'table':'b','type':'ALL','rows':500,'Extra':'PRIVATE'},
+                                            {'table':'p','type':'eq_ref','rows':1,'ref':'PRIVATE'},
+                                            {'table':'private_table','type':'ALL','rows':99}]
+        result={};explain_current(cur,123,result)
+        self.assertEqual(result,{'plan_batch_all':1,'plan_batch_max_rows':500,'plan_product_eq_ref':1,'plan_product_max_rows':1})
+        cur.execute.assert_called_once_with('EXPLAIN FOR CONNECTION 123')
+        with self.assertRaises(AssertionError):explain_current(cur,-1,{})
+        cur.execute.side_effect=RuntimeError('PRIVATE SQL')
+        result={};explain_current(cur,123,result);self.assertEqual(result,{'plan_unavailable':1})
+
+    def test_lock_wait_gauge_uses_maximum_and_explain_is_attempted_once(self):
+        conn=MagicMock();cur=conn.cursor.return_value.__enter__.return_value;values=[]
+        for i in range(5):
+            values.append([{'ID':123,'TIME':i,'INFO':'UPDATE products p JOIN jjikmuk_catalog_batch b ON p.product_id=b.product_id SET p.image_url=NULL'}])
+            if i==0:values.append([{'table':'p','type':'eq_ref','rows':1}])
+            values.append([{'Variable_name':'Innodb_row_lock_current_waits','Value':str((1,2,1,0,0)[i])}])
+        cur.fetchall.side_effect=values;result=collect(conn,Mock())
+        self.assertEqual(result['max_row_lock_current_waits'],2)
+        self.assertNotIn('delta_Innodb_row_lock_current_waits',result)
+        self.assertEqual(len([c for c in cur.execute.call_args_list if c.args[0].startswith('EXPLAIN')]),1)
 
     def test_document_rejects_another_active_run_and_script_compiles(self):
         import catalog_live_diagnostic as live
