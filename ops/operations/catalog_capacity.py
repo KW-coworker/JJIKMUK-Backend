@@ -1,6 +1,7 @@
 """Read exact RDS storage configuration and fresh free space; no changes or SSM."""
 from datetime import datetime,timezone
-from connection import ACCOUNT,REGION
+from connection import ACCOUNT,REGION,HOSTS
+import re
 from bootstrap import need
 from maintenance_gate import Gate
 from catalog_reapply_contract import REQUEST,LAST_RUN as RUN,RDS_RESERVE_BYTES,RDS_START_BYTES
@@ -35,4 +36,36 @@ def inspect(api,ctx):
     rows=aws_client('rds').describe_db_instances(DBInstanceIdentifier=DB)['DBInstances']
     need(len(rows)==1,'CATALOG_CAPACITY_INSTANCE_COUNT')
     metric=observe(aws_client('cloudwatch'),datetime.now(timezone.utc))
-    return report(rows[0],metric)
+    result=report(rows[0],metric)
+    host=root_volume(ec2_client())
+    result['counts'].update(host['counts']);result['codes'].extend(host['codes'])
+    return result
+
+
+def ec2_client():
+    import boto3
+    from botocore.config import Config
+    return boto3.client('ec2',region_name=REGION,
+        config=Config(connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1}))
+
+
+def root_volume(ec2):
+    """Observe the attached backend root volume; never change EBS or the host."""
+    response=ec2.describe_instances(InstanceIds=[HOSTS['backend']])
+    instances=[i for r in response['Reservations'] for i in r['Instances']]
+    need(len(instances)==1 and instances[0]['InstanceId']==HOSTS['backend'] and
+         instances[0].get('RootDeviceType')=='ebs','CATALOG_HOST_INSTANCE')
+    instance=instances[0];root=instance['RootDeviceName']
+    devices=[d for d in instance.get('BlockDeviceMappings',[]) if d['DeviceName']==root]
+    need(len(devices)==1,'CATALOG_HOST_ROOT_MAPPING')
+    volume_id=devices[0]['Ebs']['VolumeId']
+    need(re.fullmatch(r'vol-(?:[a-f0-9]{8}|[a-f0-9]{17})',volume_id),'CATALOG_HOST_VOLUME_ID')
+    volumes=ec2.describe_volumes(VolumeIds=[volume_id])['Volumes']
+    need(len(volumes)==1 and volumes[0]['VolumeId']==volume_id,'CATALOG_HOST_VOLUME')
+    volume=volumes[0];attached=volume.get('Attachments',[])
+    need(volume.get('State')=='in-use' and len(attached)==1 and attached[0]['InstanceId']==HOSTS['backend']
+         and attached[0]['Device']==root and attached[0]['State']=='attached','CATALOG_HOST_ATTACHMENT')
+    need(type(volume.get('Size')) is int and 8<=volume['Size']<=1024 and
+         volume.get('VolumeType') in ('gp2','gp3','io1','io2'),'CATALOG_HOST_VOLUME_SIZE')
+    return {'counts':{'host_root_allocated_gib':volume['Size']},
+            'codes':['HOST_ROOT_'+volume_id.replace('-','_').upper(),'HOST_ROOT_STORAGE_'+volume['VolumeType'].upper()]}
