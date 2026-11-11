@@ -1,5 +1,6 @@
 """New execution after the inspected product rollback and service restoration."""
 import hashlib
+import json
 import re
 
 REQUEST='a5291163ee0a456b85366e6075d8fce6'
@@ -12,12 +13,12 @@ OLD_JOURNAL='10c110c3ad9feb726d7ce6269b187170137d0b6419e1896e0ca70e664d8b4314'
 OLD_COORDINATOR='ef1303eb1c891501120cdb73eaf17b9ad722b8beaa93b5d8fbca775745fa1571'
 SERVICE_OPERATION='2355941da8905c0d62172949290dd548fb5127de554ceddf8e528774921e0e2f'
 SERVICE_RESULT='ec37984bea0e9f0f9045de5bd7fe5e28f3272945dd378c026d16d20e3f753591'
-LAST_RUN='42973951751'
-LAST_COMMIT='2e7b02f80b4b552a37f320364c2c3036d029a49c'
-LAST_ARCHIVE='9f43cbc282099e8c9bb1859009f4341747cb90b3b5200c0034392f4d6252f8db'
-LAST_BINDING='d7ee4dc51df6476210ee0a9fe8002a815bc302755a8f878c31d82209141fef5b'
-LAST_RECOVERY_OPERATION='54270b7fd55008fe46d93d5d6329793a26dd92cb4029c6532c8017c23f27387c'
-LAST_RECOVERY_RESULT='8607d49c58f9002bdc449356be925d4abfba0c93d5344c776ad5ae86f997e2cd'
+LAST_RUN='42984831949'
+LAST_COMMIT='2d01af1f5f139b3c650e93f477e2f4216ccf52e2'
+LAST_ARCHIVE='ce8e03247702573860180199b619404d4ff573194bdd4663dcb2b71f97fa516d'
+LAST_BINDING='ecb046cd67d0a4ab1861fefe4b52159d60e9edba28fd7e883bb19d1a5b36678d'
+LAST_RECOVERY_OPERATION='3cdf2917bb191b06996da5ada3bde4586a67569f887087dab99006daf759f61b'
+LAST_RECOVERY_RESULT='a4ed03168140c9194391d0de69ee7668de67a7ae95efbafb32bc39f1255592ab'
 SOURCE_SHA='f277f176e199336e7d4dcc8058c64a1d3b87c3b5768171691c3eb11f29ba1e4f'
 SOURCE_BYTES=1052856320
 SCHEMA_SHA='b768920c4335a7d19a5e5f228a8e4f11810f40aabdc184f08d71cbdde2d4c2e6'
@@ -47,8 +48,17 @@ def dataset(request,run):
 
 def previous_coordinator(value):
     operation=hashlib.sha256((REQUEST+':'+LAST_RUN+':recover').encode()).hexdigest()
-    need(value=={'status':'ROLLED_BACK','component':'db','operation_id':operation},
+    need(value=={'status':'ROLLED_BACK','component':'db','operation_id':operation,
+                 'recovery_of':previous_apply_record()[1]},
          'REAPPLY_LAST_RECOVERY_COORDINATOR_CHANGED')
+
+
+def previous_apply_record():
+    value={'status':'MUTATION_INTENT','component':'db',
+           'operation_id':hashlib.sha256((REQUEST+':'+LAST_RUN+':apply').encode()).hexdigest()}
+    # Match coordination.atomic's exact bytes, including its default separators.
+    raw=json.dumps(value,sort_keys=True).encode('utf-8')
+    return value,hashlib.sha256(raw).hexdigest()
 
 
 def validate_binding(binding):
