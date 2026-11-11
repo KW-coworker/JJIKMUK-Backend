@@ -45,5 +45,5 @@ jobs:
           python3 -B ops/cd/tests/rehearse_initial_schema.py
       - name: 설치 없이 고정 SDK 압축 해제와 서비스 모델 검증
         run: |
-          PYTHONPATH=ops/cd:ops/operations python3 -B -c 'import os; from pathlib import Path; from initial_db_runner import build_payload; build_payload(Path.cwd(),os.environ["GITHUB_SHA"])'
+          PYTHONPATH=ops/cd:ops/operations python3 -B -c 'import os; from pathlib import Path; from catalog_package import build; build(Path.cwd(),{"commit":os.environ["GITHUB_SHA"],"run_id":os.environ["GITHUB_RUN_ID"]})'
           sudo python3 -I -S -B ops/cd/tests/check_initial_sdk.py

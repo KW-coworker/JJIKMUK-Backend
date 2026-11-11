@@ -15,7 +15,7 @@ from initial_guard import load_sdk
 with tempfile.TemporaryDirectory(prefix='jjikmuk-sdk-rehearsal-',dir='/root') as folder:
     stage=Path(folder);os.chmod(stage,0o755)
     vendor=stage/'vendor';vendor.mkdir(mode=0o755)
-    with zipfile.ZipFile(repo/'build/initial-db/payload.zip') as archive:
+    with zipfile.ZipFile(repo/'build/catalog-maintenance/payload.zip') as archive:
         for name in archive.namelist():
             if name.startswith('vendor/') and (name.endswith('.whl') or name=='vendor/sdk-lock.json'):
                 assert len(Path(name).parts)==2

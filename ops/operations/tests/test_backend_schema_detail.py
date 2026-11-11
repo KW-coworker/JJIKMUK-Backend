@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock,patch
 
 import backend_schema_detail as detail
 import backend_schema_detail_document as builder
@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[3]
 class SchemaDetailTests(unittest.TestCase):
     def setUp(self):
         self.contract = contract(ROOT)
+        # This consumed diagnostic describes the V1–V20 installation, not future migrations.
+        self.contract['migrations']=[m for m in self.contract['migrations'] if int(m['version'])<=20]
         self.history = [(m['version'], m['script'], m['checksum'], 1, 'SQL')
                         for m in self.contract['migrations'] if int(m['version']) <= 17]
         self.columns = [('users', 'id', 1, 'bigint', 'NO', None),
@@ -108,7 +110,8 @@ class SchemaDetailTests(unittest.TestCase):
         connect.assert_called_once(); conn.rollback.assert_called_once()
 
     def test_document_is_fixed_approved_under_broad_scope_and_does_not_stage_files(self):
-        plan = builder.plan(ROOT)
+        with patch.object(builder,'contract',return_value=self.contract):
+            plan = builder.plan(ROOT)
         self.assertTrue(plan['approved'])
         self.assertEqual('USER_BACKEND_CD_COMPLETION_20261110', plan['approval_id'])
         self.assertEqual({}, plan['document']['parameters'])

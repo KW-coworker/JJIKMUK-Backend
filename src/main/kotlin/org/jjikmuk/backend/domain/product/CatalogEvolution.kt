@@ -9,8 +9,6 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.TransactionDefinition
 import org.springframework.transaction.support.TransactionTemplate
-import tools.jackson.databind.json.JsonMapper
-import java.security.MessageDigest
 import java.time.LocalDateTime
 
 @Entity
@@ -55,7 +53,6 @@ class CatalogEvolutionService(
     private val allocationTx = TransactionTemplate(transactionManager).apply {
         propagationBehavior = TransactionDefinition.PROPAGATION_REQUIRES_NEW
     }
-    private val mapper = JsonMapper.builder().findAndAddModules().build()
 
     /** Reservation survives a dataset rollback. Gaps are allowed; reusing a prior ID is not. */
     fun reserveIds(count: Long, minimumNextId: Long = 1): Long {
@@ -128,21 +125,10 @@ class CatalogEvolutionService(
                 val previousId = (row["attribute_snapshot_id"] as? Number)?.toLong()
                 val previous = previousId?.let { snapshots.findById(it).orElseThrow { IllegalStateException("Missing prior attribute snapshot") } }
                 require(previous == null || previous.productId == productId) { "Attribute snapshot identity mismatch" }
-                val payload = FIELDS.associateWith { key ->
-                    val value = row[key]
-                    if (key.startsWith("is_")) when (value) {
-                        is Boolean -> value
-                        is Number -> value.toInt() != 0
-                        is ByteArray -> value.any { it.toInt() != 0 }
-                        else -> value
-                    } else value
-                }
-                val encoded = mapper.writeValueAsString(payload)
-                val hash = MessageDigest.getInstance("SHA-256").digest(encoded.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+                val encoded = CatalogAttributePayload.encode(row)
+                val hash = CatalogAttributePayload.hash(encoded)
                 if (previous?.payloadHash == hash) continue
-                val old = previous?.let { mapper.readTree(it.payloadJson) }
-                val now = mapper.readTree(encoded)
-                val fields = FIELDS.filter { old?.get(it) != now.get(it) }
+                val fields = CatalogAttributePayload.changedFields(previous?.payloadJson, encoded)
                 val saved = snapshots.saveAndFlush(ProductAttributeSnapshot(productId = productId, previousSnapshotId = previousId,
                     datasetVersion = datasetVersion, observedBy = observedBy, changeReason = reason, changedFields = fields.joinToString(","), payloadHash = hash, payloadJson = encoded))
                 jdbc.update("UPDATE $table SET attribute_snapshot_id=? WHERE barcode=? AND product_id=?", saved.id, row["barcode"], productId)

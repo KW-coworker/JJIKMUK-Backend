@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [apply, rehearse, finish, collect]
+        options: [apply, rehearse, finish, collect, catalog]
         required: true
       expected_sha:
         type: string
@@ -40,7 +40,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.confirm
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: ${{ inputs.mode == 'catalog' && 140 || 55 }}
     permissions:
       contents: read
       id-token: write
@@ -48,6 +48,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       AWS_EC2_METADATA_DISABLED: 'true'
       CD_ENABLED: ${{ vars.BACKEND_CD_ENABLED }}
+      CATALOG_PHASE: freeze
       MAINTENANCE_MODE: ${{ inputs.mode }}
       EXPECTED_SHA: ${{ inputs.expected_sha }}
       OPERATIONS_REQUEST_ID: ${{ inputs.request_id }}
@@ -66,6 +67,21 @@ jobs:
         run: |
           python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements.lock
           PYTHONPATH=ops/operations python3 -B -c 'from maintenance import context; context()'
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        if: inputs.mode == 'catalog'
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
+        if: inputs.mode == 'catalog'
+      - name: 상품 적용용 main 원본 검사·빌드
+        if: inputs.mode == 'catalog'
+        run: |
+          ./gradlew test bootJar
+          PYTHONPATH=ops/operations:ops/cd python3 -B -m unittest discover -s ops/operations/tests -p 'test_catalog*.py' -v
+      - name: 역할 발급 시작 시각 기록
+        if: inputs.mode == 'catalog'
+        run: python3 -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CATALOG_ROLE_REQUEST_EPOCH="+str(int(time.time()))+"\n")'
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
         with:
           role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
@@ -75,11 +91,51 @@ jobs:
           role-session-name: maintenance-${{ github.run_id }}
           retry-max-attempts: 1
       - name: Hold CD, perform approved work and verify; or verify latest main and resume
+        if: inputs.mode != 'catalog'
         run: python3 -B ops/operations/maintenance.py
+      - name: 상품 작업 서비스 동결·백업
+        id: catalog-freeze
+        if: inputs.mode == 'catalog'
+        run: python3 -B ops/operations/catalog_runner.py
+      - name: 적용 인증 시작 시각
+        if: inputs.mode == 'catalog'
+        run: python3 -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CATALOG_ROLE_REQUEST_EPOCH="+str(int(time.time()))+"\n")'
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        if: inputs.mode == 'catalog'
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 3600
+          role-session-name: catalog-apply-${{ github.run_id }}
+          retry-max-attempts: 1
+          unset-current-credentials: true
+      - name: 새 인증으로 상품 적용·보존 검증
+        id: catalog-apply
+        if: inputs.mode == 'catalog'
+        env:
+          CATALOG_PHASE: apply
+        run: python3 -B ops/operations/catalog_runner.py
+      - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        id: catalog-recovery-credentials
+        if: failure() && inputs.mode == 'catalog' && (steps.catalog-freeze.outcome == 'success' || steps.catalog-freeze.outcome == 'failure')
+        with:
+          role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
+          aws-region: ap-northeast-2
+          allowed-account-ids: '076767081522'
+          role-duration-seconds: 3600
+          role-session-name: catalog-recovery-${{ github.run_id }}
+          retry-max-attempts: 1
+          unset-current-credentials: true
+      - name: 별도 인증 시간으로 기록 대조·제한 복구
+        if: failure() && inputs.mode == 'catalog' && steps.catalog-recovery-credentials.outcome == 'success'
+        env:
+          CATALOG_PHASE: recover
+        run: python3 -B ops/operations/catalog_runner.py
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         if: always()
         with:
           name: maintenance-${{ github.run_id }}-${{ github.run_attempt }}
           path: operation-results/
           retention-days: 14
-          if-no-files-found: error
+          if-no-files-found: ignore

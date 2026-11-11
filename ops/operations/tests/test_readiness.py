@@ -19,7 +19,10 @@ SECRET = 'NEVER_EXPORT_DB_PASSWORD_001'
 
 class ReadinessTests(unittest.TestCase):
     def test_pending_plan_cannot_execute_and_document_has_no_parameters(self):
-        expected = builder.plan(ROOT)
+        historical=builder.contract(ROOT)
+        historical['migrations']=[m for m in historical['migrations'] if int(m['version'])<=20]
+        with patch.object(builder,'contract',return_value=historical):
+            expected = builder.plan(ROOT)
         builder.verify_archive(ROOT)
         path = ROOT / 'ops/operations/plans' / builder.PLAN_NAME
         builder.verify_record(json.loads(path.read_bytes()), expected)
