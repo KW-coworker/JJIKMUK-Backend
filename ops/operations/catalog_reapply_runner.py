@@ -22,6 +22,7 @@ from initial_db_runner import DB,check_database,snapshot
 from storage_metrics import observe
 from manifest import digest
 from catalog_progress import safe_error
+import catalog_prewrite_retry as prewrite
 
 
 class Runtime:
@@ -79,12 +80,14 @@ class Runtime:
 def previous_gate(api,ctx,work_sha,verify_sha):
     value,etag=Gate(api['s3']).read()
     need(value is not None and value['state']=='WORKING' and value['request_id']==REQUEST and
-         value['run_id']==LAST_RUN and value['commit']==LAST_COMMIT and value['work_sha256']==work_sha and
+         value['run_id']==prewrite.RUN and value['commit']==prewrite.COMMIT and value['work_sha256']==work_sha and
          value['verify_sha256']==verify_sha,'REAPPLY_PREVIOUS_GATE_CHANGED')
     proof=read_object(api['s3'],'receipts/'+SERVICE_OPERATION+'/result.json')
     need(sha(canonical(proof))==SERVICE_RESULT,'REAPPLY_SERVICE_PROOF_CHANGED')
     recovery=read_object(api['s3'],'receipts/'+LAST_RECOVERY_OPERATION+'/result.json')
     need(sha(canonical(recovery))==LAST_RECOVERY_RESULT,'REAPPLY_LAST_RECOVERY_PROOF_CHANGED')
+    recovered_prewrite=read_object(api['s3'],'receipts/'+prewrite.RECOVERY_OPERATION+'/result.json')
+    need(sha(canonical(recovered_prewrite))==prewrite.RECOVERY_RESULT,'REAPPLY_PREWRITE_RECOVERY_PROOF_CHANGED')
     return value,etag
 
 
@@ -124,7 +127,8 @@ def freeze(runtime):
         'reserve_approval':RESERVE_APPROVAL,
         'reapply':{'previous_run':OLD_RUN,'service_run':SERVICE_RUN,'previous_archive':OLD_ARCHIVE,
                    'previous_state_sha256':OLD_STATE,'previous_journal_sha256':OLD_JOURNAL,
-                   'last_recovered_run':LAST_RUN,'last_recovery_sha256':LAST_RECOVERY_RESULT}}
+                   'last_recovered_run':LAST_RUN,'last_recovery_sha256':LAST_RECOVERY_RESULT,
+                   'prewrite_run':prewrite.RUN,'prewrite_recovery_sha256':prewrite.RECOVERY_RESULT}}
     validate_binding(binding)
     saved={'context':ctx,'binding':binding,'envelope':envelope}
     put_once(api['s3'],key(ctx),saved);save_local('catalog-binding.json',saved)

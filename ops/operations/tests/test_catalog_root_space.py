@@ -111,9 +111,13 @@ class RootSpaceTests(unittest.TestCase):
         root.expand(before,read=Mock(side_effect=[before,after]),run=run,tools=lambda n:n,record=lambda x:None)
         run.assert_called_once_with(['xfs_growfs','-d','/'],180)
 
-    def test_coordinator_is_the_existing_recovered_catalog_contract(self):
-        from catalog_reapply_contract import previous_coordinator
-        previous_coordinator(root.expected_coordinator())
+    def test_consumed_growth_keeps_its_original_recovery_contract(self):
+        from catalog_reapply_contract import REQUEST,LAST_RUN,previous_apply_record
+        from connection import sha
+        self.assertEqual(root.expected_coordinator(),{
+            'status':'ROLLED_BACK','component':'db',
+            'operation_id':sha((REQUEST+':'+LAST_RUN+':recover').encode()),
+            'recovery_of':previous_apply_record()[1]})
 
     def test_other_request_or_hold_never_executes(self):
         from catalog_reapply_contract import REQUEST,LAST_RUN

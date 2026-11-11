@@ -46,6 +46,8 @@ def verify_service(work):
     work.host.verify(work.host.baseline,'')
     require(chatbot_state()==state['chatbot'],'REAPPLY_PREVIOUS_CHATBOT_CHANGED')
     verify(work)
+    from catalog_prewrite_retry import verify as verify_prewrite
+    verify_prewrite(work)
 
 
 @contextmanager
