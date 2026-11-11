@@ -7,7 +7,7 @@ from catalog_writer import MUTABLE
 from initial_preservation import projection, row_hash_sql
 
 
-def capture(conn, metadata, bounds, guard, cursor_class):
+def capture(conn, metadata, bounds, guard, cursor_class,progress=lambda *args:None):
     shapes=projection(metadata)
     shapes['products']['columns']=[n for n in shapes['products']['columns'] if n not in (*MUTABLE,'attribute_snapshot_id')]
     result={};started=time.monotonic()
@@ -36,6 +36,7 @@ def capture(conn, metadata, bounds, guard, cursor_class):
                 raise
             else:cur.close()
             result[table]={'rows':count,'sha256':digest.hexdigest()}
+            progress('PRESERVATION',len(result),len(shapes))
         return result
     finally:
         if conn.open:conn.rollback()

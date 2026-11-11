@@ -96,7 +96,22 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'catalog-capacity':
+        if os.environ.get('MAINTENANCE_MODE') == 'catalog-status':
+            from catalog_attempt_status import inspect
+            from catalog_progress_github import Reporter
+            from catalog_progress import safe_error
+            reporter = Reporter(ctx, 'inspect')
+            need(reporter.ready, 'PROGRESS_CHANNEL_UNAVAILABLE_BEFORE_INSPECTION')
+            try:
+                reporter.emit('METADATA', force=True)
+                result = inspect(clients(True), ctx)
+                save_local('maintenance-result.json', result)
+                reporter.emit('DONE', force=True, terminal='success')
+            except Exception as error:
+                reporter.emit('FAILED', error_code=safe_error(error), force=True, terminal='failure')
+                save_local('catalog-inspect-failure.json', {'code':safe_error(error)})
+                raise
+        elif os.environ.get('MAINTENANCE_MODE') == 'catalog-capacity':
             from catalog_capacity import inspect
             result = inspect(clients(True), ctx)
             save_local('maintenance-result.json', result)

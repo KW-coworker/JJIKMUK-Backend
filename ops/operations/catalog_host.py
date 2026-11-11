@@ -49,6 +49,9 @@ class Work:
         else:self.state['status']=status
         atomic_json(self.state_path,self.state)
 
+    def progress(self,*args):
+        pass  # The new execution supplies non-sensitive, best-effort telemetry.
+
     def guard(self):
         if self.require_lease:
             require(self.lease is not None,'CATALOG_LEASE_REQUIRED');self.lease()
@@ -71,14 +74,16 @@ class Work:
             cursorclass=pymysql.cursors.DictCursor if dictionary else pymysql.cursors.Cursor)
 
     def preservation(self):
+        self.progress('PRESERVATION',0,None)
         with self.connect() as conn:
             import pymysql
-            return capture(conn,self.state['schema'],self.state['bounds'],self.guard,pymysql.cursors.SSCursor)
+            return capture(conn,self.state['schema'],self.state['bounds'],self.guard,pymysql.cursors.SSCursor,self.progress)
 
     def codec(self):
         return Codec(['/usr/bin/java','-Xms32m','-Xmx256m','-cp',str(self.stage/'classes')+':'+str(self.stage/'lib/*')+':'+str(self.stage/'bin/java'),'CatalogCodec'],guard=self.guard)
 
     def baseline(self):
+        self.progress('BASELINE',0,self.source.meta['source_rows'])
         journal=Journal(self.stage/'before-values.sqlite',self.journal_binding)
         try:
             with self.connect(dictionary=True) as conn,conn.cursor() as cur:
@@ -95,6 +100,7 @@ class Work:
                         item=self.source.get(row['barcode'])
                         require(item['product_id']==row['product_id'],'CATALOG_FROZEN_PRODUCT_IDS')
                     journal.baseline(rows);count+=len(rows);after=rows[-1]['product_id']
+                    self.progress('BASELINE',count,self.source.meta['source_rows'])
                     require(count<=self.source.meta['source_rows'],'CATALOG_BASELINE_ROW_LIMIT')
                 require(count==self.source.meta['source_rows'],'CATALOG_BASELINE_ROW_COUNT')
         finally:journal.close()
@@ -114,6 +120,7 @@ class Work:
         pass  # Initial V20 execution has no earlier product rollback to verify.
 
     def freeze(self):
+        self.progress('SERVICE_CHECK')
         require(not self.state_path.exists(),'CATALOG_FREEZE_ALREADY_RECORDED')
         self.resources()
         require(self.host.baseline['manifest']['commit']==self.binding['previous_commit'],'CATALOG_PREVIOUS_RELEASE_CHANGED')
@@ -128,8 +135,10 @@ class Work:
         self.state={'binding':self.binding,'previous':self.host.baseline,'candidate':candidate,
                     'old_identity':self.host.identity(),'chatbot':chatbot_state(),'events':[]}
         self.record('FREEZE_INTENT')
+        self.progress('SERVICE_FREEZE')
         systemctl('stop',*UNITS);self.guard()
         self.state['frozen_epoch']=int(time.time())
+        self.progress('METADATA')
         with self.connect() as conn:
             facts.project_idle(conn,guard=self.guard)
             self.state['schema']=read_from_connection(conn)
@@ -148,8 +157,10 @@ class Work:
         extract_runtime(self.stage/'backend.jar',self.stage);extract_classes(self.stage/'backend.jar',self.stage)
         self.verify_previous_values()
         self.state['preservation']=self.preservation();self.baseline()
+        self.progress('RELEASE_PREPARE')
         self.state['candidate_release']=prepare_release(self.host,self.stage,candidate)
         self.record('FROZEN_WITH_BASELINE')
+        self.progress('FROZEN')
         return {'status':'VERIFIED','checks':{'services_stopped':True,'baseline_saved':True,'no_db_writes':True},
                 'counts':{'frozen_epoch':self.state['frozen_epoch']}}
 
@@ -188,14 +199,17 @@ class Work:
         try:
             with self.connect(dictionary=True) as conn:
                 self.record('PRODUCT_APPLY_INTENT')
-                self.state['counts']=Writer(conn,self.source,codec,journal,self.dataset,self.guard).run()
+                self.progress('PRODUCT_APPLY',0,self.source.meta['source_rows'])
+                self.state['counts']=Writer(conn,self.source,codec,journal,self.dataset,self.guard,self.progress).run()
             with self.connect(dictionary=True) as conn:
-                self.state['value_verification']=verify_values(conn,self.source,journal,codec,self.dataset,self.guard)
+                self.progress('PRODUCT_VERIFY',0,self.source.meta['source_rows'])
+                self.state['value_verification']=verify_values(conn,self.source,journal,codec,self.dataset,self.guard,self.progress)
         finally:codec.close();journal.close()
         self.record('PRODUCT_VALUES_VERIFIED')
         self.verify_schema()
         require(self.preservation()==self.state['preservation'],'CATALOG_POSTWRITE_PRESERVATION')
         self.record('DB_VERIFIED')
+        self.progress('SERVICE_VERIFY')
         start_and_enroll(self.host,self.state['candidate_release'],self.state['old_identity'],self.state['chatbot'],self.record)
         self.record('SUCCEEDED')
         return {'status':'SUCCEEDED','checks':{'source_values_applied':True,'original_data_preserved':True,

@@ -32,7 +32,7 @@ def schema(before,after,image_attributes):
         ['image_role','utf8mb4','utf8mb4_unicode_ci']], 'CATALOG_IMAGE_COLLATION')
 
 
-def verify_values(conn,source,journal,codec,dataset,guard):
+def verify_values(conn,source,journal,codec,dataset,guard,progress=lambda *args:None):
     """Read all product rows; reject missing/extra changes and broken observation pointers."""
     after=0;count=changed=0;columns=[n for n,_ in source.columns]
     from catalog_writer import saved_values,plain,Writer
@@ -68,12 +68,13 @@ def verify_values(conn,source,journal,codec,dataset,guard):
             count+=len(rows);need(count<=source.meta['source_rows'],'CATALOG_VERIFY_ROW_LIMIT')
             after=rows[-1]['product_id']
         conn.rollback()
+        progress('PRODUCT_VERIFY',count,source.meta['source_rows'])
     need(count==source.meta['source_rows'] and changed==journal.db.execute('SELECT COUNT(*) FROM changes').fetchone()[0],
          'CATALOG_VERIFY_COUNTS')
     return {'products':count,'changed':changed}
 
 
-def verify_recovered(conn,source,journal,codec,dataset,guard):
+def verify_recovered(conn,source,journal,codec,dataset,guard,progress=lambda *args:None):
     from catalog_writer import Writer,plain,saved_values,ACTOR
     from catalog_delta import identity
     reader=Writer(conn,source,codec,journal,dataset,guard)
@@ -109,5 +110,6 @@ def verify_recovered(conn,source,journal,codec,dataset,guard):
             count+=len(rows);need(count<=source.meta['source_rows'],'CATALOG_RECOVERY_VERIFY_BOUND')
             after=rows[-1]['product_id']
         conn.rollback()
+        progress('RECOVERY_VERIFY',count,source.meta['source_rows'])
     need(count==source.meta['source_rows'],'CATALOG_RECOVERY_VERIFY_COUNT')
     return {'products':count,'original_values_restored':True}

@@ -115,9 +115,12 @@ def read_object(s3,key):
     return json.loads(raw)
 
 
-def wait_result(ssm,cid,target,document,sleep=time.sleep,*,max_polls=360):
+def wait_result(ssm,cid,target,document,sleep=time.sleep,*,max_polls=360,observer=None):
     need(max_polls in (360,450,600,1500),'COMMAND_WAIT_BOUND')
     for _ in range(max_polls):
+        if observer is not None:
+            try:observer()
+            except Exception:print('PROGRESS_OBSERVER_UNAVAILABLE',flush=True)
         try:
             invocations=ssm.list_command_invocations(CommandId=cid,InstanceId=target,Details=True)['CommandInvocations']
             if not invocations:sleep(5);continue
@@ -187,7 +190,7 @@ def inspect(api):
             'observation_completed':completed,'required_services_healthy':healthy,'success':healthy}
 
 
-def execute(api,context_data,plan,plan_hash,target,*,output_prefix='',max_polls=None):
+def execute(api,context_data,plan,plan_hash,target,*,output_prefix='',max_polls=None,observer=None):
     if os.environ.get('GITHUB_ACTIONS') == 'true':
         # A cancelled maintenance workflow must also block the older generic executor.
         import sys
@@ -218,7 +221,7 @@ def execute(api,context_data,plan,plan_hash,target,*,output_prefix='',max_polls=
     cid=response['Command']['CommandId']
     put_once(api['s3'],'receipts/'+op_id+'/sent.json',dict(intent,command_id=cid))
     save_local(output_prefix+'sent.json',{'operation_id':op_id,'command_id':cid})
-    result=wait_result(api['ssm'],cid,target,name,max_polls=polls)
+    result=wait_result(api['ssm'],cid,target,name,max_polls=polls,observer=observer)
     put_once(api['s3'],'receipts/'+op_id+'/result.json',result);save_local(output_prefix+'result.json',result)
     return {'status':'OPERATION_FINISHED','operation_id':op_id,'command_id':cid,
             'success':operation_succeeded(result)}

@@ -16,6 +16,7 @@ from catalog_host_support import systemctl,start_and_enroll,UNITS
 from catalog_checks import verify_recovered
 from catalog_writer import Journal,Writer
 from catalog_delta import Source
+from catalog_progress import Progress,safe_error
 from initial_guard import Guard,host_s3
 from initial_schema import read_from_connection
 from initial_service_state import stopped
@@ -35,6 +36,11 @@ class Reapply(Work):
         self.phase=phase;self.wall_started=time.time()
         self.dataset=dataset(binding['request_id'],binding['run_id'])
         self.journal_binding=dict(self.journal_binding,dataset=self.dataset)
+        self.progress_report=Progress(stage,binding,phase)
+
+    def progress(self,*args,**kwargs):
+        report=getattr(self,'progress_report',None)
+        if report is not None:report.update(*args,**kwargs)
 
     def budget(self):
         elapsed=time.monotonic()-self.started;wall=time.time()-self.wall_started
@@ -48,6 +54,7 @@ class Reapply(Work):
 
     def guard(self):
         self.budget()
+        self.progress()
         if self.require_lease:
             require(self.lease is not None,'CATALOG_LEASE_REQUIRED');self.lease()
         require(shutil.disk_usage(self.stage).free>2*1024**3,'CATALOG_HOST_DISK_RESERVE')
@@ -94,7 +101,9 @@ class Reapply(Work):
         previous=original_state();codec=self.codec()
         try:
             with previous_journal(previous) as journal,self.connect(dictionary=True) as conn:
-                result=verify_recovered(conn,self.source,journal,codec,'catalog-handoff-'+self.binding['request_id'],self.guard)
+                self.progress('VERIFY_ORIGINAL',0,self.source.meta['source_rows'])
+                result=verify_recovered(conn,self.source,journal,codec,'catalog-handoff-'+self.binding['request_id'],self.guard,
+                                       lambda stage,done,total:self.progress('VERIFY_ORIGINAL',done,total))
             require(result=={'products':1348425,'original_values_restored':True},'REAPPLY_CURRENT_VALUES_NOT_RESTORED')
         finally:codec.close()
 
@@ -115,12 +124,15 @@ class Reapply(Work):
             journal=Journal(self.stage/'before-values.sqlite',self.journal_binding,recover=True);codec=self.codec()
             try:
                 with self.connect(dictionary=True) as conn:
-                    self.state['recovery_counts']=Writer(conn,self.source,codec,journal,self.dataset,self.guard).recover()
+                    self.progress('RECOVERY',0,None)
+                    self.state['recovery_counts']=Writer(conn,self.source,codec,journal,self.dataset,self.guard,self.progress).recover()
                 with self.connect(dictionary=True) as conn:
-                    self.state['recovery_verification']=verify_recovered(conn,self.source,journal,codec,self.dataset,self.guard)
+                    self.progress('RECOVERY_VERIFY',0,self.source.meta['source_rows'])
+                    self.state['recovery_verification']=verify_recovered(conn,self.source,journal,codec,self.dataset,self.guard,self.progress)
             finally:codec.close();journal.close()
             self.verify_schema()
             require(self.preservation()==self.state['preservation'],'CATALOG_RECOVERY_PRESERVATION_FAILED')
+        self.progress('SERVICE_VERIFY')
         start_and_enroll(self.host,release,self.state['old_identity'],self.state['chatbot'],self.record)
         self.record('RECOVERED')
         return {'status':'VERIFIED','checks':{'old_product_values_restored':True,'existing_services_healthy':True,
@@ -148,6 +160,9 @@ def main():
             coordinator.record('MUTATION_INTENT')
             result=work.freeze() if phase=='freeze' else work.apply(entry['snapshot']) if phase=='apply' else work.recover(entry['snapshot']['monitor_ready'])
             coordinator.record('VERIFIED' if phase=='freeze' else 'ROLLED_BACK' if phase=='recover' else 'SUCCEEDED')
+            work.progress('DONE')
+        except BaseException as error:
+            work.progress('FAILED',error_code=safe_error(error));raise
         finally:
             if work.source is not None:work.source.close()
     print(json.dumps(result))

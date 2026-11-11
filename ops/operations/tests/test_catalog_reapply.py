@@ -166,7 +166,7 @@ class HostTests(unittest.TestCase):
         import catalog_reapply_host as host
         work=host.Reapply.__new__(host.Reapply);work.stage=Path(path);work.state_path=work.stage/'state.json';work.state_path.touch()
         work.binding=binding();work.phase='recover';work.dataset=contract.dataset(contract.REQUEST,work.binding['run_id'])
-        work.journal_binding={};work.require_lease=True;work.source=Mock()
+        work.journal_binding={};work.require_lease=True;work.source=Mock(meta={'source_rows':1348425})
         work.state={'status':status,'previous':{'manifest':{'commit':contract.PREVIOUS}},'old_identity':'old','chatbot':{},
                     'schema':{'already':'V21'},'preservation':{'before':'hash'}}
         work.host=Mock();work.load=Mock();work.guard=Mock();work.resources=Mock();work.verify_schema=Mock()
