@@ -6,6 +6,9 @@ import re
 
 def document(binding,envelope,phase,snapshot=None):
     need(phase in ('freeze','apply','recover') and re.fullmatch('[a-f0-9]{64}',binding['archive_sha256']),'CATALOG_DOCUMENT_PHASE')
+    if 'followup' in binding:
+        from catalog_followup_host import validate
+        validate(binding)
     stage='/opt/jjikmuk-catalog-'+binding['archive_sha256'][:16]
     limit={'freeze':1200,'apply':2700,'recover':1500}[phase]
     entry={'binding':dict(binding,phase=phase),'phase':phase,'snapshot':snapshot}
@@ -29,6 +32,7 @@ try:
   for name,key,version,size,checksum in [
     ('payload.zip',binding['archive_key'],binding['archive_version'],binding['archive_bytes'],binding['archive_sha256']),
     ('source.zip',binding['source_key'],binding['source_version'],binding['source_archive_bytes'],binding['source_archive_sha256'])]:
+   if name=='source.zip' and 'followup' in binding:continue
    target=download/name
    aws([config['aws'],'s3api','get-object','--region','ap-northeast-2','--bucket',{BUCKET!r},'--key',key,'--version-id',version,
         '--expected-bucket-owner','076767081522',str(target)],180)
@@ -46,15 +50,20 @@ try:
      if stage in parent.parents and not parent.exists():parent.mkdir(mode=0o755);os.chmod(parent,0o755)
     with target.open('xb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
     os.chmod(target,0o644)
-  with zipfile.ZipFile(download/'source.zip') as z:
-   assert sorted(z.namelist())==['source-manifest.json','source-products.sqlite']
-   info=z.getinfo('source-products.sqlite');assert not stat.S_ISLNK(info.external_attr>>16) and info.file_size==binding['source_bytes']
-   meta=json.loads(z.read('source-manifest.json'));assert meta['sha256']==binding['source_sha256'] and meta['bytes']==binding['source_bytes'] and meta['rows']==1348425
-   with z.open(info) as src,(stage/'source-products.sqlite').open('xb') as out:
-    import shutil
-    shutil.copyfileobj(src,out,1024**2);out.flush();os.fsync(out.fileno())
-   os.chmod(stage/'source-products.sqlite',0o600)
-   assert digest(stage/'source-products.sqlite')==binding['source_sha256']
+  if 'followup' in binding:
+   sys.path.insert(0,str(stage/'bin'))
+   from catalog_followup_host import link_source
+   link_source(stage/'source-products.sqlite',binding)
+  else:
+   with zipfile.ZipFile(download/'source.zip') as z:
+    assert sorted(z.namelist())==['source-manifest.json','source-products.sqlite']
+    info=z.getinfo('source-products.sqlite');assert not stat.S_ISLNK(info.external_attr>>16) and info.file_size==binding['source_bytes']
+    meta=json.loads(z.read('source-manifest.json'));assert meta['sha256']==binding['source_sha256'] and meta['bytes']==binding['source_bytes'] and meta['rows']==1348425
+    with z.open(info) as src,(stage/'source-products.sqlite').open('xb') as out:
+     import shutil
+     shutil.copyfileobj(src,out,1024**2);out.flush();os.fsync(out.fileno())
+    os.chmod(stage/'source-products.sqlite',0o600)
+    assert digest(stage/'source-products.sqlite')==binding['source_sha256']
  for name,meta in expected['files'].items():
   p=stage/name;secure(p);assert p.stat().st_size==meta['bytes'] and digest(p)==meta['sha256']
  assert time.monotonic()-started < (450 if {phase!r}=='freeze' else 30)

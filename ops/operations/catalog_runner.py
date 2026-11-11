@@ -37,6 +37,10 @@ def call_phase(api,ctx,binding,envelope,phase,backup=None):
 
 def freeze():
     ctx=context();api=clients(True)
+    following=os.environ.get('MAINTENANCE_MODE')=='catalog-continue'
+    if following:
+        from catalog_followup import check
+        check(api,ctx,Gate(api['s3']))
     plan=source_plan(os.environ['WORK_PLAN'],os.environ['WORK_SHA256'])
     backup_api=aws_client('rds');save_local('rds-preflight.json',check_database(backup_api))
     src=api['s3'].head_object(Bucket=BUCKET,Key=plan['source_key'],VersionId=plan['source_version'],ExpectedBucketOwner=ACCOUNT,ChecksumMode='ENABLED')
@@ -54,16 +58,25 @@ def freeze():
              'source_key':plan['source_key'],'source_version':plan['source_version'],'source_archive_sha256':plan['source_archive_sha256'],
              'source_archive_bytes':plan['source_archive_bytes'],'source_sha256':SOURCE_SHA,'source_bytes':SOURCE_BYTES,
              'previous_commit':plan['previous_commit'],'required_bytes':plan['required_bytes']}
+    if following:
+        from catalog_followup_host import FOLLOWUP
+        binding['followup']=dict(FOLLOWUP)
     saved={'context':ctx,'binding':binding,'envelope':envelope}
     put_once(api['s3'],key(ctx),saved);save_local('catalog-binding.json',saved)
     gate=Gate(api['s3']);work_sha=os.environ['WORK_SHA256'];verify_sha=sha(canonical({'catalog_verify':work_sha}))
-    gate.start(ctx['request_id'],ctx['commit'],ctx['run_id'],work_sha,verify_sha)
+    if following:
+        from catalog_followup import bind
+        bind(api,ctx,gate,work_sha,verify_sha)
+    else:gate.start(ctx['request_id'],ctx['commit'],ctx['run_id'],work_sha,verify_sha)
     for _ in range(90):
         if drained(api['ssm'],list(HOSTS.values())):break
         time.sleep(10)
     else:raise ValueError('CATALOG_DRAIN_TIMEOUT_KEEP_HOLD')
-    probe=probe_plan(ctx['request_id'],'before')
-    checked_execute(api,ctx,probe,sha(canonical(probe)),HOSTS['backend'],'maintenance-before-')
+    if not following:
+        probe=probe_plan(ctx['request_id'],'before')
+        checked_execute(api,ctx,probe,sha(canonical(probe)),HOSTS['backend'],'maintenance-before-')
+    # The exact failed coordinator is checked and claimed inside the new freeze
+    # lock. Its verify_previous performs the old-release health check there.
     with Monitor(api['s3'],aws_client('cloudwatch'),binding,binding['required_bytes']) as monitor:
         time_budget('freeze')
         frozen=call_phase(api,ctx,binding,envelope,'freeze');need(frozen['success'],'CATALOG_FREEZE_FAILED')
@@ -84,7 +97,7 @@ def apply():
         time_budget('apply');monitor.check()
         backup=frozen['snapshot']
         result=call_phase(api,ctx,binding,envelope,'apply',backup);need(result['success'],'CATALOG_APPLY_FAILED')
-    probe=probe_plan(ctx['request_id'],'after')
+    probe=probe_plan(ctx['request_id'],'after-'+ctx['run_id'])
     report=checked_execute(api,ctx,probe,sha(canonical(probe)),HOSTS['backend'],'maintenance-after-')
     need(report['hashes']['backend_commit_sha256']==sha(ctx['commit'].encode()),'CATALOG_RELEASE_NOT_CURRENT')
     evidence=sha(canonical({p.name:sha(p.read_bytes()) for p in sorted(Path('operation-results').glob('*.json'))}))

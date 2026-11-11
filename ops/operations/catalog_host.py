@@ -189,6 +189,9 @@ class Work:
 
     def recover(self,monitor_ready):
         if not self.state_path.exists():
+            if 'followup' in self.binding:
+                from catalog_followup_host import verify_previous
+                verify_previous(self)
             require(self.host.baseline['manifest']['commit']==self.binding['previous_commit'],'CATALOG_NO_STATE_RELEASE_CHANGED')
             self.host.verify(self.host.baseline,'')
             return {'status':'VERIFIED','checks':{'preflight_failed_before_service_changes':True}}
@@ -234,23 +237,33 @@ def main():
     require(binding['phase'] == entry['phase'],'CATALOG_PHASE_BINDING')
     binding={k:v for k,v in binding.items() if k!='phase'}
     phase=entry['phase'];require(phase in ('freeze','apply','recover'),'CATALOG_PHASE')
-    operation=hashlib.sha256((binding['request_id']+':'+phase).encode()).hexdigest()
+    operation=phase_id(binding,phase)
     recovery_hash=None
+    if phase=='freeze' and 'followup' in binding:
+        from catalog_followup_host import recovery_hash as previous_recovery_hash
+        recovery_hash=previous_recovery_hash(binding,(COORDINATION/'state.json').read_bytes())
     if phase=='recover':
         raw=(COORDINATION/'state.json').read_bytes();state=json.loads(raw)
-        allowed={hashlib.sha256((binding['request_id']+':'+name).encode()).hexdigest() for name in ('freeze','apply')}
+        allowed={phase_id(binding,name) for name in ('freeze','apply')}
         require(state.get('component')=='db' and state.get('operation_id') in allowed and
-                state.get('status') in ('MUTATION_INTENT','VERIFIED','REJECTED'),'CATALOG_RECOVERY_COORDINATOR_CHANGED')
-        if state['status']=='MUTATION_INTENT':recovery_hash=hashlib.sha256(raw).hexdigest()
+                state.get('status') in ('MUTATION_INTENT','VERIFIED','REJECTED','MANUAL_RECOVERY_REQUIRED'),'CATALOG_RECOVERY_COORDINATOR_CHANGED')
+        if state['status'] in ('MUTATION_INTENT','MANUAL_RECOVERY_REQUIRED'):recovery_hash=hashlib.sha256(raw).hexdigest()
     with locked('db',operation,recovery_sha256=recovery_hash) as coordinator:
         work=Work(stage,binding)
         try:
+            if phase=='freeze' and 'followup' in binding:
+                from catalog_followup_host import verify_previous
+                verify_previous(work)
             coordinator.record('MUTATION_INTENT')
             result=work.freeze() if phase=='freeze' else work.apply(entry['snapshot']) if phase=='apply' else work.recover(entry['snapshot']['monitor_ready'])
             coordinator.record('VERIFIED' if phase=='freeze' else 'ROLLED_BACK' if phase=='recover' else 'SUCCEEDED')
         finally:
             if work.source is not None:work.source.close()
     print(json.dumps(result))
+
+
+def phase_id(binding,phase):
+    return hashlib.sha256((binding['request_id']+':'+binding['run_id']+':'+phase).encode()).hexdigest()
 
 
 if __name__=='__main__':

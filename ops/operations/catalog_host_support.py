@@ -92,10 +92,12 @@ def start_and_enroll(host,release,old_identity,chatbot,record):
     host.database(release['manifest'])
     record('APP_SWITCH_INTENT');host.activate(release)
     systemctl('start',UNITS[1]);host.restart()
-    require(chatbot_state()==chatbot,'CATALOG_CHATBOT_RUNTIME_CHANGED')
     chatbot_identity=systemctl('show',UNITS[1],'--property=InvocationID','--value')
     require(bool(chatbot_identity),'CATALOG_CHATBOT_INVOCATION_REQUIRED')
     host.verify(release,old_identity)
+    # The service launcher can still be exec'ing the final Python process just
+    # after systemctl start returns. Compare the same exact contract after health.
+    require(chatbot_state()==chatbot,'CATALOG_CHATBOT_RUNTIME_CHANGED')
     require(systemctl('show',UNITS[1],'--property=ActiveState','--value')=='active' and
             systemctl('show',UNITS[1],'--property=InvocationID','--value')==chatbot_identity and
             chatbot_state()==chatbot,'CATALOG_CHATBOT_NOT_STABLE')
