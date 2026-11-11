@@ -11,7 +11,9 @@ class MaintenanceWorkflowTests(unittest.TestCase):
         for name in names:
             with self.subTest(name=name):
                 source = (root/name).read_text(encoding='utf-8')
-                self.assertIn('concurrency:\n  group: backend-production-deployment\n  cancel-in-progress: false\n  queue: max\n', source)
+                group = ("${{ inputs.mode == 'performance' && 'jjikmuk-performance-read' || 'backend-production-deployment' }}"
+                         if name == 'server-operations.yml' else 'backend-production-deployment')
+                self.assertIn('concurrency:\n  group: '+group+'\n  cancel-in-progress: false\n  queue: max\n', source)
                 self.assertEqual(len(re.findall(r'^\s*queue:', source, re.M)), 1)
 
     def test_readonly_collection_and_resume_use_fixed_workflows_without_new_credentials(self):
