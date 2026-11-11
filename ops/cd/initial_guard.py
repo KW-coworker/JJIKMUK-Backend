@@ -27,24 +27,42 @@ def validate_heartbeat(value, binding, now):
 
 
 class Guard:
-    def __init__(self, client, binding, *, clock=time.time, monotonic=time.monotonic):
+    def __init__(self, client, binding, *, clock=time.time, monotonic=time.monotonic,
+                 read_attempts=1, budget_check=lambda: None):
+        require(type(read_attempts) is int and read_attempts in (1,2), 'MAINTENANCE_READ_ATTEMPTS')
         self.client, self.binding = client, binding
         self.clock, self.monotonic = clock, monotonic
         self.cached, self.read_at = None, None
+        self.read_attempts,self.budget_check=read_attempts,budget_check
         self.key = ('operations/bootstrap/' + binding['archive_sha256'] + '/monitor-'
                     + binding['request_id'] + '.json')
 
     def __call__(self):
+        self.budget_check()
         now = self.monotonic()
         if self.read_at is None or now - self.read_at >= 5:
-            response = self.client.get_object(Bucket=BUCKET, Key=self.key, ExpectedBucketOwner=ACCOUNT)
-            require(response['ContentLength'] <= 2048, 'MAINTENANCE_LEASE_SIZE')
-            with response['Body'] as body:
-                raw = body.read(2049)
-            require(len(raw) <= 2048, 'MAINTENANCE_LEASE_SIZE')
-            self.cached = json.loads(raw)
-            self.read_at = now
+            transport=()
+            if self.read_attempts==2:
+                from botocore.exceptions import ConnectionClosedError,ConnectTimeoutError,ReadTimeoutError,EndpointConnectionError
+                transport=(ConnectionClosedError,ConnectTimeoutError,ReadTimeoutError,EndpointConnectionError)
+            for attempt in range(self.read_attempts):
+                self.budget_check()
+                try:
+                    response = self.client.get_object(Bucket=BUCKET, Key=self.key, ExpectedBucketOwner=ACCOUNT)
+                    with response['Body'] as body:
+                        require(response['ContentLength'] <= 2048, 'MAINTENANCE_LEASE_SIZE')
+                        raw = body.read(2049)
+                    require(len(raw) <= 2048, 'MAINTENANCE_LEASE_SIZE')
+                    value=json.loads(raw)
+                    self.budget_check()
+                    validate_heartbeat(value,self.binding,self.clock())
+                    self.cached=value;self.read_at=self.monotonic()
+                    break
+                except transport:
+                    self.budget_check()
+                    if attempt+1==self.read_attempts:raise
         validate_heartbeat(self.cached, self.binding, self.clock())
+        self.budget_check()
 
 
 def load_sdk(stage):
