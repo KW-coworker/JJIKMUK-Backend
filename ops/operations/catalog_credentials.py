@@ -22,7 +22,7 @@ class Renewal:
         self.failed=False;self.renewals=0
         need(env.get('GITHUB_ACTIONS')=='true' and env.get('GITHUB_RUN_ATTEMPT')=='1' and
              env.get('GITHUB_WORKFLOW_REF')==REPO+'/.github/workflows/server-maintenance.yml@refs/heads/main' and
-             env.get('OPERATIONS_CONFIRM')=='true' and env.get('MAINTENANCE_MODE')=='catalog-reapply',
+             env.get('OPERATIONS_CONFIRM')=='true' and env.get('MAINTENANCE_MODE') in ('catalog-reapply','product-images'),
              'CATALOG_RENEWAL_CONTEXT')
         need(re.fullmatch('[1-9][0-9]{0,19}',env.get('GITHUB_RUN_ID','')),'CATALOG_RENEWAL_RUN')
         self.session_name='catalog-'+env['GITHUB_RUN_ID']

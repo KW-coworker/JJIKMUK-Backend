@@ -1,0 +1,355 @@
+{
+  "format": 1,
+  "envelope": {
+    "sha256": "9e41ee6fcdacf6d95ef92d6d4c71ab0a696ecc8fa9776e8b9663fb4712f3a034",
+    "bytes": 18162377,
+    "request_id": "c46f03c12fcd46a1af8b86362599dac1",
+    "version": "8c6QBvx3oBT.NUALHu76Z4kqpnAEk4x3",
+    "format": 1,
+    "component": "db",
+    "operation": "deploy",
+    "approval_id": "USER_PRODUCT_IMAGE_URL_LIST_20261112",
+    "expires": 1794439592,
+    "recovery_sha256": null
+  },
+  "input_sha256": "c702663c6375447b0847334dc9d1707cf5383165622ca3a8cdb350838c322cdd",
+  "rows": 1098863,
+  "slices": [
+    {
+      "index": 0,
+      "after_id": 0,
+      "last_id": 1498,
+      "count": 1000
+    },
+    {
+      "index": 1,
+      "after_id": 1498,
+      "last_id": 27778,
+      "count": 20000
+    },
+    {
+      "index": 2,
+      "after_id": 27778,
+      "last_id": 53972,
+      "count": 20000
+    },
+    {
+      "index": 3,
+      "after_id": 53972,
+      "last_id": 82435,
+      "count": 20000
+    },
+    {
+      "index": 4,
+      "after_id": 82435,
+      "last_id": 113353,
+      "count": 20000
+    },
+    {
+      "index": 5,
+      "after_id": 113353,
+      "last_id": 143631,
+      "count": 20000
+    },
+    {
+      "index": 6,
+      "after_id": 143631,
+      "last_id": 173343,
+      "count": 20000
+    },
+    {
+      "index": 7,
+      "after_id": 173343,
+      "last_id": 202806,
+      "count": 20000
+    },
+    {
+      "index": 8,
+      "after_id": 202806,
+      "last_id": 231717,
+      "count": 20000
+    },
+    {
+      "index": 9,
+      "after_id": 231717,
+      "last_id": 255750,
+      "count": 20000
+    },
+    {
+      "index": 10,
+      "after_id": 255750,
+      "last_id": 280013,
+      "count": 20000
+    },
+    {
+      "index": 11,
+      "after_id": 280013,
+      "last_id": 303109,
+      "count": 20000
+    },
+    {
+      "index": 12,
+      "after_id": 303109,
+      "last_id": 328344,
+      "count": 20000
+    },
+    {
+      "index": 13,
+      "after_id": 328344,
+      "last_id": 350623,
+      "count": 20000
+    },
+    {
+      "index": 14,
+      "after_id": 350623,
+      "last_id": 372953,
+      "count": 20000
+    },
+    {
+      "index": 15,
+      "after_id": 372953,
+      "last_id": 402693,
+      "count": 20000
+    },
+    {
+      "index": 16,
+      "after_id": 402693,
+      "last_id": 430068,
+      "count": 20000
+    },
+    {
+      "index": 17,
+      "after_id": 430068,
+      "last_id": 455925,
+      "count": 20000
+    },
+    {
+      "index": 18,
+      "after_id": 455925,
+      "last_id": 479993,
+      "count": 20000
+    },
+    {
+      "index": 19,
+      "after_id": 479993,
+      "last_id": 507330,
+      "count": 20000
+    },
+    {
+      "index": 20,
+      "after_id": 507330,
+      "last_id": 530389,
+      "count": 20000
+    },
+    {
+      "index": 21,
+      "after_id": 530389,
+      "last_id": 555381,
+      "count": 20000
+    },
+    {
+      "index": 22,
+      "after_id": 555381,
+      "last_id": 581137,
+      "count": 20000
+    },
+    {
+      "index": 23,
+      "after_id": 581137,
+      "last_id": 601425,
+      "count": 20000
+    },
+    {
+      "index": 24,
+      "after_id": 601425,
+      "last_id": 621448,
+      "count": 20000
+    },
+    {
+      "index": 25,
+      "after_id": 621448,
+      "last_id": 641449,
+      "count": 20000
+    },
+    {
+      "index": 26,
+      "after_id": 641449,
+      "last_id": 662590,
+      "count": 20000
+    },
+    {
+      "index": 27,
+      "after_id": 662590,
+      "last_id": 682903,
+      "count": 20000
+    },
+    {
+      "index": 28,
+      "after_id": 682903,
+      "last_id": 704404,
+      "count": 20000
+    },
+    {
+      "index": 29,
+      "after_id": 704404,
+      "last_id": 724582,
+      "count": 20000
+    },
+    {
+      "index": 30,
+      "after_id": 724582,
+      "last_id": 747129,
+      "count": 20000
+    },
+    {
+      "index": 31,
+      "after_id": 747129,
+      "last_id": 767883,
+      "count": 20000
+    },
+    {
+      "index": 32,
+      "after_id": 767883,
+      "last_id": 787886,
+      "count": 20000
+    },
+    {
+      "index": 33,
+      "after_id": 787886,
+      "last_id": 809586,
+      "count": 20000
+    },
+    {
+      "index": 34,
+      "after_id": 809586,
+      "last_id": 842924,
+      "count": 20000
+    },
+    {
+      "index": 35,
+      "after_id": 842924,
+      "last_id": 867594,
+      "count": 20000
+    },
+    {
+      "index": 36,
+      "after_id": 867594,
+      "last_id": 890216,
+      "count": 20000
+    },
+    {
+      "index": 37,
+      "after_id": 890216,
+      "last_id": 913440,
+      "count": 20000
+    },
+    {
+      "index": 38,
+      "after_id": 913440,
+      "last_id": 937203,
+      "count": 20000
+    },
+    {
+      "index": 39,
+      "after_id": 937203,
+      "last_id": 959070,
+      "count": 20000
+    },
+    {
+      "index": 40,
+      "after_id": 959070,
+      "last_id": 982551,
+      "count": 20000
+    },
+    {
+      "index": 41,
+      "after_id": 982551,
+      "last_id": 1004967,
+      "count": 20000
+    },
+    {
+      "index": 42,
+      "after_id": 1004967,
+      "last_id": 1027647,
+      "count": 20000
+    },
+    {
+      "index": 43,
+      "after_id": 1027647,
+      "last_id": 1057058,
+      "count": 20000
+    },
+    {
+      "index": 44,
+      "after_id": 1057058,
+      "last_id": 1080194,
+      "count": 20000
+    },
+    {
+      "index": 45,
+      "after_id": 1080194,
+      "last_id": 1104976,
+      "count": 20000
+    },
+    {
+      "index": 46,
+      "after_id": 1104976,
+      "last_id": 1127131,
+      "count": 20000
+    },
+    {
+      "index": 47,
+      "after_id": 1127131,
+      "last_id": 1155621,
+      "count": 20000
+    },
+    {
+      "index": 48,
+      "after_id": 1155621,
+      "last_id": 1182922,
+      "count": 20000
+    },
+    {
+      "index": 49,
+      "after_id": 1182922,
+      "last_id": 1205408,
+      "count": 20000
+    },
+    {
+      "index": 50,
+      "after_id": 1205408,
+      "last_id": 1232412,
+      "count": 20000
+    },
+    {
+      "index": 51,
+      "after_id": 1232412,
+      "last_id": 1255814,
+      "count": 20000
+    },
+    {
+      "index": 52,
+      "after_id": 1255814,
+      "last_id": 1278787,
+      "count": 20000
+    },
+    {
+      "index": 53,
+      "after_id": 1278787,
+      "last_id": 1303573,
+      "count": 20000
+    },
+    {
+      "index": 54,
+      "after_id": 1303573,
+      "last_id": 1328247,
+      "count": 20000
+    },
+    {
+      "index": 55,
+      "after_id": 1328247,
+      "last_id": 1348425,
+      "count": 17863
+    }
+  ]
+}

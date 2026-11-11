@@ -69,7 +69,7 @@ def start_and_wait(api, workflow, inputs, folder, *, approve=False, sleep=time.s
     # No POST is repeated after a timeout. Inspect this title/request if the response is lost.
     approved = False
     # Catalog phases refresh OIDC within one approved environment job.
-    for _ in range(4800 if inputs.get('mode')=='catalog-reapply' else 1920 if inputs.get('mode') in ('catalog','catalog-continue','catalog-reapply') else 1080):
+    for _ in range(4800 if inputs.get('mode')=='catalog-reapply' else 2160 if inputs.get('mode')=='product-images' else 1920 if inputs.get('mode') in ('catalog','catalog-continue','catalog-reapply') else 1080):
         rows = api.call(PREFIX + '/actions/workflows/' + workflow + '/runs?event=workflow_dispatch&per_page=100')['workflow_runs']
         matches = [r for r in rows if r.get('display_title') == title]
         need(len(matches) <= 1, 'MAINTENANCE_RUN_AMBIGUOUS')
