@@ -113,14 +113,15 @@ def check_database(rds):
                 ('DBInstanceIdentifier', 'Engine', 'EngineVersion', 'BackupRetentionPeriod', 'PreferredBackupWindow')}))}}
 
 
-def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:None,progress=lambda *args:None):
+def snapshot(rds, api, ctx, sleep=time.sleep,*,frozen_epoch=None,guard=lambda:None,progress=lambda *args:None,max_polls=60):
+    need(type(max_polls) is int and max_polls in (60,180),'INITIAL_SNAPSHOT_WAIT_BOUND')
     need(type(frozen_epoch) is int and 0<frozen_epoch<=int(time.time()),'FROZEN_DATABASE_REQUIRED')
     guard()
     name = 'jjikmuk-ops-initial-db-' + ctx['run_id']
     key = 'receipts/initial-db/' + ctx['run_id'] + '/snapshot-intent.json'
     put_once(api['s3'], key, {'snapshot': name, 'commit': ctx['commit'], 'request_id': ctx['request_id']})
     rds.create_db_snapshot(DBSnapshotIdentifier=name, DBInstanceIdentifier=DB)
-    for _ in range(60):
+    for _ in range(max_polls):
         guard()
         rows = rds.describe_db_snapshots(DBSnapshotIdentifier=name)['DBSnapshots']
         need(len(rows) == 1, 'INITIAL_SNAPSHOT_MISSING')

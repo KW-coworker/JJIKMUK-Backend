@@ -36,6 +36,7 @@ def original_state():
 
 def verify_service(work):
     from catalog_host_support import chatbot_state
+    from catalog_reapply_last import verify
     state=original_state()
     for phase in ('freeze','apply','recover'):
         observed=subprocess.run(['/usr/bin/systemctl','is-active','jjikmuk-catalog-'+phase+'-'+OLD_ARCHIVE[:16]],
@@ -44,6 +45,7 @@ def verify_service(work):
     require(work.host.baseline==state['candidate_release'],'REAPPLY_PREVIOUS_BASELINE_CHANGED')
     work.host.verify(work.host.baseline,'')
     require(chatbot_state()==state['chatbot'],'REAPPLY_PREVIOUS_CHATBOT_CHANGED')
+    verify(work)
 
 
 @contextmanager

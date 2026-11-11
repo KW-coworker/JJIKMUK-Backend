@@ -10,7 +10,8 @@ def binding():
         'source_sha256':contract.SOURCE_SHA,'source_bytes':contract.SOURCE_BYTES,'required_bytes':contract.RDS_RESERVE_BYTES,
         'reserve_approval':contract.RESERVE_APPROVAL,'source_plan_required_bytes':5*1024**3,
         'archive_sha256':'b'*64,'reapply':{'previous_run':contract.OLD_RUN,'service_run':contract.SERVICE_RUN,
-        'previous_archive':contract.OLD_ARCHIVE,'previous_state_sha256':contract.OLD_STATE,'previous_journal_sha256':contract.OLD_JOURNAL}}
+        'previous_archive':contract.OLD_ARCHIVE,'previous_state_sha256':contract.OLD_STATE,'previous_journal_sha256':contract.OLD_JOURNAL,
+        'last_recovered_run':contract.LAST_RUN,'last_recovery_sha256':contract.LAST_RECOVERY_RESULT}}
 
 
 class ContractTests(unittest.TestCase):
@@ -59,7 +60,7 @@ class ContractTests(unittest.TestCase):
                 initial_guard.Guard(Mock(),b,minimum_reserve=invalid)
 
     def test_consumed_runs_source_baseline_and_recovery_records_fail_closed(self):
-        for key,value in [('run_id',contract.OLD_RUN),('run_id',contract.SERVICE_RUN),('previous_commit','0'*40),
+        for key,value in [('run_id',contract.OLD_RUN),('run_id',contract.SERVICE_RUN),('run_id',contract.LAST_RUN),('previous_commit','0'*40),
                           ('source_sha256','0'*64),('required_bytes',1),('request_id','0'*32)]:
             with self.subTest(key=key),self.assertRaises(ValueError):contract.validate_binding(dict(binding(),**{key:value}))
         b=binding();b['reapply']['previous_journal_sha256']='0'*64
@@ -140,7 +141,7 @@ class ContractTests(unittest.TestCase):
             gate.return_value.read.return_value=({'state':'OPEN'},'etag')
             with self.assertRaisesRegex(ValueError,'GATE_CHANGED'):runner.previous_gate({'s3':Mock()},{},'c'*64,'d'*64)
             read.assert_not_called()
-            previous={'state':'WORKING','request_id':contract.REQUEST,'run_id':contract.OLD_RUN,'commit':contract.PREVIOUS,
+            previous={'state':'WORKING','request_id':contract.REQUEST,'run_id':contract.LAST_RUN,'commit':contract.LAST_COMMIT,
                       'work_sha256':'c'*64,'verify_sha256':'d'*64}
             gate.return_value.read.return_value=(previous,'etag');read.return_value={}
             with self.assertRaisesRegex(ValueError,'PROOF_CHANGED'):runner.previous_gate({'s3':Mock()},{},'c'*64,'d'*64)

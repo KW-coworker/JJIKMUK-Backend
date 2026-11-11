@@ -4,7 +4,7 @@ from datetime import datetime,timezone
 from pathlib import Path
 from botocore.config import Config
 from connection import ACCOUNT,BUCKET,HOSTS,canonical,sha
-from bootstrap import need
+from bootstrap import need,github
 from run import clients,execute,put_once,read_object,save_local
 from maintenance import context,checked_execute
 from maintenance_gate import Gate
@@ -12,7 +12,8 @@ from maintenance_probe import drained,plan as probe_plan
 from catalog_credentials import session
 from catalog_reapply_contract import (REQUEST,OLD_RUN,SERVICE_RUN,OLD_ARCHIVE,OLD_STATE,OLD_JOURNAL,PREVIOUS,
     SERVICE_OPERATION,SERVICE_RESULT,SOURCE_SHA,SOURCE_BYTES,PHASE_SECONDS,RUNNER_SECONDS,RDS_START_BYTES,
-    validate_binding,lease_binding,dataset,RDS_RESERVE_BYTES,RESERVE_APPROVAL)
+    validate_binding,lease_binding,dataset,RDS_RESERVE_BYTES,RESERVE_APPROVAL,LAST_RUN,LAST_COMMIT,
+    LAST_RECOVERY_OPERATION,LAST_RECOVERY_RESULT,SNAPSHOT_POLLS,SNAPSHOT_BUDGET)
 from catalog_package import build,source_plan
 from catalog_document import document
 from catalog_runner import key
@@ -52,9 +53,9 @@ class Runtime:
     def command(self,binding,envelope,backup=None):
         # Check AFTER preparation/drain: credentials never extend this deadline.
         seconds=1770 if self.phase=='freeze' else PHASE_SECONDS[self.phase]+150
-        self.budget.admit(seconds+{'freeze':840,'apply':660,'recover':180}[self.phase])
+        self.budget.admit(seconds+{'freeze':SNAPSHOT_BUDGET+120,'apply':660,'recover':180}[self.phase])
         self.drain()
-        self.budget.admit(seconds+{'freeze':840,'apply':660,'recover':180}[self.phase])
+        self.budget.admit(seconds+{'freeze':SNAPSHOT_BUDGET+120,'apply':660,'recover':180}[self.phase])
         plan={'format':1,'component':'db','operation':'deploy','approved':True,
               'approval_id':'USER_SOURCE_COMPATIBILITY_AND_DB_APPLY_20261111',
               'document':document(binding,envelope,self.phase,backup)}
@@ -78,10 +79,12 @@ class Runtime:
 def previous_gate(api,ctx,work_sha,verify_sha):
     value,etag=Gate(api['s3']).read()
     need(value is not None and value['state']=='WORKING' and value['request_id']==REQUEST and
-         value['run_id']==OLD_RUN and value['commit']==PREVIOUS and value['work_sha256']==work_sha and
+         value['run_id']==LAST_RUN and value['commit']==LAST_COMMIT and value['work_sha256']==work_sha and
          value['verify_sha256']==verify_sha,'REAPPLY_PREVIOUS_GATE_CHANGED')
     proof=read_object(api['s3'],'receipts/'+SERVICE_OPERATION+'/result.json')
     need(sha(canonical(proof))==SERVICE_RESULT,'REAPPLY_SERVICE_PROOF_CHANGED')
+    recovery=read_object(api['s3'],'receipts/'+LAST_RECOVERY_OPERATION+'/result.json')
+    need(sha(canonical(recovery))==LAST_RECOVERY_RESULT,'REAPPLY_LAST_RECOVERY_PROOF_CHANGED')
     return value,etag
 
 
@@ -120,21 +123,23 @@ def freeze(runtime):
         'previous_commit':PREVIOUS,'required_bytes':RDS_RESERVE_BYTES,'source_plan_required_bytes':plan['required_bytes'],
         'reserve_approval':RESERVE_APPROVAL,
         'reapply':{'previous_run':OLD_RUN,'service_run':SERVICE_RUN,'previous_archive':OLD_ARCHIVE,
-                   'previous_state_sha256':OLD_STATE,'previous_journal_sha256':OLD_JOURNAL}}
+                   'previous_state_sha256':OLD_STATE,'previous_journal_sha256':OLD_JOURNAL,
+                   'last_recovered_run':LAST_RUN,'last_recovery_sha256':LAST_RECOVERY_RESULT}}
     validate_binding(binding)
     saved={'context':ctx,'binding':binding,'envelope':envelope}
     put_once(api['s3'],key(ctx),saved);save_local('catalog-binding.json',saved)
     previous,etag=previous_gate(api,ctx,work_sha,verify_sha)
     put_once(api['s3'],'receipts/catalog/'+ctx['run_id']+'/reapply-intent.json',
-             {'previous_gate':previous,'context':ctx,'service_operation':SERVICE_OPERATION,'service_result':SERVICE_RESULT})
+             {'previous_gate':previous,'context':ctx,'service_operation':SERVICE_OPERATION,'service_result':SERVICE_RESULT,
+              'last_recovery_operation':LAST_RECOVERY_OPERATION,'last_recovery_result':LAST_RECOVERY_RESULT})
     Gate(api['s3']).write(dict(previous,commit=ctx['commit'],run_id=ctx['run_id']),etag)
     runtime.drain()
     with runtime.monitor(binding) as monitor:
         frozen=runtime.command(binding,envelope);need(frozen['success'],'REAPPLY_FREEZE_FAILED')
-        runtime.budget.admit(720)
+        runtime.budget.admit(SNAPSHOT_BUDGET)
         runtime.progress('SNAPSHOT_WAIT',force=True)
         backup=snapshot(runtime.rds,api,ctx,frozen_epoch=frozen['report']['counts']['frozen_epoch'],guard=monitor.check,
-                        progress=runtime.progress)
+                        progress=runtime.progress,max_polls=SNAPSHOT_POLLS)
         put_once(api['s3'],'receipts/catalog/'+ctx['run_id']+'/frozen.json',{'binding':binding,'snapshot':backup})
     save_local('catalog-freeze-result.json',{'status':'FROZEN_AND_BACKUP_READY','request_id':ctx['request_id']})
 
@@ -151,6 +156,7 @@ def load(runtime):
 
 def apply(runtime):
     ctx,api=runtime.ctx,runtime.api;binding,envelope=load(runtime)
+    require_job_recovery_budget(ctx)
     frozen=read_object(api['s3'],'receipts/catalog/'+ctx['run_id']+'/frozen.json')
     need(frozen['binding']==binding,'REAPPLY_FROZEN_BINDING')
     with runtime.monitor(binding) as monitor:
@@ -166,6 +172,21 @@ def apply(runtime):
     save_local('maintenance-result.json',{'status':'VERIFIED_AWAITING_LATEST_MAIN','request_id':ctx['request_id'],
         'commit':ctx['commit'],'run_id':ctx['run_id'],'work_sha256':work_sha,'verify_sha256':verify_sha,
         'backend_commit_sha256':sha(ctx['commit'].encode())})
+
+
+def require_job_recovery_budget(ctx):
+    # GitHub's 360-minute job limit includes all phases. A longer backup wait must
+    # never use the time needed for the complete apply deadline plus recovery.
+    from connection import REPO_ID
+    run=github('actions/runs/'+ctx['run_id'])
+    need(str(run['id'])==ctx['run_id'] and run['head_sha']==ctx['commit'] and run['run_attempt']==1 and
+         run['repository']['id']==REPO_ID and run['path']=='.github/workflows/server-maintenance.yml',
+         'REAPPLY_JOB_TIME_IDENTITY')
+    started=datetime.fromisoformat(run['run_started_at'].replace('Z','+00:00'))
+    need(started.tzinfo is not None,'REAPPLY_JOB_START_TIME')
+    elapsed=time.time()-started.timestamp()
+    required=RUNNER_SECONDS['apply']+RUNNER_SECONDS['recover']+600
+    need(0<=elapsed and 360*60-elapsed>required,'REAPPLY_JOB_RECOVERY_TIME_RESERVED')
 
 
 def recover(runtime):
