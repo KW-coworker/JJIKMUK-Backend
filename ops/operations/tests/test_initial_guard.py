@@ -41,5 +41,50 @@ class InitialGuardTests(unittest.TestCase):
         self.assertEqual(value['state'],'STOP')
         with self.assertRaisesRegex(ValueError,'MONITOR_FAILED'):monitor.check()
 
+    def test_transport_read_has_exactly_one_optional_retry(self):
+        from botocore.exceptions import ConnectionClosedError
+        error=ConnectionClosedError(endpoint_url='https://synthetic.invalid')
+        def response():return {'ContentLength':600,'Body':io.BytesIO(json.dumps(self.value).encode())}
+        client=MagicMock();client.get_object.side_effect=[error,response()]
+        Guard(client,self.binding,clock=lambda:1010,read_attempts=2)()
+        self.assertEqual(client.get_object.call_count,2)
+        for attempts in (1,2):
+            client=MagicMock();client.get_object.side_effect=error
+            with self.assertRaises(ConnectionClosedError):Guard(client,self.binding,clock=lambda:1010,read_attempts=attempts)()
+            self.assertEqual(client.get_object.call_count,attempts)
+
+    def test_partial_body_is_closed_and_retry_checks_new_time(self):
+        from botocore.exceptions import ReadTimeoutError
+        class BrokenBody(io.BytesIO):
+            def read(self,*args):raise ReadTimeoutError(endpoint_url='https://synthetic.invalid')
+        broken=BrokenBody();client=MagicMock()
+        client.get_object.side_effect=[{'ContentLength':600,'Body':broken},
+            {'ContentLength':600,'Body':io.BytesIO(json.dumps(self.value).encode())}]
+        epoch=[1010]
+        def budget():
+            if broken.closed:epoch[0]=1100
+        guard=Guard(client,self.binding,clock=lambda:epoch[0],read_attempts=2,budget_check=budget)
+        with self.assertRaisesRegex(ValueError,'STALE'):guard()
+        self.assertTrue(broken.closed);self.assertIsNone(guard.cached)
+
+    def test_semantic_or_authorization_failure_never_retries(self):
+        from botocore.exceptions import ClientError
+        for value in [dict(self.value,state='STOP'),dict(self.value,request_id='d'*32),dict(self.value,minimum_bytes=0)]:
+            client=MagicMock();client.get_object.return_value={'ContentLength':600,'Body':io.BytesIO(json.dumps(value).encode())}
+            with self.assertRaises(ValueError):Guard(client,self.binding,clock=lambda:1010,read_attempts=2)()
+            client.get_object.assert_called_once()
+        client=MagicMock();client.get_object.side_effect=ClientError({'Error':{'Code':'AccessDenied'}},'GetObject')
+        with self.assertRaises(ClientError):Guard(client,self.binding,clock=lambda:1010,read_attempts=2)()
+        client.get_object.assert_called_once()
+
+    def test_phase_deadline_during_transport_failure_blocks_second_attempt(self):
+        from botocore.exceptions import ConnectionClosedError
+        client=MagicMock();client.get_object.side_effect=ConnectionClosedError(endpoint_url='https://synthetic.invalid')
+        def budget():
+            if client.get_object.call_count:raise ValueError('PHASE_DEADLINE')
+        with self.assertRaisesRegex(ValueError,'PHASE_DEADLINE'):
+            Guard(client,self.binding,clock=lambda:1010,read_attempts=2,budget_check=budget)()
+        client.get_object.assert_called_once()
+
 
 if __name__ == '__main__':unittest.main()

@@ -96,7 +96,10 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'catalog-service':
+        if os.environ.get('MAINTENANCE_MODE') == 'catalog-capacity':
+            from catalog_capacity import inspect
+            result = inspect(clients(True), ctx)
+        elif os.environ.get('MAINTENANCE_MODE') == 'catalog-service':
             from catalog_service_recovery import restore
             result = restore(clients(True), ctx)
         elif os.environ.get('MAINTENANCE_MODE') == 'catalog-state':
