@@ -96,7 +96,11 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'catalog-inspect':
+        if os.environ.get('MAINTENANCE_MODE') == 'catalog-state':
+            from catalog_state_inspection import inspect
+            result = inspect(clients(True), ctx)
+            save_local('maintenance-result.json', result)
+        elif os.environ.get('MAINTENANCE_MODE') == 'catalog-inspect':
             from catalog_recovery_inspection import inspect
             result = inspect(clients(True), ctx)
             save_local('maintenance-result.json', result)
