@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live, catalog-root-inspect, catalog-root-grow, catalog-preservation-read, product-image, product-images]
+        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live, catalog-root-inspect, catalog-root-grow, catalog-preservation-read, product-image, product-images, resume-paused-images]
         required: true
       expected_sha:
         type: string

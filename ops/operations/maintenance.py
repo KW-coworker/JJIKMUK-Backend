@@ -96,7 +96,11 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'product-images':
+        if os.environ.get('MAINTENANCE_MODE') == 'resume-paused-images':
+            from paused_images_closeout import perform as closeout
+            result = closeout(clients(True), ctx)
+            save_local('maintenance-result.json', result)
+        elif os.environ.get('MAINTENANCE_MODE') == 'product-images':
             from product_images_runner import perform as images
             result = images(ctx, os.environ['WORK_PLAN'], os.environ['WORK_SHA256'])
             save_local('maintenance-result.json', result)
