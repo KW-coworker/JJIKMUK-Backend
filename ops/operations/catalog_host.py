@@ -69,8 +69,8 @@ class Work:
             cursorclass=pymysql.cursors.DictCursor if dictionary else pymysql.cursors.Cursor)
 
     def preservation(self):
-        import pymysql
         with self.connect() as conn:
+            import pymysql
             return capture(conn,self.state['schema'],self.state['bounds'],self.guard,pymysql.cursors.SSCursor)
 
     def codec(self):
