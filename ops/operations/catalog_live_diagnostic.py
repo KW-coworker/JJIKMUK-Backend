@@ -9,12 +9,14 @@ from maintenance_gate import Gate
 RUN='42984831949'
 COMMIT='2d01af1f5f139b3c650e93f477e2f4216ccf52e2'
 REQUEST='a5291163ee0a456b85366e6075d8fce6'
+RECEIPT_SHA='9f468f36f2ad7627cf03c52a2bcd70105f1725b1d28ab8cdb8888df4c713742b'
 
 
 def document(saved,expected_sha):
-    need(re.fullmatch('[a-f0-9]{64}',expected_sha) and sha(canonical(saved))==expected_sha,'LIVE_DIAGNOSTIC_RECEIPT_CHANGED')
-    from catalog_reapply_contract import validate_binding
-    binding=saved['binding'];validate_binding(binding)
+    # This consumed run keeps its original full receipt, even as the next
+    # application contract advances. Never validate it as a fresh execution.
+    need(expected_sha==RECEIPT_SHA and sha(canonical(saved))==expected_sha,'LIVE_DIAGNOSTIC_RECEIPT_CHANGED')
+    binding=saved['binding']
     need(binding['run_id']==RUN and binding['commit']==COMMIT and binding['request_id']==REQUEST,'LIVE_DIAGNOSTIC_BINDING')
     need(type(saved['envelope']['files']) is dict and 0<len(saved['envelope']['files'])<=100,'LIVE_DIAGNOSTIC_FILES')
     stage='/opt/jjikmuk-catalog-'+binding['archive_sha256'][:16]
@@ -56,6 +58,7 @@ def read_saved(api,ctx):
     need(gate is not None and gate['state']=='WORKING' and gate['run_id']==RUN and gate['commit']==COMMIT and
          gate['request_id']==REQUEST,'LIVE_DIAGNOSTIC_GATE')
     saved=read_object(api['s3'],'receipts/catalog/'+RUN+'/binding.json')
+    need(sha(canonical(saved))==RECEIPT_SHA,'LIVE_DIAGNOSTIC_RECEIPT_CHANGED')
     need(saved['context']=={'commit':COMMIT,'run_id':RUN,'attempt':'1','request_id':REQUEST},'LIVE_DIAGNOSTIC_CONTEXT')
     return saved
 

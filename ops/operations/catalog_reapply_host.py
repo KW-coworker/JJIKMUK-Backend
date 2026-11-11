@@ -11,7 +11,7 @@ if __name__=='__main__':
     sys.path[:0]=[str(path.parent),'/opt/jjikmuk-cd/bin']
 from catalog_host import Work,phase_id
 from catalog_reapply_contract import validate_binding,dataset,lease_binding,previous_coordinator,PHASE_SECONDS,HOST_START_BYTES,SCHEMA_SHA,RDS_RESERVE_BYTES
-from catalog_reapply_previous import verify_service,original_state,previous_journal
+from catalog_reapply_previous import verify_service
 from catalog_host_support import systemctl,start_and_enroll,UNITS
 from catalog_checks import verify_recovered
 from catalog_writer import Journal,Writer
@@ -98,11 +98,12 @@ class Reapply(Work):
         require(hashlib.sha256(json.dumps(self.state['schema'],sort_keys=True,separators=(',',':')).encode()).hexdigest()==SCHEMA_SHA,
                 'REAPPLY_ORIGINAL_V21_SCHEMA_CHANGED')
         with self.connect() as conn:self.image_collations(conn)
-        previous=original_state();codec=self.codec()
+        from catalog_reapply_last import recovered_journal
+        codec=self.codec()
         try:
-            with previous_journal(previous) as journal,self.connect(dictionary=True) as conn:
+            with recovered_journal() as (_,journal,previous_dataset),self.connect(dictionary=True) as conn:
                 self.progress('VERIFY_ORIGINAL',0,self.source.meta['source_rows'])
-                result=verify_recovered(conn,self.source,journal,codec,'catalog-handoff-'+self.binding['request_id'],self.guard,
+                result=verify_recovered(conn,self.source,journal,codec,previous_dataset,self.guard,
                                        lambda stage,done,total:self.progress('VERIFY_ORIGINAL',done,total))
             require(result=={'products':1348425,'original_values_restored':True},'REAPPLY_CURRENT_VALUES_NOT_RESTORED')
         finally:codec.close()

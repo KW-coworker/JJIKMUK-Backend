@@ -217,9 +217,24 @@ class HostTests(unittest.TestCase):
     def test_changed_live_schema_is_not_adopted_as_new_baseline(self):
         import catalog_reapply_host as host
         work=host.Reapply.__new__(host.Reapply);work.state={'schema':{'changed':'column'}};work.codec=Mock()
-        with patch.object(host,'original_state') as read,self.assertRaisesRegex(ValueError,'ORIGINAL_V21_SCHEMA_CHANGED'):
+        with patch('catalog_reapply_last.recovered_journal') as read,self.assertRaisesRegex(ValueError,'ORIGINAL_V21_SCHEMA_CHANGED'):
             work.verify_previous_values()
         read.assert_not_called();work.codec.assert_not_called()
+
+    def test_full_before_values_check_uses_latest_rollback_dataset_and_journal(self):
+        from connection import canonical,sha
+        with tempfile.TemporaryDirectory() as root:
+            host,work=self.work(root,'SERVICES_FROZEN')
+            work.image_collations=Mock();work.progress=Mock()
+            latest_journal=object();latest_dataset='catalog-handoff-'+'d'*32
+            with patch.object(host,'SCHEMA_SHA',sha(canonical(work.state['schema']))),\
+                 patch('catalog_reapply_last.recovered_journal') as records,\
+                 patch.object(host,'verify_recovered',return_value={'products':1348425,'original_values_restored':True}) as verify:
+                records.return_value.__enter__.return_value=({},latest_journal,latest_dataset)
+                work.verify_previous_values()
+            self.assertIs(verify.call_args.args[2],latest_journal)
+            self.assertEqual(verify.call_args.args[4],latest_dataset)
+            work.codec.return_value.close.assert_called_once()
 
     def test_image_collation_change_fails_even_when_column_types_match(self):
         import catalog_reapply_host as host
@@ -256,6 +271,29 @@ class HostTests(unittest.TestCase):
                 with coordination.locked('db','a'*64,root=path,owner=os.geteuid(),expected_sha256='0'*64):pass
             self.assertEqual((path/'state.json').read_bytes(),before)
             self.assertEqual(list((path/'history').iterdir()),[])
+
+    def test_actual_recovery_record_has_exact_derived_parent_hash(self):
+        import hashlib,coordination
+        with tempfile.TemporaryDirectory(dir=Path.home()) as root:
+            path=Path(root)/'coord'
+            path.mkdir(mode=0o700);(path/'history').mkdir(mode=0o700)
+            (path/'host.lock').touch(mode=0o600)
+            coordination.atomic(path/'state.json',{'status':'IDLE'})
+            expected,checksum=contract.previous_apply_record()
+            with self.assertRaisesRegex(RuntimeError,'APPLY_STOPPED'):
+                with coordination.locked('db',expected['operation_id'],root=path,owner=os.geteuid()) as guard:
+                    guard.record('MUTATION_INTENT')
+                    raise RuntimeError('APPLY_STOPPED')
+            raw=(path/'state.json').read_bytes()
+            self.assertEqual(hashlib.sha256(raw).hexdigest(),checksum)
+            self.assertEqual((path/'history'/expected['operation_id']/'01.json').read_bytes(),raw)
+            operation=hashlib.sha256((contract.REQUEST+':'+contract.LAST_RUN+':recover').encode()).hexdigest()
+            with coordination.locked('db',operation,root=path,owner=os.geteuid(),recovery_sha256=checksum) as guard:
+                guard.record('MUTATION_INTENT');guard.record('ROLLED_BACK')
+            value=json.loads((path/'state.json').read_bytes())
+            contract.previous_coordinator(value)
+            value['recovery_of']='0'*64
+            with self.assertRaisesRegex(ValueError,'COORDINATOR_CHANGED'):contract.previous_coordinator(value)
 
 
 if __name__=='__main__':unittest.main()

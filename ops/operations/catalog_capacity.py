@@ -3,7 +3,7 @@ from datetime import datetime,timezone
 from connection import ACCOUNT,REGION
 from bootstrap import need
 from maintenance_gate import Gate
-from catalog_state_inspection import REQUEST,RUN
+from catalog_reapply_contract import REQUEST,LAST_RUN as RUN,RDS_RESERVE_BYTES,RDS_START_BYTES
 from initial_db_runner import aws_client,DB
 from initial_contract import DB_HOST
 from storage_metrics import observe
@@ -12,16 +12,20 @@ from storage_metrics import observe
 def report(db,metric):
     need(db.get('DBInstanceIdentifier')==DB and db.get('DBInstanceArn')==f'arn:aws:rds:{REGION}:{ACCOUNT}:db:{DB}' and
          db.get('Endpoint',{}).get('Address')==DB_HOST and db.get('Engine')=='mysql' and
-         db.get('DBInstanceStatus')=='available' and db.get('StorageEncrypted') is True,'CATALOG_CAPACITY_TARGET')
+         db.get('DBInstanceStatus') in ('available','modifying','storage-optimization') and
+         db.get('StorageEncrypted') is True,'CATALOG_CAPACITY_TARGET')
     allocated=db.get('AllocatedStorage');maximum=db.get('MaxAllocatedStorage',0)
     need(type(allocated) is int and 20<=allocated<=1000 and type(maximum) is int and 0<=maximum<=65536,'CATALOG_CAPACITY_SIZE')
     need(db.get('StorageType') in ('gp2','gp3','io1','io2'),'CATALOG_CAPACITY_STORAGE_TYPE')
     counts={'allocated_gib':allocated,'autoscale_maximum_gib':maximum,
             'pending_storage_change':int('AllocatedStorage' in db.get('PendingModifiedValues',{})),
             'free_bytes':metric['counts']['latest_bytes'],'minimum_free_bytes':metric['counts']['window_minimum_bytes'],
-            'reserve_bytes':5*1024**3,'sample_epoch':metric['counts']['sample_epoch']}
-    return {'status':'CATALOG_CAPACITY_OBSERVED','checks':{'read_only':True,'fresh_metric':True},'counts':counts,
-            'codes':['STORAGE_'+db['StorageType'].upper(),'NO_STORAGE_CHANGE_OR_DB_CONNECTION']}
+            'reserve_bytes':RDS_RESERVE_BYTES,'starting_required_bytes':RDS_START_BYTES,
+            'sample_epoch':metric['counts']['sample_epoch']}
+    return {'status':'CATALOG_CAPACITY_OBSERVED','checks':{'read_only':True,'fresh_metric':True,
+            'database_available':db['DBInstanceStatus']=='available'},'counts':counts,
+            'codes':['STORAGE_'+db['StorageType'].upper(),'RDS_STATUS_'+db['DBInstanceStatus'].upper(),
+                     'NO_STORAGE_CHANGE_OR_DB_CONNECTION']}
 
 
 def inspect(api,ctx):

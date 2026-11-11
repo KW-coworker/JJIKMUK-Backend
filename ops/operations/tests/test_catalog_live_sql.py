@@ -54,12 +54,15 @@ class LiveSqlTests(unittest.TestCase):
         value=binding();value.update(run_id=live.RUN,commit=live.COMMIT)
         saved={'binding':value,'envelope':{'files':{'bin/catalog_host.py':{'bytes':1,'sha256':'a'*64}}}}
         digest=live.sha(live.canonical(saved))
-        doc=live.document(saved,digest);command=doc['mainSteps'][0]['inputs']['runCommand'][0]
+        with patch.object(live,'RECEIPT_SHA',digest):doc=live.document(saved,digest)
+        command=doc['mainSteps'][0]['inputs']['runCommand'][0]
         compile(command.split('\n',1)[1].rsplit('\nJJIKMUK_LIVE_SQL',1)[0],'<fixed-read>','exec')
         self.assertEqual(doc['mainSteps'][0]['inputs']['timeoutSeconds'],'50')
         value['run_id']='987654321'
         with self.assertRaisesRegex(ValueError,'LIVE_DIAGNOSTIC_RECEIPT_CHANGED'):live.document(saved,digest)
-        with self.assertRaisesRegex(ValueError,'LIVE_DIAGNOSTIC_BINDING'):live.document(saved,live.sha(live.canonical(saved)))
+        changed=live.sha(live.canonical(saved))
+        with patch.object(live,'RECEIPT_SHA',changed),self.assertRaisesRegex(ValueError,'LIVE_DIAGNOSTIC_BINDING'):
+            live.document(saved,changed)
 
     def test_generated_script_emits_valid_json_for_success_and_failure(self):
         import catalog_live_diagnostic as live
@@ -67,7 +70,9 @@ class LiveSqlTests(unittest.TestCase):
         from bootstrap import need
         value=binding();value.update(run_id=live.RUN,commit=live.COMMIT)
         saved={'binding':value,'envelope':{'files':{'bin/catalog_host.py':{'bytes':1,'sha256':'a'*64}}}}
-        command=live.document(saved,live.sha(live.canonical(saved)))['mainSteps'][0]['inputs']['runCommand'][0]
+        digest=live.sha(live.canonical(saved))
+        with patch.object(live,'RECEIPT_SHA',digest):
+            command=live.document(saved,digest)['mainSteps'][0]['inputs']['runCommand'][0]
         code=command.split('\n',1)[1].rsplit('\nJJIKMUK_LIVE_SQL',1)[0]
         original_flags=__import__('sys').flags
         flags=types.SimpleNamespace(**{k:getattr(original_flags,k) for k in dir(original_flags) if not k.startswith('_')})
