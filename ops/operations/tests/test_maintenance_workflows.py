@@ -21,7 +21,7 @@ class MaintenanceWorkflowTests(unittest.TestCase):
     def test_readonly_collection_and_resume_use_fixed_workflows_without_new_credentials(self):
         root = Path(__file__).resolve().parents[3]
         maintenance = (root/'.github/workflows/server-maintenance.yml').read_text(encoding='utf-8')
-        self.assertIn('options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live, catalog-root-inspect, catalog-root-grow, catalog-preservation-read]', maintenance)
+        self.assertIn('options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live, catalog-root-inspect, catalog-root-grow, catalog-preservation-read, product-image]', maintenance)
         self.assertIn('environment: production', maintenance)
         self.assertIn('role/JjikmukOperationsExecute', maintenance)
         self.assertNotIn('secrets.', maintenance)
