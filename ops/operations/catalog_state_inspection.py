@@ -36,6 +36,7 @@ def log_codes(text):
         'DATABASE_CONNECTION': r'JDBCConnectionException|CommunicationsException|HikariPool.*Exception',
         'BEAN_CREATION': r'BeanCreationException|UnsatisfiedDependencyException',
         'CLASS_NOT_FOUND': r'ClassNotFoundException|NoClassDefFoundError',
+        'JAR_ACCESS': r'Unable to access jarfile|Error opening zip file|Unable to access jar',
         'OUT_OF_MEMORY': r'OutOfMemoryError|oom-kill|OOMKilled',
         'ADDRESS_IN_USE': r'Address already in use|Port .* already in use',
         'RUNTIME_TIMEOUT': r'runtime time limit|Result: timeout|result .timeout.|Failed with result .timeout.',
@@ -115,6 +116,15 @@ try:
         counts['pointer_previous'] = int(current == work.host.release_path(work.state['previous']))
         counts['pointer_candidate'] = int(current == work.host.release_path(work.state['candidate_release']))
         counts['protected_unchanged'] = int(work.host.protected() == work.state['previous']['protected'])
+        require(work.host.config['db_user'] == 'ubuntu', 'STATE_INSPECTION_SERVICE_USER')
+        for label, release in [('previous',work.state['previous']),('candidate',work.state['candidate_release'])]:
+            folder = work.host.release_path(release)
+            secure(folder);secure(folder/'backend.jar')
+            counts[label+'_directory_mode'] = folder.stat().st_mode & 0o777
+            counts[label+'_jar_mode'] = (folder/'backend.jar').stat().st_mode & 0o777
+            readable = subprocess.run(['/usr/sbin/runuser','-u','ubuntu','--','/usr/bin/test','-r',str(folder/'backend.jar')],capture_output=True,timeout=5)
+            require(readable.returncode in (0,1), 'STATE_INSPECTION_ACCESS_CHECK')
+            counts[label+'_jar_service_readable'] = int(readable.returncode == 0)
         journal_path = stage/'before-values.sqlite'
         secure(journal_path)
         hashes['journal_sha256'] = digest(journal_path)

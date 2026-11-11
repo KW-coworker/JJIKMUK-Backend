@@ -100,6 +100,7 @@ class StateInspectionTests(unittest.TestCase):
         self.assertNotIn('SECRET',json.dumps(result))
         self.assertEqual(helpers()['log_codes'](secret),[])
         self.assertIn('RUNTIME_TIMEOUT',helpers()['log_codes']('Runtime time limit exceeded. Failed with result \'timeout\'.'))
+        self.assertEqual(helpers()['log_codes']('Error: Unable to access jarfile /private/path'),['JAR_ACCESS'])
 
     @unittest.skipUnless(os.name=='posix','Linux signal deadline')
     def test_deadline_cannot_be_swallowed_by_exception_handlers(self):
