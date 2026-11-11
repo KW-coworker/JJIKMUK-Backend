@@ -119,6 +119,10 @@ if __name__ == '__main__':
                 reporter.emit('FAILED', error_code=safe_error(error), force=True, terminal='failure')
                 save_local('catalog-inspect-failure.json', {'code':safe_error(error)})
                 raise
+        elif os.environ.get('MAINTENANCE_MODE') in ('catalog-root-inspect', 'catalog-root-grow'):
+            from catalog_root_space import execute_under_hold
+            result = execute_under_hold(clients(True), ctx, os.environ['MAINTENANCE_MODE'].removeprefix('catalog-root-'))
+            save_local('maintenance-result.json', result)
         elif os.environ.get('MAINTENANCE_MODE') == 'catalog-capacity':
             from catalog_capacity import inspect
             result = inspect(clients(True), ctx)
