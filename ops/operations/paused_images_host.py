@@ -52,7 +52,24 @@ def read(path, limit):
     return raw
 
 
+def observed_owner(user, uid, process_uid):
+    require(bool(user) and uid != 0 and uid == process_uid, 'CHATBOT_NONROOT_IDENTITY')
+    return uid
+
+
+def rag_reference(report, name, value):
+    legacy = '/var/lib/food-chatbot/integration-20261015/chroma-github-v2-20261102'
+    # Preserve historical plan/parser hashes. Report this previously documented
+    # exact path by a fixed flag and digest rather than expanding the allowlist.
+    if name == 'rag_index' and value == legacy:
+        report['counts']['chatbot_legacy_rag_index'] = 1
+        report['hashes']['chatbot_rag_index_path'] = hashlib.sha256(value.encode()).hexdigest()
+    else:
+        report['paths']['chatbot.' + name] = value
+
+
 def chatbot_observation(report, host):
+    import pwd
     def unit(field):
         result = subprocess.run(['/usr/bin/systemctl', 'show', 'food-chatbot-team.service',
                                  '--property=' + field, '--value'], capture_output=True, timeout=5)
@@ -60,6 +77,9 @@ def chatbot_observation(report, host):
         return result.stdout.decode().strip()
     pid = unit('MainPID'); require(re.fullmatch('[1-9][0-9]{0,8}', pid), 'CHATBOT_PID')
     identity = unit('InvocationID')
+    user = unit('User')
+    uid = pwd.getpwnam(user).pw_uid
+    report['counts']['chatbot_uid'] = observed_owner(user, uid, Path('/proc/' + pid).stat().st_uid)
     work = Path(unit('WorkingDirectory'))
     require(str(work).startswith(('/opt/jjikmuk-github/releases/', '/opt/food-chatbot/releases/',
                                  '/opt/jjikmuk-chatbot/releases/')), 'CHATBOT_SOURCE_ROOT')
@@ -111,14 +131,14 @@ def chatbot_observation(report, host):
         value = Path(env.get(key, str(default)))
         if not re.fullmatch(r'/[A-Za-z0-9_.@+/-]{1,239}', str(value)):
             unresolved = True; continue
-        paths['chatbot.' + name] = str(value)
+        rag_reference(report, name, str(value))
         report['counts']['chatbot_' + name + '_present'] = int(value.is_dir())
         report['counts']['backend_protects_' + name] = int(str(value) in host.config['protected_paths'])
     report['counts']['chatbot_rag_paths_resolved'] = int(not unresolved)
     report['counts']['chatbot_cd_config_present'] = int(Path('/etc/jjikmuk-chatbot-cd/config.json').exists())
     report['counts']['chatbot_cd_baseline_present'] = int(Path('/opt/jjikmuk-chatbot/baseline.json').exists())
     report['counts']['host_free_bytes'] = shutil.disk_usage('/').free
-    require(unit('ActiveState') == 'active' and unit('User') == 'ubuntu'
+    require(unit('ActiveState') == 'active' and unit('User') == user
             and unit('InvocationID') == identity and unit('MainPID') == pid, 'CHATBOT_CHANGED_DURING_READ')
 
 
