@@ -74,6 +74,24 @@ class CloseoutTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
+    def test_service_identity_uses_existing_nonroot_account(self):
+        self.assertEqual(host.observed_owner('food-chatbot', 1001, 1001), 1001)
+        self.assertEqual(host.observed_owner('ubuntu', 1000, 1000), 1000)
+        for args in [('root', 0, 0), ('food-chatbot', 1001, 1000), ('', 1001, 1001)]:
+            with self.assertRaisesRegex(ValueError, 'NONROOT_IDENTITY'):
+                host.observed_owner(*args)
+
+    def test_legacy_rag_path_uses_fixed_flag_without_widening_public_path_allowlist(self):
+        path = '/var/lib/food-chatbot/integration-20261015/chroma-github-v2-20261102'
+        report = {'status': 'VERIFIED', 'hashes': {}, 'counts': {}, 'paths': {}}
+        host.rag_reference(report, 'rag_index', path)
+        self.assertEqual(report['counts']['chatbot_legacy_rag_index'], 1)
+        self.assertEqual(report['hashes']['chatbot_rag_index_path'], sha(path.encode()))
+        safe_report(json.dumps(report))
+        host.rag_reference(report, 'rag_index', '/var/lib/private')
+        with self.assertRaises(ValueError):
+            safe_report(json.dumps(report))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name); (self.root / 'slices').mkdir()

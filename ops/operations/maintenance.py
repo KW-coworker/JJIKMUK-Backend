@@ -96,7 +96,11 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'resume-paused-images':
+        if os.environ.get('MAINTENANCE_MODE') == 'chatbot-under-hold':
+            from chatbot_under_hold import perform as chatbot_transition
+            result = chatbot_transition(clients(True), ctx, os.environ['WORK_PLAN'], os.environ['WORK_SHA256'])
+            save_local('maintenance-result.json', result)
+        elif os.environ.get('MAINTENANCE_MODE') == 'resume-paused-images':
             from paused_images_closeout import perform as closeout
             result = closeout(clients(True), ctx)
             save_local('maintenance-result.json', result)
