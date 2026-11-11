@@ -2,6 +2,7 @@
 import hashlib
 import json
 import re
+from catalog_prewrite_retry import RUN as PREWRITE_RUN,RECOVERY_RESULT as PREWRITE_RECOVERY_RESULT,coordinator as prewrite_coordinator
 
 REQUEST='a5291163ee0a456b85366e6075d8fce6'
 OLD_RUN='42942707829'
@@ -41,15 +42,13 @@ def need(value,code):
 
 
 def dataset(request,run):
-    need(request==REQUEST and re.fullmatch('[1-9][0-9]{0,19}',run) and run not in (OLD_RUN,SERVICE_RUN,LAST_RUN),
+    need(request==REQUEST and re.fullmatch('[1-9][0-9]{0,19}',run) and run not in (OLD_RUN,SERVICE_RUN,LAST_RUN,PREWRITE_RUN),
          'REAPPLY_FRESH_EXECUTION_REQUIRED')
     return 'catalog-handoff-'+hashlib.sha256((request+':'+run).encode()).hexdigest()[:32]
 
 
 def previous_coordinator(value):
-    operation=hashlib.sha256((REQUEST+':'+LAST_RUN+':recover').encode()).hexdigest()
-    need(value=={'status':'ROLLED_BACK','component':'db','operation_id':operation,
-                 'recovery_of':previous_apply_record()[1]},
+    need(value==prewrite_coordinator(),
          'REAPPLY_LAST_RECOVERY_COORDINATOR_CHANGED')
 
 
@@ -64,7 +63,8 @@ def previous_apply_record():
 def validate_binding(binding):
     need(binding.get('reapply')=={'previous_run':OLD_RUN,'service_run':SERVICE_RUN,'previous_archive':OLD_ARCHIVE,
          'previous_state_sha256':OLD_STATE,'previous_journal_sha256':OLD_JOURNAL,
-         'last_recovered_run':LAST_RUN,'last_recovery_sha256':LAST_RECOVERY_RESULT},'REAPPLY_BINDING')
+         'last_recovered_run':LAST_RUN,'last_recovery_sha256':LAST_RECOVERY_RESULT,
+         'prewrite_run':PREWRITE_RUN,'prewrite_recovery_sha256':PREWRITE_RECOVERY_RESULT},'REAPPLY_BINDING')
     need(binding['previous_commit']==PREVIOUS and binding['source_sha256']==SOURCE_SHA and
          binding['source_bytes']==SOURCE_BYTES and binding['required_bytes']==RDS_RESERVE_BYTES,'REAPPLY_SOURCE_OR_PREVIOUS')
     need(binding.get('reserve_approval')==RESERVE_APPROVAL and binding.get('source_plan_required_bytes')==5*1024**3,

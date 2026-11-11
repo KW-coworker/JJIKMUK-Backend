@@ -13,7 +13,7 @@ RECOVERY = 'a748da85fc03bc4830c3bd0f605b8d8360207a4efed5ebe05436818169edd891'
 RECOVERY_SHA = 'f51733edeba99ef400ff4c55ad072abeea339637b7e5643a228d39a59542f73c'
 
 HOST_SCRIPT = r'''
-import fcntl,hashlib,json,os,shutil,signal,subprocess,sys
+import fcntl,hashlib,json,os,re,shutil,signal,subprocess,sys
 from pathlib import Path
 sys.dont_write_bytecode=True
 sys.path.insert(0,'/opt/jjikmuk-cd/bin')
@@ -28,20 +28,30 @@ def expected_coordinator(binding):
  return {'status':'ROLLED_BACK','component':'db','operation_id':phase_id('recover'),
          'recovery_of':hashlib.sha256(json.dumps(previous,sort_keys=True).encode()).hexdigest()}
 def history_counts(conn,bound):
+ global read_stage
  require(type(bound) is int and 0<bound<2**63,'PRESERVATION_READ_HISTORY_BOUND')
  with conn.cursor() as cur:
-  cur.execute('SET SESSION MAX_EXECUTION_TIME=60000')
+  read_stage='QUERY_SETUP';cur.execute('SET SESSION MAX_EXECUTION_TIME=60000')
   cur.execute('START TRANSACTION READ ONLY')
-  cur.execute('SELECT COUNT(*),COALESCE(MIN(id),0),COALESCE(MAX(id),0) FROM product_attribute_snapshots WHERE id<=%s',(bound,))
+  read_stage='HISTORY_COUNT'
+  cur.execute('SELECT COUNT(*),COALESCE(MIN(id),0),COALESCE(MAX(id),0) FROM product_attribute_snapshots FORCE INDEX (idx_attribute_product) WHERE id<=%s',(bound,))
   count,low,high=cur.fetchone()
   require(all(type(n) is int and 0<=n<2**63 for n in (count,low,high)) and
           ((count==0 and low==high==0) or (0<count<=bound and 0<low<=high<=bound)),
           'PRESERVATION_READ_COUNT')
   conn.rollback()
   return count,low,high
+def error_codes(error,stage):
+ require(stage in {'RUNTIME','STATE','CONNECT','QUERY_SETUP','HISTORY_COUNT','FINAL_VERIFY'},'PRESERVATION_READ_ERROR_STAGE')
+ code=str(error) if isinstance(error,ValueError) and re.fullmatch('[A-Z][A-Z0-9_]{0,79}',str(error)) else type(error).__name__.upper()
+ result=['READ_STAGE_'+stage,code if re.fullmatch('[A-Z][A-Z0-9_]{0,79}',code) else 'UNKNOWN_ERROR']
+ if type(error).__module__.startswith('pymysql.') and error.args and type(error.args[0]) is int and 1<=error.args[0]<=65535:
+  result.append('MYSQL_'+str(error.args[0]))
+ return result
 class ReadDeadline(BaseException):pass
 def alarm(*unused):raise ReadDeadline()
 signal.signal(signal.SIGALRM,alarm);signal.alarm(90)
+read_stage='RUNTIME'
 try:
  require(os.geteuid()==0 and sys.flags.isolated and sys.flags.no_site,'PRESERVATION_READ_RUNTIME')
  stage=Path('/opt/jjikmuk-catalog-'+binding['archive_sha256'][:16]);secure(stage)
@@ -61,7 +71,7 @@ try:
   from catalog_host import Work
   from catalog_host_support import chatbot_state
   from catalog_progress import read_fixed,identity
-  work=Work(stage,binding);work.load()
+  read_stage='STATE';work=Work(stage,binding);work.load()
   raw_state=(stage/'state.json').read_bytes();state=work.state
   require(state['status']=='RECOVERED' and state['binding']==binding and
           state['previous']==work.host.baseline,'PRESERVATION_READ_STATE')
@@ -74,7 +84,11 @@ try:
   shapes=projection(state['schema']);tables=sorted(shapes)
   require('product_attribute_snapshots' in tables,'PRESERVATION_READ_HISTORY_TABLE')
   bound=state['bounds']['snapshot_id']
+  require([r[4] for r in state['schema']['indexes'] if r[0]=='product_attribute_snapshots' and r[1]=='idx_attribute_product']==['product_id','id'],
+          'PRESERVATION_READ_COVERING_INDEX')
+  read_stage='CONNECT'
   with work.connect() as conn:count,low,high=history_counts(conn,bound)
+  read_stage='FINAL_VERIFY'
   require(raw_state==(stage/'state.json').read_bytes() and raw_coord==(ROOT/'state.json').read_bytes(),
           'PRESERVATION_READ_RECORD_CHANGED')
   require(work.host.identity()==before_identity and chatbot_state()==before_chat and
@@ -92,9 +106,7 @@ try:
     'codes':['FROZEN_PROGRESS_'+progress['stage'],'FROZEN_ERROR_'+(progress['error_code'] or 'NONE')]}
   print(json.dumps(report))
 except BaseException as error:
- import re
- code=str(error) if isinstance(error,ValueError) and re.fullmatch('[A-Z][A-Z0-9_]{0,79}',str(error)) else type(error).__name__.upper()
- print(json.dumps({'status':'STOPPED','codes':[code]}));sys.exit(1)
+ print(json.dumps({'status':'STOPPED','codes':error_codes(error,read_stage)}));sys.exit(1)
 '''
 
 

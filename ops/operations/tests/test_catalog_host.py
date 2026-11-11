@@ -44,34 +44,51 @@ class HostTests(unittest.TestCase):
         return work
 
     def test_preservation_loads_isolated_driver_before_import(self):
-        from contextlib import contextmanager
         work=self.module.Work.__new__(self.module.Work)
         driver=SimpleNamespace(cursors=SimpleNamespace(SSCursor=object()))
-        connection=object()
-        @contextmanager
+        connection=SimpleNamespace(open=True,close=Mock())
         def connect():
             sys.modules['pymysql']=driver
-            yield connection
+            return connection
         work.connect=connect;work.state={'schema':{},'bounds':{}};work.guard=Mock()
         with patch.dict(sys.modules,{'pymysql':None}),patch.object(self.module,'capture',return_value={'verified':True}) as capture:
             self.assertEqual(work.preservation(),{'verified':True})
             self.assertIs(capture.call_args.args[0],connection)
         self.assertIs(capture.call_args.args[-2],driver.cursors.SSCursor)
         self.assertEqual(capture.call_args.args[-1],work.progress)
+        connection.close.assert_called_once()
+
+    def test_streaming_failure_preserves_original_error_without_double_close(self):
+        class Connection:
+            open=True
+            closed=0
+            def __enter__(self):return self
+            def __exit__(self,*args):self.close()
+            def close(self):
+                self.closed+=1
+                if not self.open:raise RuntimeError('Already closed')
+                self.open=False
+        conn=Connection();work=self.module.Work.__new__(self.module.Work)
+        work.connect=lambda:conn;work.state={'schema':{},'bounds':{}};work.guard=Mock()
+        def fail(*unused):
+            conn.close()
+            raise ValueError('CATALOG_PRESERVATION_ROW_BOUND')
+        driver=SimpleNamespace(cursors=SimpleNamespace(SSCursor=object()))
+        with patch.dict(sys.modules,pymysql=driver),patch.object(self.module,'capture',side_effect=fail):
+            with self.assertRaisesRegex(ValueError,'CATALOG_PRESERVATION_ROW_BOUND'):work.preservation()
+        self.assertEqual(conn.closed,1)
 
     def test_preservation_is_first_db_entry_in_fresh_isolated_process(self):
         ops=Path(self.module.__file__).parent
         code=f'''
 import sys
-from contextlib import contextmanager
 from types import SimpleNamespace
 sys.path[:0]=[{str(ops)!r},{str(ops.parent/'cd')!r}]
 import catalog_host
 assert 'pymysql' not in sys.modules
-@contextmanager
 def connect():
  sys.modules['pymysql']=SimpleNamespace(cursors=SimpleNamespace(SSCursor=object()))
- yield object()
+ return SimpleNamespace(open=True,close=lambda:None)
 work=catalog_host.Work.__new__(catalog_host.Work)
 work.connect=connect;work.state={{'schema':{{}},'bounds':{{}}}};work.guard=lambda:None
 catalog_host.capture=lambda *args:{{'verified':True}}

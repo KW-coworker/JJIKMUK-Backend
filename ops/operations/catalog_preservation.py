@@ -7,6 +7,16 @@ from catalog_writer import MUTABLE
 from initial_preservation import projection, row_hash_sql
 
 
+def row_limit(table,bounds):
+    if table=='product_attribute_snapshots':
+        bound=bounds['snapshot_id']
+        need(type(bound) is int and 0<=bound<2**63,'CATALOG_PRESERVATION_HISTORY_BOUND')
+        # The query includes every original history row through this frozen PK.
+        # Appended apply/recovery history can legitimately exceed three million.
+        return bound
+    return 3_000_000
+
+
 def capture(conn, metadata, bounds, guard, cursor_class,progress=lambda *args:None):
     shapes=projection(metadata)
     shapes['products']['columns']=[n for n in shapes['products']['columns'] if n not in (*MUTABLE,'attribute_snapshot_id')]
@@ -21,6 +31,7 @@ def capture(conn, metadata, bounds, guard, cursor_class,progress=lambda *args:No
             if table=='product_attribute_snapshots':
                 sql=sql.replace(' ORDER BY ',' WHERE `id`<=%s ORDER BY ')
                 params=(bounds['snapshot_id'],)
+            limit=row_limit(table,bounds)
             cur=conn.cursor(cursor_class);count=0;digest=hashlib.sha256()
             try:
                 cur.execute(sql,params)
@@ -29,9 +40,10 @@ def capture(conn, metadata, bounds, guard, cursor_class,progress=lambda *args:No
                     for row in rows:
                         need(len(row)==1 and re.fullmatch('[a-f0-9]{64}',row[0]),'CATALOG_PRESERVATION_ROW')
                         digest.update(row[0].encode('ascii'))
-                    count+=len(rows);need(count<=3_000_000,'CATALOG_PRESERVATION_ROW_BOUND')
+                    count+=len(rows);need(count<=limit,'CATALOG_PRESERVATION_ROW_BOUND')
             except BaseException:
-                conn.close();cur.connection=None
+                if conn.open:conn.close()
+                cur.connection=None
                 if getattr(cur,'_result',None) is not None:cur._result.unbuffered_active=False
                 raise
             else:cur.close()

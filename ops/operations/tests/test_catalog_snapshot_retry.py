@@ -29,12 +29,13 @@ class SnapshotRetryTests(unittest.TestCase):
         receipt=stored['receipts/'+wrapper['operation_id']+'/result.json']
         self.assertEqual(receipt,raw)
         self.assertNotEqual(sha(canonical(receipt)),sha(canonical(wrapper)))
-        gate={'state':'WORKING','request_id':contract.REQUEST,'run_id':contract.LAST_RUN,'commit':contract.LAST_COMMIT,
+        gate={'state':'WORKING','request_id':contract.REQUEST,'run_id':runner.prewrite.RUN,'commit':runner.prewrite.COMMIT,
               'work_sha256':'e'*64,'verify_sha256':'f'*64}
-        oldproof={'fixture':'old service proof'}
+        oldproof={'fixture':'old service proof'};prewriteproof={'fixture':'prewrite service recovery proof'}
         for checksum,accepted in ((sha(canonical(receipt)),True),(sha(canonical(wrapper)),False)):
-            with patch.object(runner,'Gate') as holder,patch.object(runner,'read_object',side_effect=[oldproof,receipt]),\
-                 patch.object(runner,'SERVICE_RESULT',sha(canonical(oldproof))),patch.object(runner,'LAST_RECOVERY_RESULT',checksum):
+            with patch.object(runner,'Gate') as holder,patch.object(runner,'read_object',side_effect=[oldproof,receipt,prewriteproof]),\
+                 patch.object(runner,'SERVICE_RESULT',sha(canonical(oldproof))),patch.object(runner,'LAST_RECOVERY_RESULT',checksum),\
+                 patch.object(runner.prewrite,'RECOVERY_RESULT',sha(canonical(prewriteproof))):
                 holder.return_value.read.return_value=(gate,'etag')
                 if accepted:self.assertEqual(runner.previous_gate(api,{},'e'*64,'f'*64),(gate,'etag'))
                 else:
@@ -77,20 +78,20 @@ class SnapshotRetryTests(unittest.TestCase):
         runtime.command.assert_not_called();runtime.monitor.assert_not_called();read.assert_not_called()
 
     def test_only_last_recovered_gate_and_receipt_admit_new_run(self):
-        current={'state':'WORKING','request_id':contract.REQUEST,'run_id':contract.LAST_RUN,'commit':contract.LAST_COMMIT,
+        current={'state':'WORKING','request_id':contract.REQUEST,'run_id':runner.prewrite.RUN,'commit':runner.prewrite.COMMIT,
                  'work_sha256':'c'*64,'verify_sha256':'d'*64}
-        oldproof={'fixture':'old service proof'};lastproof={'fixture':'last recovery proof'}
-        with patch.object(runner,'Gate') as gate,patch.object(runner,'read_object',side_effect=[oldproof,lastproof]),\
-             patch.object(runner,'SERVICE_RESULT',sha(canonical(oldproof))),patch.object(runner,'LAST_RECOVERY_RESULT',sha(canonical(lastproof))):
+        oldproof={'fixture':'old service proof'};lastproof={'fixture':'last recovery proof'};prewriteproof={'fixture':'prewrite recovery proof'}
+        with patch.object(runner,'Gate') as gate,patch.object(runner,'read_object',side_effect=[oldproof,lastproof,prewriteproof]),\
+             patch.object(runner,'SERVICE_RESULT',sha(canonical(oldproof))),patch.object(runner,'LAST_RECOVERY_RESULT',sha(canonical(lastproof))),\
+             patch.object(runner.prewrite,'RECOVERY_RESULT',sha(canonical(prewriteproof))):
             gate.return_value.read.return_value=(current,'etag')
             self.assertEqual(runner.previous_gate({'s3':Mock()},{},'c'*64,'d'*64),(current,'etag'))
-        for field,value in [('run_id',contract.OLD_RUN),('commit',contract.PREVIOUS),('state','OPEN')]:
+        for field,value in [('run_id',contract.OLD_RUN),('run_id',contract.LAST_RUN),('commit',contract.PREVIOUS),('state','OPEN')]:
             with patch.object(runner,'Gate') as gate,patch.object(runner,'read_object') as read:
                 gate.return_value.read.return_value=(dict(current,**{field:value}),'etag')
                 with self.assertRaisesRegex(ValueError,'GATE_CHANGED'):runner.previous_gate({'s3':Mock()},{},'c'*64,'d'*64)
                 read.assert_not_called()
-        recovered={'status':'ROLLED_BACK','component':'db','operation_id':sha((contract.REQUEST+':'+contract.LAST_RUN+':recover').encode()),
-                   'recovery_of':contract.previous_apply_record()[1]}
+        recovered=runner.prewrite.coordinator()
         contract.previous_coordinator(recovered)
         for value in (dict(recovered,status='SUCCEEDED'),dict(recovered,recovery_of='unexpected'),dict(recovered,operation_id='0'*64)):
             with self.assertRaisesRegex(ValueError,'COORDINATOR_CHANGED'):contract.previous_coordinator(value)

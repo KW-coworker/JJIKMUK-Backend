@@ -2,6 +2,7 @@ import ast
 import copy
 import hashlib
 import json
+import re
 import unittest
 from unittest.mock import MagicMock, patch
 import catalog_preservation_read as read
@@ -53,7 +54,7 @@ class PreservationReadTests(unittest.TestCase):
         self.assertEqual(self.reader()(conn,4000000),(3000001,1,4000000))
         self.assertEqual([c.args for c in cur.execute.call_args_list],[
             ('SET SESSION MAX_EXECUTION_TIME=60000',),('START TRANSACTION READ ONLY',),
-            ('SELECT COUNT(*),COALESCE(MIN(id),0),COALESCE(MAX(id),0) FROM product_attribute_snapshots WHERE id<=%s',(4000000,))])
+            ('SELECT COUNT(*),COALESCE(MIN(id),0),COALESCE(MAX(id),0) FROM product_attribute_snapshots FORCE INDEX (idx_attribute_product) WHERE id<=%s',(4000000,))])
         conn.rollback.assert_called_once();conn.commit.assert_not_called();conn.close.assert_not_called()
 
     def test_bad_counts_and_out_of_bound_ids_are_rejected(self):
@@ -68,6 +69,18 @@ class PreservationReadTests(unittest.TestCase):
         for bound in (0,-1,True,'10',2**63):
             with self.assertRaisesRegex(ValueError,'HISTORY_BOUND'):self.reader()(conn,bound)
         conn.cursor.assert_not_called()
+
+    def test_failure_keeps_numeric_mysql_code_and_stage_but_never_message(self):
+        function=next(n for n in ast.parse(read.HOST_SCRIPT).body if isinstance(n,ast.FunctionDef) and n.name=='error_codes')
+        env={'require':need,'re':re}
+        exec(compile(ast.Module(body=[function],type_ignores=[]),'<errors>','exec'),env)
+        Error=type('OperationalError',(Exception,),{'__module__':'pymysql.err'})
+        result=env['error_codes'](Error(3024,'PRIVATE SQL PASSWORD'),'HISTORY_COUNT')
+        self.assertEqual(result,['READ_STAGE_HISTORY_COUNT','OPERATIONALERROR','MYSQL_3024'])
+        self.assertNotIn('PRIVATE',json.dumps(result))
+        for args in [('PRIVATE',),(True,),(0,),(65536,)]:
+            self.assertEqual(len(env['error_codes'](Error(*args),'CONNECT')),2)
+        with self.assertRaisesRegex(ValueError,'ERROR_STAGE'):env['error_codes'](Error(3024),'PRIVATE')
 
     def test_changed_gate_or_recovery_prevents_ssm_execution(self):
         ctx={'request_id':read.REQUEST};api={'s3':MagicMock()}

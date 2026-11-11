@@ -75,9 +75,14 @@ class Work:
 
     def preservation(self):
         self.progress('PRESERVATION',0,None)
-        with self.connect() as conn:
+        conn=self.connect()
+        try:
             import pymysql
             return capture(conn,self.state['schema'],self.state['bounds'],self.guard,pymysql.cursors.SSCursor,self.progress)
+        finally:
+            # capture closes a failed streaming query without draining it. PyMySQL
+            # __exit__ closes again and would hide the original error as Already closed.
+            if conn.open:conn.close()
 
     def codec(self):
         return Codec(['/usr/bin/java','-Xms32m','-Xmx256m','-cp',str(self.stage/'classes')+':'+str(self.stage/'lib/*')+':'+str(self.stage/'bin/java'),'CatalogCodec'],guard=self.guard)

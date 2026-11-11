@@ -4,7 +4,8 @@ from connection import ACCOUNT,REGION,HOSTS
 import re
 from bootstrap import need
 from maintenance_gate import Gate
-from catalog_reapply_contract import REQUEST,LAST_RUN as RUN,RDS_RESERVE_BYTES,RDS_START_BYTES
+from catalog_reapply_contract import REQUEST,RDS_RESERVE_BYTES,RDS_START_BYTES
+from catalog_prewrite_retry import RUN
 from initial_db_runner import aws_client,DB
 from initial_contract import DB_HOST
 from storage_metrics import observe
