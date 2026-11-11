@@ -96,7 +96,11 @@ def collect_state(api, ctx):
 if __name__ == '__main__':
     try:
         ctx = context()
-        if os.environ.get('MAINTENANCE_MODE') == 'catalog-live-meta':
+        if os.environ.get('MAINTENANCE_MODE') == 'catalog-preservation-read':
+            from catalog_preservation_read import inspect
+            result = inspect(clients(True), ctx)
+            save_local('maintenance-result.json', result)
+        elif os.environ.get('MAINTENANCE_MODE') == 'catalog-live-meta':
             from catalog_live_diagnostic import metadata
             result = metadata(clients(True), ctx)
             save_local('maintenance-result.json', result)
