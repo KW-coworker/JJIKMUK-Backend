@@ -92,10 +92,18 @@ class Writer:
             cur.execute('SELECT COUNT(*) AS n FROM product_attribute_snapshots WHERE dataset_version IN (%s,%s)',
                         (self.dataset, self.dataset+'-rollback'))
             need(cur.fetchone()['n'] == 0, 'CATALOG_DATASET_ALREADY_PRESENT')
-            columns = ','.join('`'+k+'`' for k in ('product_id','barcode',*MUTABLE,'attribute_snapshot_id'))
-            cur.execute('CREATE TEMPORARY TABLE jjikmuk_catalog_batch ENGINE=InnoDB AS SELECT '+columns+' FROM products WHERE 1=0')
-            cur.execute('ALTER TABLE jjikmuk_catalog_batch ADD PRIMARY KEY(product_id)')
         self.connection.commit()
+
+    def reset_batch(self):
+        # DELETE retains old InnoDB pages: increasing IDs made even a 500-row
+        # batch scan progressively slower. Recreate only this session's scratch
+        # table before BEGIN. TEMPORARY prevents touching a permanent namesake;
+        # defining the key here also avoids ALTER/TRUNCATE implicit commits.
+        columns = ','.join('`'+k+'`' for k in ('product_id','barcode',*MUTABLE,'attribute_snapshot_id'))
+        with self.connection.cursor() as cur:
+            cur.execute('DROP TEMPORARY TABLE IF EXISTS jjikmuk_catalog_batch')
+            cur.execute('CREATE TEMPORARY TABLE jjikmuk_catalog_batch (PRIMARY KEY(product_id)) '
+                        'ENGINE=InnoDB AS SELECT '+columns+' FROM products WHERE 1=0')
 
     def previous(self, cur, rows):
         ids = sorted({r['attribute_snapshot_id'] for r in rows if r['attribute_snapshot_id'] is not None})
@@ -137,7 +145,6 @@ class Writer:
             need(snapshot['payload_hash']==item['payload_hash'], 'CATALOG_NEW_SNAPSHOT_HASH')
             row = dict(row, product_group_key=item['group_key'], attribute_snapshot_id=snapshot['id'])
             values.append(tuple(row[k] for k in columns))
-        cur.execute('DELETE FROM jjikmuk_catalog_batch')
         cur.executemany('INSERT INTO jjikmuk_catalog_batch ('+','.join('`'+k+'`' for k in columns)+
                         ') VALUES ('+','.join(['%s']*len(columns))+')', values)
         cur.execute('UPDATE products p JOIN jjikmuk_catalog_batch b ON p.product_id=b.product_id AND p.barcode=b.barcode SET '+
@@ -153,6 +160,7 @@ class Writer:
         after = 0
         while True:
             self.guard()
+            self.reset_batch()
             self.connection.begin()
             try:
                 with self.connection.cursor() as cur:
@@ -201,10 +209,6 @@ class Writer:
 
     def recover(self):
         """Observe every uncertain batch; never infer commit success from a local flag."""
-        with self.connection.cursor() as cur:
-            columns = ','.join('`'+k+'`' for k in ('product_id','barcode',*MUTABLE,'attribute_snapshot_id'))
-            cur.execute('CREATE TEMPORARY TABLE jjikmuk_catalog_batch ENGINE=InnoDB AS SELECT '+columns+' FROM products WHERE 1=0')
-            cur.execute('ALTER TABLE jjikmuk_catalog_batch ADD PRIMARY KEY(product_id)')
         self.connection.commit()
         after = 0
         restored = unchanged = 0
@@ -212,6 +216,7 @@ class Writer:
             records = self.journal.db.execute('SELECT * FROM changes WHERE product_id>? ORDER BY product_id LIMIT 500', (after,)).fetchall()
             if not records: break
             self.guard()
+            self.reset_batch()
             self.connection.begin()
             try:
                 with self.connection.cursor() as cur:
