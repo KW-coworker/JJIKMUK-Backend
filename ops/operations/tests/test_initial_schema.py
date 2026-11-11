@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parents[3]
 def manifest():
     return {'migrations': [{'version': p.name.split('__')[0][1:], 'script': p.name,
                             'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'checksum': checksum(p.read_bytes())}
-                           for p in sorted((ROOT / 'src/main/resources/db/migration').glob('*.sql'))]}
+                           for p in sorted((ROOT / 'src/main/resources/db/migration').glob('*.sql'))
+                           if int(p.name.split('__')[0][1:])<=20]}
 
 
 def metadata(prepared=False):

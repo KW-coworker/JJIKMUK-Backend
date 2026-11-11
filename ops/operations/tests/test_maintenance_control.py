@@ -23,7 +23,7 @@ class ControlTests(unittest.TestCase):
     def wait(self, api, workflow, inputs, folder, **kwargs):
         self.calls.append((workflow, inputs, kwargs))
         run = dict(id=100+len(self.calls), head_sha=inputs['expected_sha'], run_attempt=1, conclusion='success')
-        if inputs.get('mode') in ('apply', 'rehearse'):
+        if inputs.get('mode') in ('apply', 'rehearse','catalog'):
             work_sha, verify_sha = control.plan_hashes(inputs)
             result = dict(status='VERIFIED_AWAITING_LATEST_MAIN', request_id='b'*32, commit='a'*40,
                           run_id=str(run['id']), work_sha256=work_sha, verify_sha256=verify_sha,
@@ -54,6 +54,23 @@ class ControlTests(unittest.TestCase):
         self.main = 'a'*40
         self.execute()
         self.assertEqual([x[1]['mode'] for x in self.calls], ['apply', 'finish'])
+
+    def test_catalog_exact_source_then_latest_main_and_finish(self):
+        from catalog_package import SOURCE_SHA,SOURCE_BYTES,ARCHIVE_SHA,ARCHIVE_BYTES,PREVIOUS
+        plan={'approved':True,'approval_id':'USER_SOURCE_COMPATIBILITY_AND_DB_APPLY_20261111',
+              'source_key':'operations/private/'+'1'*32+'/'+ARCHIVE_SHA+'.zip','source_version':'fixture-version',
+              'source_archive_sha256':ARCHIVE_SHA,'source_archive_bytes':ARCHIVE_BYTES,
+              'source_sqlite_sha256':SOURCE_SHA,'source_sqlite_bytes':SOURCE_BYTES,'previous_commit':PREVIOUS,
+              'required_bytes':5*1024**3}
+        inputs=dict(mode='catalog',expected_sha='a'*40,request_id='b'*32,confirm=True,
+                    work_plan='ops/operations/plans/catalog-fixture.json',work_sha256=sha(canonical(plan)))
+        request={'inputs':inputs,'approval':{'status':'APPROVED','input_sha256':sha(canonical(inputs))}}
+        with patch.object(control,'read_plan',return_value=plan),patch.object(control,'start_and_wait',side_effect=self.wait),\
+             patch.object(control,'artifact',side_effect=lambda api,run,*args:self.reports[run['id']]):
+            result=control.execute(self.api,request,self.root,sleep=lambda _:None)
+        self.assertEqual(result['status'],'RESUMED_LATEST_MAIN_VERIFIED')
+        self.assertEqual([x[1].get('mode','cd') for x in self.calls],['catalog','cd','finish'])
+        self.assertEqual(self.calls[1][1]['expected_sha'],'e'*40)
 
     def test_rehearsal_needs_explicit_bound_approval_and_uses_fixed_plans(self):
         inputs = dict(mode='rehearse', expected_sha='a'*40, request_id='b'*32, confirm=True)

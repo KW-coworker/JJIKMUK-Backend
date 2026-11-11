@@ -115,7 +115,7 @@ def read_object(s3,key):
 
 
 def wait_result(ssm,cid,target,document,sleep=time.sleep,*,max_polls=360):
-    need(max_polls in (360,450),'COMMAND_WAIT_BOUND')
+    need(max_polls in (360,450,600),'COMMAND_WAIT_BOUND')
     for _ in range(max_polls):
         try:
             invocations=ssm.list_command_invocations(CommandId=cid,InstanceId=target,Details=True)['CommandInvocations']
@@ -186,7 +186,7 @@ def inspect(api):
             'observation_completed':completed,'required_services_healthy':healthy,'success':healthy}
 
 
-def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
+def execute(api,context_data,plan,plan_hash,target,*,output_prefix='',max_polls=None):
     if os.environ.get('GITHUB_ACTIONS') == 'true':
         # A cancelled maintenance workflow must also block the older generic executor.
         import sys
@@ -196,6 +196,8 @@ def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
     need(output_prefix in ('','freeze-','apply-','recover-','install-','activate-',
                           'maintenance-before-','maintenance-work-','maintenance-verify-','maintenance-after-'),
          'OPERATION_OUTPUT_PREFIX')
+    polls=max_polls if max_polls is not None else 450 if output_prefix=='apply-' else 360
+    need(polls in (360,450,600),'COMMAND_WAIT_BOUND')
     op_id=sha(canonical({'commit':context_data['commit'],'plan_sha256':plan_hash,'target':target}))
     doc=plan['document'];content=canonical(doc).decode();name=DOCUMENT_PREFIX+sha(canonical(doc))
     # S3 precondition makes reruns fail before any second command, including a lost SendCommand response.
@@ -215,7 +217,7 @@ def execute(api,context_data,plan,plan_hash,target,*,output_prefix=''):
     cid=response['Command']['CommandId']
     put_once(api['s3'],'receipts/'+op_id+'/sent.json',dict(intent,command_id=cid))
     save_local(output_prefix+'sent.json',{'operation_id':op_id,'command_id':cid})
-    result=wait_result(api['ssm'],cid,target,name,max_polls=450 if output_prefix=='apply-' else 360)
+    result=wait_result(api['ssm'],cid,target,name,max_polls=polls)
     put_once(api['s3'],'receipts/'+op_id+'/result.json',result);save_local(output_prefix+'result.json',result)
     return {'status':'OPERATION_FINISHED','operation_id':op_id,'command_id':cid,
             'success':operation_succeeded(result)}

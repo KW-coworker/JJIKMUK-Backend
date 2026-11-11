@@ -1,0 +1,12 @@
+{
+  "approved": true,
+  "approval_id": "USER_SOURCE_COMPATIBILITY_AND_DB_APPLY_20261111",
+  "source_key": "operations/private/589c05fa54d74e7ba5f011f3c4aa92fd/d228022bd57af796c9b0a785438435596c5e203887fb53d2dd622425eed331b6.zip",
+  "source_version": "q27Z26kjQ87X1a85aZiMiDpgrOgbrFGE",
+  "source_archive_sha256": "d228022bd57af796c9b0a785438435596c5e203887fb53d2dd622425eed331b6",
+  "source_archive_bytes": 107030642,
+  "source_sqlite_sha256": "f277f176e199336e7d4dcc8058c64a1d3b87c3b5768171691c3eb11f29ba1e4f",
+  "source_sqlite_bytes": 1052856320,
+  "previous_commit": "c155c14332774510a8017185b33a2e8734959ced",
+  "required_bytes": 5368709120
+}

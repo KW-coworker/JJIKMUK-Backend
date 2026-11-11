@@ -68,7 +68,8 @@ def start_and_wait(api, workflow, inputs, folder, *, approve=False, sleep=time.s
     api.call(PREFIX + '/actions/workflows/' + workflow + '/dispatches', 'POST', {'ref': 'main', 'inputs': inputs})
     # No POST is repeated after a timeout. Inspect this title/request if the response is lost.
     approved = False
-    for _ in range(1080):
+    # Catalog phases refresh OIDC within one approved environment job.
+    for _ in range(1920 if inputs.get('mode')=='catalog' else 1080):
         rows = api.call(PREFIX + '/actions/workflows/' + workflow + '/runs?event=workflow_dispatch&per_page=100')['workflow_runs']
         matches = [r for r in rows if r.get('display_title') == title]
         need(len(matches) <= 1, 'MAINTENANCE_RUN_AMBIGUOUS')
@@ -99,23 +100,28 @@ def execute(api, request, folder, sleep=time.sleep):
     inputs, approval = request['inputs'], request['approval']
     fields = {'mode', 'expected_sha', 'request_id', 'confirm'}
     if inputs.get('mode') == 'apply': fields |= {'work_plan', 'work_sha256', 'verify_plan', 'verify_sha256'}
-    need(set(inputs) == fields and inputs['mode'] in ('apply', 'rehearse')
+    if inputs.get('mode') == 'catalog': fields |= {'work_plan','work_sha256'}
+    need(set(inputs) == fields and inputs['mode'] in ('apply', 'rehearse','catalog')
          and inputs['confirm'] is True and re.fullmatch('[a-f0-9]{32}', inputs['request_id'])
          and re.fullmatch('[a-f0-9]{40}', inputs['expected_sha']), 'MAINTENANCE_INPUTS')
     need(approval.get('status') == 'APPROVED' and approval.get('input_sha256') == sha(canonical(inputs)),
          'MAINTENANCE_EXACT_APPROVAL_REQUIRED')
     need(api.call(PREFIX + '/actions/variables/BACKEND_CD_ENABLED')['value'] == 'true', 'CD_NOT_ENABLED')
     work_sha, verify_sha = plan_hashes(inputs)
-    if inputs['mode'] == 'rehearse':
+    if inputs['mode'] == 'catalog':
+        from catalog_package import validate_source_plan
+        validate_source_plan(read_plan(api,inputs['work_plan'],work_sha,inputs['expected_sha']))
+    elif inputs['mode'] == 'rehearse':
         from maintenance_probe import rehearsal
         (work_pair, _), (verify_pair, _) = rehearsal(inputs['request_id'])
         work, verify = work_pair[0], verify_pair[0]
     else:
         work = read_plan(api, inputs['work_plan'], work_sha, inputs['expected_sha'])
         verify = read_plan(api, inputs['verify_plan'], verify_sha, inputs['expected_sha'])
-    need(work['component'] in ('db', 'ocr') and verify['component'] == work['component']
-         and work['operation'] in ('deploy', 'install', 'verify') and verify['operation'] == 'verify'
-         and work['approval_id'] == verify['approval_id'], 'MAINTENANCE_PLAN_SCOPE')
+    if inputs['mode']!='catalog':
+        need(work['component'] in ('db', 'ocr') and verify['component'] == work['component']
+             and work['operation'] in ('deploy', 'install', 'verify') and verify['operation'] == 'verify'
+             and work['approval_id'] == verify['approval_id'], 'MAINTENANCE_PLAN_SCOPE')
     folder.mkdir(exist_ok=False)
     save(folder, 'approved-request.json', request)
     run = start_and_wait(api, 'server-maintenance.yml', inputs, folder / 'apply', approve=True, sleep=sleep)
@@ -208,6 +214,8 @@ def collect(api, folder, sleep=time.sleep):
 
 
 def plan_hashes(inputs):
+    if inputs['mode']=='catalog':
+        return inputs['work_sha256'],sha(canonical({'catalog_verify':inputs['work_sha256']}))
     if inputs['mode'] == 'rehearse':
         from maintenance_probe import rehearsal
         rows = rehearsal(inputs['request_id'])

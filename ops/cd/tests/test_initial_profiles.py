@@ -10,6 +10,8 @@ class ProfileTests(unittest.TestCase):
         resources=Path(__file__).resolve().parents[3]/'src/main/resources'
         original={}
         for p in (resources/'db/migration').glob('V*__*.sql'):
+            # The retired initializer accepts only its original V1–V20 scope.
+            if int(p.name.split('__')[0][1:])>20:continue
             original['BOOT-INF/classes/db/migration/'+p.name]=p.read_bytes()
         original.update({'META-INF/MANIFEST.MF':b'Main-Class: org.springframework.boot.loader.launch.JarLauncher\n',
             'BOOT-INF/classes/org/jjikmuk/backend/domain/chat/AiChatClient.class':b'chatbot.developer-test-auto-consent',
@@ -26,6 +28,9 @@ class ProfileTests(unittest.TestCase):
             expected=hashlib.sha256(json.dumps(profile,sort_keys=True,separators=(',',':')).encode()).hexdigest()
             with patch.object(profiles,'OLD_SHA',profile['jar_sha256']),patch.object(profiles,'OLD_PROFILE',expected):
                 self.assertEqual(len(profiles.verify_initial_profiles(left,right)['migrations']),20)
+                future=dict(original);future['BOOT-INF/classes/db/migration/V21__future_fixture.sql']=b'SELECT 1;'
+                jar(right,future)
+                with self.assertRaises(ValueError):profiles.verify_initial_profiles(left,right)
                 migration=next(k for k in original if '/V17__' in k)
                 prefix=next(k for k in original if '/V1__' in k)
                 for key in (migration,prefix,profiles.APPLICATION,'BOOT-INF/classes/application-dev.properties'):
