@@ -12,14 +12,16 @@ class MaintenanceWorkflowTests(unittest.TestCase):
             with self.subTest(name=name):
                 source = (root/name).read_text(encoding='utf-8')
                 group = ("${{ inputs.mode == 'performance' && 'jjikmuk-performance-read' || 'backend-production-deployment' }}"
-                         if name == 'server-operations.yml' else 'backend-production-deployment')
+                         if name == 'server-operations.yml' else
+                         "${{ (inputs.mode == 'catalog-live' || inputs.mode == 'catalog-live-meta') && 'jjikmuk-catalog-live-read' || 'backend-production-deployment' }}"
+                         if name == 'server-maintenance.yml' else 'backend-production-deployment')
                 self.assertIn('concurrency:\n  group: '+group+'\n  cancel-in-progress: false\n  queue: max\n', source)
                 self.assertEqual(len(re.findall(r'^\s*queue:', source, re.M)), 1)
 
     def test_readonly_collection_and_resume_use_fixed_workflows_without_new_credentials(self):
         root = Path(__file__).resolve().parents[3]
         maintenance = (root/'.github/workflows/server-maintenance.yml').read_text(encoding='utf-8')
-        self.assertIn('options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status]', maintenance)
+        self.assertIn('options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live]', maintenance)
         self.assertIn('environment: production', maintenance)
         self.assertIn('role/JjikmukOperationsExecute', maintenance)
         self.assertNotIn('secrets.', maintenance)
