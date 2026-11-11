@@ -1,5 +1,7 @@
 import copy
 import os
+import sys
+import subprocess
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -26,6 +28,44 @@ class HostTests(unittest.TestCase):
         work.host=Mock();work.host.protected.return_value=prior['protected']
         work.record=lambda state:work.state.update(status=state) if isinstance(state,str) else None
         return work
+
+    def test_preservation_loads_isolated_driver_before_import(self):
+        from contextlib import contextmanager
+        work=self.module.Work.__new__(self.module.Work)
+        driver=SimpleNamespace(cursors=SimpleNamespace(SSCursor=object()))
+        connection=object()
+        @contextmanager
+        def connect():
+            sys.modules['pymysql']=driver
+            yield connection
+        work.connect=connect;work.state={'schema':{},'bounds':{}};work.guard=Mock()
+        with patch.dict(sys.modules,{'pymysql':None}),patch.object(self.module,'capture',return_value={'verified':True}) as capture:
+            self.assertEqual(work.preservation(),{'verified':True})
+            self.assertIs(capture.call_args.args[0],connection)
+            self.assertIs(capture.call_args.args[-1],driver.cursors.SSCursor)
+
+    def test_preservation_is_first_db_entry_in_fresh_isolated_process(self):
+        ops=Path(self.module.__file__).parent
+        code=f'''
+import sys
+from contextlib import contextmanager
+from types import SimpleNamespace
+sys.path[:0]=[{str(ops)!r},{str(ops.parent/'cd')!r}]
+import catalog_host
+assert 'pymysql' not in sys.modules
+@contextmanager
+def connect():
+ sys.modules['pymysql']=SimpleNamespace(cursors=SimpleNamespace(SSCursor=object()))
+ yield object()
+work=catalog_host.Work.__new__(catalog_host.Work)
+work.connect=connect;work.state={{'schema':{{}},'bounds':{{}}}};work.guard=lambda:None
+catalog_host.capture=lambda *args:{{'verified':True}}
+assert work.preservation()=={{'verified':True}}
+print('ISOLATED_FIRST_DB_ENTRY_VERIFIED')
+'''
+        result=subprocess.run([sys.executable,'-I','-S','-B','-c',code],capture_output=True,text=True,timeout=15)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(result.stdout.strip(),'ISOLATED_FIRST_DB_ENTRY_VERIFIED')
 
     def test_pre_ddl_service_recovery_without_source_or_monitor(self):
         for status in ('FREEZE_INTENT','SERVICES_FROZEN','FROZEN_WITH_BASELINE','SNAPSHOT_VERIFIED'):
