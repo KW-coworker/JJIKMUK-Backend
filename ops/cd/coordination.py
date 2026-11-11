@@ -65,7 +65,7 @@ class Guard:
 
 
 @contextmanager
-def locked(component, operation_id, *, root=None, owner=0, recovery_sha256=None):
+def locked(component, operation_id, *, root=None, owner=0, recovery_sha256=None, expected_sha256=None):
     import fcntl
     root=ROOT if root is None else Path(root)
     need(component in {'backend','chatbot','ocr','db','installation'},'COORDINATOR_COMPONENT')
@@ -75,6 +75,9 @@ def locked(component, operation_id, *, root=None, owner=0, recovery_sha256=None)
         try: fcntl.flock(f.fileno(),fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError: raise ValueError('HOST_OPERATION_BUSY') from None
         raw=(root/'state.json').read_bytes();need(len(raw)<4096,'COORDINATOR_STATE_LIMIT')
+        if expected_sha256 is not None:
+            need(re.fullmatch('[a-f0-9]{64}',expected_sha256) and hashlib.sha256(raw).hexdigest()==expected_sha256,
+                 'COORDINATOR_CHANGED_BEFORE_LOCK')
         state=json.loads(raw);need(state.get('status') in STATES,'COORDINATOR_STATE_INVALID')
         if state['status'] not in TERMINAL:
             need(recovery_sha256 is not None and hashlib.sha256(raw).hexdigest()==recovery_sha256,

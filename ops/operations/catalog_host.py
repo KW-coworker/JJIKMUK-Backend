@@ -27,6 +27,8 @@ from catalog_preservation import capture
 
 
 class Work:
+    starting_bytes=6*1024**3
+    history_count=21
     def __init__(self,stage,binding):
         self.stage,self.binding=stage,binding
         self.host=Host(load_config())
@@ -83,8 +85,7 @@ class Work:
                 after=0;count=0
                 names=['product_id','barcode',*VALUES,'product_group_key','attribute_snapshot_id']
                 # V21 is not applied yet: these four are known absent and default to NULL.
-                from catalog_delta import IMAGE_META
-                columns=[('NULL AS `'+n+'`') if n in IMAGE_META else '`'+n+'`' for n in names]
+                columns=self.baseline_columns(names)
                 while True:
                     self.guard()
                     cur.execute('SELECT '+','.join(columns)+' FROM products WHERE product_id>%s ORDER BY product_id LIMIT 1000',(after,))
@@ -98,6 +99,20 @@ class Work:
                 require(count==self.source.meta['source_rows'],'CATALOG_BASELINE_ROW_COUNT')
         finally:journal.close()
 
+    def baseline_columns(self,names):
+        from catalog_delta import IMAGE_META
+        return [('NULL AS `'+n+'`') if n in IMAGE_META else '`'+n+'`' for n in names]
+
+    def validate_candidate(self,candidate):
+        manifests(self.host.baseline['manifest'],candidate,self.binding['sql_sha256'])
+
+    def prepare_schema(self):
+        from database_probe import properties
+        migrate(self.stage,properties(self.host.config['database']['properties_file']),self.guard,self.connect,self.record)
+
+    def verify_previous_values(self):
+        pass  # Initial V20 execution has no earlier product rollback to verify.
+
     def freeze(self):
         require(not self.state_path.exists(),'CATALOG_FREEZE_ALREADY_RECORDED')
         self.resources()
@@ -106,8 +121,8 @@ class Work:
         for check in self.host.config['health_checks']:http_check(check)
         candidate=make_manifest(self.stage/'backend.jar',self.binding['commit'],self.binding['run_id'],'1')
         require(candidate['jar_sha256']==self.binding['jar_sha256'],'CATALOG_CANDIDATE_HASH')
-        manifests(self.host.baseline['manifest'],candidate,self.binding['sql_sha256'])
-        require(shutil.disk_usage(self.stage).free>=6*1024**3,'CATALOG_HOST_START_RESERVE')
+        self.validate_candidate(candidate)
+        require(shutil.disk_usage(self.stage).free>=self.starting_bytes,'CATALOG_HOST_START_RESERVE')
         # No chatbot CD enrollment is introduced by a product-data task.
         require(not Path('/opt/jjikmuk-chatbot/baseline.json').exists(),'CATALOG_CHATBOT_SCHEMA_ENROLLMENT_REQUIRED')
         self.state={'binding':self.binding,'previous':self.host.baseline,'candidate':candidate,
@@ -125,13 +140,14 @@ class Work:
             with conn.cursor() as cur:
                 cur.execute('SELECT COALESCE(MAX(id),0) FROM product_attribute_snapshots');snap=cur.fetchone()[0]
                 cur.execute('SELECT MAX(installed_rank),COUNT(*) FROM flyway_schema_history');rank,count=cur.fetchone()
-                require(count==21 and type(rank) is int,'CATALOG_OLD_HISTORY_BOUND')
+                require(count==self.history_count and type(rank) is int,'CATALOG_OLD_HISTORY_BOUND')
                 cur.execute("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='jjikmuk' AND EVENT_OBJECT_TABLE IN ('products','product_attribute_snapshots')")
                 require(cur.fetchone()[0]==0,'CATALOG_PRODUCT_TRIGGERS_REQUIRE_REVIEW')
             self.state['bounds']={'snapshot_id':snap,'history_rank':rank}
         self.record('SERVICES_FROZEN')
-        self.state['preservation']=self.preservation();self.baseline()
         extract_runtime(self.stage/'backend.jar',self.stage);extract_classes(self.stage/'backend.jar',self.stage)
+        self.verify_previous_values()
+        self.state['preservation']=self.preservation();self.baseline()
         self.state['candidate_release']=prepare_release(self.host,self.stage,candidate)
         self.record('FROZEN_WITH_BASELINE')
         return {'status':'VERIFIED','checks':{'services_stopped':True,'baseline_saved':True,'no_db_writes':True},
@@ -166,8 +182,7 @@ class Work:
         with self.connect() as conn:
             facts.project_idle(conn,guard=self.guard)
             require(read_from_connection(conn)==self.state['schema'],'CATALOG_PREWRITE_SCHEMA_CHANGED')
-        from database_probe import properties
-        migrate(self.stage,properties(self.host.config['database']['properties_file']),self.guard,self.connect,self.record)
+        self.prepare_schema()
         self.verify_schema();self.record('V21_VERIFIED')
         journal=Journal(self.stage/'before-values.sqlite',self.journal_binding,recover=True);codec=self.codec()
         try:

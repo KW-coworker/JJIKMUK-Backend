@@ -33,7 +33,7 @@ def validate_source_plan(value):
     return value
 
 
-def build(repo,ctx):
+def build(repo,ctx,*,reapply=False):
     folder=repo/'build/catalog-maintenance';folder.mkdir()
     jars=[p for p in (repo/'build/libs').glob('*.jar') if not p.name.endswith('-plain.jar')]
     need(len(jars)==1,'CATALOG_ONE_JAR')
@@ -65,9 +65,11 @@ def build(repo,ctx):
     for path in compile_dir.glob('*.class'):files['bin/java/'+path.name]=path
     operations=('catalog_host','catalog_host_support','catalog_writer','catalog_checks','catalog_codec','catalog_delta','catalog_compare',
                 'catalog_preservation','catalog_followup_host','readiness_probe','readiness_paths','fulltext_definition')
+    if reapply:operations+=('catalog_reapply_host','catalog_reapply_contract','catalog_reapply_previous')
     for name in operations:files['bin/'+name+'.py']=repo/'ops/operations'/(name+'.py')
     for name in ('initial_guard','initial_schema','initial_schema_contract','initial_contract','initial_db_facts','initial_service_state','initial_preservation','initial_flyway'):
         files['bin/'+name+'.py']=repo/'ops/cd'/(name+'.py')
+    if reapply:files['bin/coordination.py']=repo/'ops/cd/coordination.py'
     entries={name:{'sha256':digest(path),'bytes':path.stat().st_size} for name,path in files.items()}
     entries.update({name:{'sha256':sha(raw),'bytes':len(raw)} for name,raw in generated.items()})
     envelope={'format':1,'commit':ctx['commit'],'jar_sha256':manifest['jar_sha256'],'files':entries}

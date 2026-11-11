@@ -8,11 +8,12 @@ from bootstrap import need
 
 
 class Monitor:
-    def __init__(self, s3, cloudwatch, binding, required_bytes):
+    def __init__(self, s3, cloudwatch, binding, required_bytes, *, budget_check=lambda:None):
         self.s3, self.cloudwatch, self.binding = s3, cloudwatch, binding
         need(type(required_bytes) is int and required_bytes == binding['required_bytes']
              and required_bytes >= 5 * 1024**3, 'MAINTENANCE_RESERVE_REQUIRED')
         self.required = required_bytes
+        self.budget_check=budget_check
         self.key = ('operations/bootstrap/' + binding['archive_sha256'] + '/monitor-'
                     + binding['request_id'] + '.json')
         self.stop_event = threading.Event()
@@ -20,6 +21,7 @@ class Monitor:
         self.thread = None
 
     def publish(self):
+        self.budget_check()
         report = observe(self.cloudwatch, datetime.now(timezone.utc))
         counts = report['counts']
         need(counts['window_minimum_bytes'] >= self.required, 'MAINTENANCE_STORAGE_RESERVE')
@@ -27,6 +29,7 @@ class Monitor:
                  'state': 'PROCEED', 'written_epoch': int(time.time()),
                  'metric_epoch': counts['sample_epoch'], 'minimum_bytes': counts['window_minimum_bytes'],
                  'required_bytes': self.required}
+        self.budget_check()
         self.s3.put_object(Bucket=BUCKET, Key=self.key, ExpectedBucketOwner=ACCOUNT,
             ServerSideEncryption='AES256', ContentType='application/json', Body=canonical(value))
 
@@ -54,6 +57,7 @@ class Monitor:
         return self
 
     def check(self):
+        self.budget_check()
         need(self.failure is None, 'MAINTENANCE_MONITOR_FAILED')
 
     def __exit__(self, kind, value, traceback):

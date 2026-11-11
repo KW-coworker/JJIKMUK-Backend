@@ -15,7 +15,7 @@ from oidc_precheck import validate_claims
 
 class Renewal:
     def __init__(self,env,sts,*,seconds,clock=time.time,monotonic=time.monotonic,opener=None):
-        need(type(seconds) is int and 60<=seconds<=7500,'CATALOG_CREDENTIAL_BUDGET')
+        need(type(seconds) is int and 60<=seconds<=9000,'CATALOG_CREDENTIAL_BUDGET')
         self.env=dict(env);self.sts=sts;self.clock=clock;self.monotonic=monotonic
         self.until=clock()+seconds;self.monotonic_until=monotonic()+seconds
         self.opener=opener or urllib.request.build_opener(NoRedirect())
@@ -33,6 +33,12 @@ class Renewal:
 
     def before_sign(self,**unused):
         self.check()
+
+    def admit(self,seconds):
+        self.check()
+        need(type(seconds) is int and seconds>0 and
+             min(self.until-self.clock(),self.monotonic_until-self.monotonic())>seconds,
+             'CATALOG_REMAINING_TIME_INSUFFICIENT')
 
     def token(self):
         self.check()

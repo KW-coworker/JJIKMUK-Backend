@@ -99,6 +99,7 @@ if __name__ == '__main__':
         if os.environ.get('MAINTENANCE_MODE') == 'catalog-capacity':
             from catalog_capacity import inspect
             result = inspect(clients(True), ctx)
+            save_local('maintenance-result.json', result)
         elif os.environ.get('MAINTENANCE_MODE') == 'catalog-service':
             from catalog_service_recovery import restore
             result = restore(clients(True), ctx)

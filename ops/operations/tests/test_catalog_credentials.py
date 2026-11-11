@@ -46,6 +46,14 @@ class CredentialTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'CATALOG_CREDENTIAL_REFRESH_FAILED'):renewal.refresh()
         self.assertEqual(sts.assume_role_with_web_identity.call_count,2)
 
+    def test_command_admission_includes_elapsed_drain_and_both_clocks(self):
+        renewal,now,*_=self.fixture()
+        renewal.admit(7400)
+        now[0]+=900
+        with self.assertRaisesRegex(ValueError,'REMAINING_TIME'):renewal.admit(7350)
+        renewal.admit(6000)
+        with self.assertRaisesRegex(ValueError,'REMAINING_TIME'):renewal.admit(0)
+
     def test_wrong_claim_or_endpoint_never_reaches_sts(self):
         for key,value in [('sub','repo:other/repo:environment:production'),('sha','b'*40),('exp',0),('workflow_ref','other')]:
             renewal,now,env,claims,sts,opener=self.fixture();claims[key]=value

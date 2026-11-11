@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity]
+        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply]
         required: true
       expected_sha:
         type: string
@@ -40,7 +40,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.confirm
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && 140 || 55 }}
+    timeout-minutes: ${{ inputs.mode == 'catalog-reapply' && 360 || (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && 140 || 55 }}
     permissions:
       contents: read
       id-token: write
@@ -68,21 +68,23 @@ jobs:
           python3 -m pip install --require-hashes --only-binary=:all: -r ops/operations/requirements.lock
           PYTHONPATH=ops/operations python3 -B -c 'from maintenance import context; context()'
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
         with:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
       - name: 상품 적용용 main 원본 검사·빌드
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
+        timeout-minutes: 15
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
         run: |
           ./gradlew test bootJar
           PYTHONPATH=ops/operations:ops/cd python3 -B -m unittest discover -s ops/operations/tests -p 'test_catalog*.py' -v
       - name: 역할 발급 시작 시각 기록
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
         run: python3 -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CATALOG_ROLE_REQUEST_EPOCH="+str(int(time.time()))+"\n")'
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
+        if: inputs.mode != 'catalog-reapply'
         with:
           role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
           aws-region: ap-northeast-2
@@ -91,14 +93,19 @@ jobs:
           role-session-name: maintenance-${{ github.run_id }}
           retry-max-attempts: 1
       - name: Hold CD, perform approved work and verify; or verify latest main and resume
-        if: inputs.mode != 'catalog' && inputs.mode != 'catalog-continue'
+        if: inputs.mode != 'catalog' && inputs.mode != 'catalog-continue' && inputs.mode != 'catalog-reapply'
         run: python3 -B ops/operations/maintenance.py
       - name: 상품 작업 서비스 동결·백업
         id: catalog-freeze
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
-        run: python3 -B ops/operations/catalog_runner.py
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
+        run: |
+          if [ "$MAINTENANCE_MODE" = catalog-reapply ]; then
+            python3 -B ops/operations/catalog_reapply_runner.py
+          else
+            python3 -B ops/operations/catalog_runner.py
+          fi
       - name: 적용 인증 시작 시각
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
         run: python3 -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CATALOG_ROLE_REQUEST_EPOCH="+str(int(time.time()))+"\n")'
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
         if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
@@ -112,10 +119,15 @@ jobs:
           unset-current-credentials: true
       - name: 새 인증으로 상품 적용·보존 검증
         id: catalog-apply
-        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue')
+        if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
         env:
           CATALOG_PHASE: apply
-        run: python3 -B ops/operations/catalog_runner.py
+        run: |
+          if [ "$MAINTENANCE_MODE" = catalog-reapply ]; then
+            python3 -B ops/operations/catalog_reapply_runner.py
+          else
+            python3 -B ops/operations/catalog_runner.py
+          fi
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
         id: catalog-recovery-credentials
         if: failure() && (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && (steps.catalog-freeze.outcome == 'success' || steps.catalog-freeze.outcome == 'failure')
@@ -128,10 +140,15 @@ jobs:
           retry-max-attempts: 1
           unset-current-credentials: true
       - name: 별도 인증 시간으로 기록 대조·제한 복구
-        if: failure() && (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && steps.catalog-recovery-credentials.outcome == 'success'
+        if: failure() && ((inputs.mode == 'catalog-reapply' && (steps.catalog-freeze.outcome == 'success' || steps.catalog-freeze.outcome == 'failure')) || ((inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && steps.catalog-recovery-credentials.outcome == 'success'))
         env:
           CATALOG_PHASE: recover
-        run: python3 -B ops/operations/catalog_runner.py
+        run: |
+          if [ "$MAINTENANCE_MODE" = catalog-reapply ]; then
+            python3 -B ops/operations/catalog_reapply_runner.py
+          else
+            python3 -B ops/operations/catalog_runner.py
+          fi
       - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
         if: always()
         with:

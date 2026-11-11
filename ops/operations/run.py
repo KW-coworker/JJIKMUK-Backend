@@ -30,12 +30,13 @@ def regional_s3(session):
             connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1}))
 
 
-def clients(write=False):
+def clients(write=False,*,session=None):
     import boto3
     from botocore.config import Config
     # OIDC action supplies all three. Never use profiles, local files, IMDS or operator sessions.
-    session=boto3.Session(aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],aws_session_token=os.environ['AWS_SESSION_TOKEN'],region_name=REGION)
+    if session is None:
+        session=boto3.Session(aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+            aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],aws_session_token=os.environ['AWS_SESSION_TOKEN'],region_name=REGION)
     cfg=Config(connect_timeout=10,read_timeout=30,retries={'total_max_attempts':1})
     result={s:session.client(s,config=cfg) for s in ('sts','ssm','s3')}
     result['s3']=regional_s3(session)
@@ -115,7 +116,7 @@ def read_object(s3,key):
 
 
 def wait_result(ssm,cid,target,document,sleep=time.sleep,*,max_polls=360):
-    need(max_polls in (360,450,600),'COMMAND_WAIT_BOUND')
+    need(max_polls in (360,450,600,1500),'COMMAND_WAIT_BOUND')
     for _ in range(max_polls):
         try:
             invocations=ssm.list_command_invocations(CommandId=cid,InstanceId=target,Details=True)['CommandInvocations']
@@ -197,7 +198,7 @@ def execute(api,context_data,plan,plan_hash,target,*,output_prefix='',max_polls=
                           'maintenance-before-','maintenance-work-','maintenance-verify-','maintenance-after-'),
          'OPERATION_OUTPUT_PREFIX')
     polls=max_polls if max_polls is not None else 450 if output_prefix=='apply-' else 360
-    need(polls in (360,450,600),'COMMAND_WAIT_BOUND')
+    need(polls in (360,450,600,1500),'COMMAND_WAIT_BOUND')
     op_id=sha(canonical({'commit':context_data['commit'],'plan_sha256':plan_hash,'target':target}))
     doc=plan['document'];content=canonical(doc).decode();name=DOCUMENT_PREFIX+sha(canonical(doc))
     # S3 precondition makes reruns fail before any second command, including a lost SendCommand response.

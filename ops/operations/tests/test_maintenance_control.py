@@ -23,7 +23,7 @@ class ControlTests(unittest.TestCase):
     def wait(self, api, workflow, inputs, folder, **kwargs):
         self.calls.append((workflow, inputs, kwargs))
         run = dict(id=100+len(self.calls), head_sha=inputs['expected_sha'], run_attempt=1, conclusion='success')
-        if inputs.get('mode') in ('apply', 'rehearse','catalog','catalog-continue'):
+        if inputs.get('mode') in ('apply', 'rehearse','catalog','catalog-continue','catalog-reapply'):
             work_sha, verify_sha = control.plan_hashes(inputs)
             result = dict(status='VERIFIED_AWAITING_LATEST_MAIN', request_id='b'*32, commit='a'*40,
                           run_id=str(run['id']), work_sha256=work_sha, verify_sha256=verify_sha,
@@ -62,7 +62,7 @@ class ControlTests(unittest.TestCase):
               'source_archive_sha256':ARCHIVE_SHA,'source_archive_bytes':ARCHIVE_BYTES,
               'source_sqlite_sha256':SOURCE_SHA,'source_sqlite_bytes':SOURCE_BYTES,'previous_commit':PREVIOUS,
               'required_bytes':5*1024**3}
-        for mode in ('catalog','catalog-continue'):
+        for mode in ('catalog','catalog-continue','catalog-reapply'):
             self.calls=[];self.reports={}
             inputs=dict(mode=mode,expected_sha='a'*40,request_id='b'*32,confirm=True,
                         work_plan='ops/operations/plans/catalog-fixture.json',work_sha256=sha(canonical(plan)))
