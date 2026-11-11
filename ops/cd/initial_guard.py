@@ -11,7 +11,9 @@ REGION = 'ap-northeast-2'
 MINIMUM_RESERVE = 5 * 1024**3
 
 
-def validate_heartbeat(value, binding, now):
+def validate_heartbeat(value, binding, now, *, minimum_reserve=MINIMUM_RESERVE):
+    require(type(minimum_reserve) is int and minimum_reserve in (2*1024**3,MINIMUM_RESERVE),
+            'MAINTENANCE_RESERVE_POLICY')
     require(set(value) == {'format', 'request_id', 'commit', 'archive_sha256', 'state',
                           'written_epoch', 'metric_epoch', 'minimum_bytes', 'required_bytes'}, 'MAINTENANCE_LEASE_FIELDS')
     require(value['format'] == 1 and all(value[k] == binding[k] for k in
@@ -21,19 +23,22 @@ def validate_heartbeat(value, binding, now):
         require(type(value[key]) is int and 0 <= value[key] < 2**63, 'MAINTENANCE_LEASE_NUMBER')
     require(-5 <= now - value['written_epoch'] <= 90 and 0 <= now - value['metric_epoch'] <= 240,
             'MAINTENANCE_MONITOR_STALE')
-    require(value['required_bytes'] == binding['required_bytes'] and value['required_bytes'] >= MINIMUM_RESERVE
+    require(value['required_bytes'] == binding['required_bytes'] and value['required_bytes'] >= minimum_reserve
             and value['minimum_bytes'] >= value['required_bytes'],
             'MAINTENANCE_STORAGE_RESERVE')
 
 
 class Guard:
     def __init__(self, client, binding, *, clock=time.time, monotonic=time.monotonic,
-                 read_attempts=1, budget_check=lambda: None):
+                 read_attempts=1, budget_check=lambda: None, minimum_reserve=MINIMUM_RESERVE):
         require(type(read_attempts) is int and read_attempts in (1,2), 'MAINTENANCE_READ_ATTEMPTS')
         self.client, self.binding = client, binding
         self.clock, self.monotonic = clock, monotonic
         self.cached, self.read_at = None, None
         self.read_attempts,self.budget_check=read_attempts,budget_check
+        require(type(minimum_reserve) is int and minimum_reserve in (2*1024**3,MINIMUM_RESERVE),
+                'MAINTENANCE_RESERVE_POLICY')
+        self.minimum_reserve=minimum_reserve
         self.key = ('operations/bootstrap/' + binding['archive_sha256'] + '/monitor-'
                     + binding['request_id'] + '.json')
 
@@ -55,13 +60,13 @@ class Guard:
                     require(len(raw) <= 2048, 'MAINTENANCE_LEASE_SIZE')
                     value=json.loads(raw)
                     self.budget_check()
-                    validate_heartbeat(value,self.binding,self.clock())
+                    validate_heartbeat(value,self.binding,self.clock(),minimum_reserve=self.minimum_reserve)
                     self.cached=value;self.read_at=self.monotonic()
                     break
                 except transport:
                     self.budget_check()
                     if attempt+1==self.read_attempts:raise
-        validate_heartbeat(self.cached, self.binding, self.clock())
+        validate_heartbeat(self.cached, self.binding, self.clock(),minimum_reserve=self.minimum_reserve)
         self.budget_check()
 
 

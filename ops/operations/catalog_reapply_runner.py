@@ -12,7 +12,7 @@ from maintenance_probe import drained,plan as probe_plan
 from catalog_credentials import session
 from catalog_reapply_contract import (REQUEST,OLD_RUN,SERVICE_RUN,OLD_ARCHIVE,OLD_STATE,OLD_JOURNAL,PREVIOUS,
     SERVICE_OPERATION,SERVICE_RESULT,SOURCE_SHA,SOURCE_BYTES,PHASE_SECONDS,RUNNER_SECONDS,RDS_START_BYTES,
-    validate_binding,lease_binding,dataset)
+    validate_binding,lease_binding,dataset,RDS_RESERVE_BYTES,RESERVE_APPROVAL)
 from catalog_package import build,source_plan
 from catalog_document import document
 from catalog_runner import key
@@ -34,7 +34,8 @@ class Runtime:
 
     def monitor(self,binding):
         bound=lease_binding(binding,self.phase)
-        return Monitor(self.api['s3'],self.cloudwatch,bound,bound['required_bytes'],budget_check=self.budget.check)
+        return Monitor(self.api['s3'],self.cloudwatch,bound,bound['required_bytes'],budget_check=self.budget.check,
+                       minimum_reserve=RDS_RESERVE_BYTES)
 
     def drain(self):
         for _ in range(90):
@@ -70,9 +71,9 @@ def previous_gate(api,ctx,work_sha,verify_sha):
 def capacity(runtime):
     save_local('rds-preflight.json',check_database(runtime.rds))
     rows=runtime.rds.describe_db_instances(DBInstanceIdentifier=DB)['DBInstances']
-    need(len(rows)==1 and rows[0]['AllocatedStorage']>=30 and rows[0]['StorageType']=='gp3' and
+    need(len(rows)==1 and 20<=rows[0]['AllocatedStorage']<=40 and rows[0]['StorageType']=='gp3' and
          rows[0]['DBInstanceStatus']=='available' and not rows[0].get('PendingModifiedValues'),
-         'REAPPLY_STORAGE_EXPANSION_OR_PENDING_CHANGE')
+         'REAPPLY_STORAGE_CONFIGURATION_OR_PENDING_CHANGE')
     value=observe(runtime.cloudwatch,datetime.now(timezone.utc))
     need(value['counts']['window_minimum_bytes']>=RDS_START_BYTES,'REAPPLY_STARTING_SPACE')
     save_local('reapply-starting-space.json',value)
@@ -97,7 +98,8 @@ def freeze(runtime):
         'archive_sha256':archive_sha,'archive_key':archive_key,'archive_version':uploaded['VersionId'],'archive_bytes':archive.stat().st_size,
         'source_key':plan['source_key'],'source_version':plan['source_version'],'source_archive_sha256':plan['source_archive_sha256'],
         'source_archive_bytes':plan['source_archive_bytes'],'source_sha256':SOURCE_SHA,'source_bytes':SOURCE_BYTES,
-        'previous_commit':PREVIOUS,'required_bytes':plan['required_bytes'],
+        'previous_commit':PREVIOUS,'required_bytes':RDS_RESERVE_BYTES,'source_plan_required_bytes':plan['required_bytes'],
+        'reserve_approval':RESERVE_APPROVAL,
         'reapply':{'previous_run':OLD_RUN,'service_run':SERVICE_RUN,'previous_archive':OLD_ARCHIVE,
                    'previous_state_sha256':OLD_STATE,'previous_journal_sha256':OLD_JOURNAL}}
     validate_binding(binding)

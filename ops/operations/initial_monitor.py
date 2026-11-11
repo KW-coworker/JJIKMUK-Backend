@@ -8,10 +8,11 @@ from bootstrap import need
 
 
 class Monitor:
-    def __init__(self, s3, cloudwatch, binding, required_bytes, *, budget_check=lambda:None):
+    def __init__(self, s3, cloudwatch, binding, required_bytes, *, budget_check=lambda:None, minimum_reserve=5*1024**3):
         self.s3, self.cloudwatch, self.binding = s3, cloudwatch, binding
+        need(type(minimum_reserve) is int and minimum_reserve in (2*1024**3,5*1024**3),'MAINTENANCE_RESERVE_POLICY')
         need(type(required_bytes) is int and required_bytes == binding['required_bytes']
-             and required_bytes >= 5 * 1024**3, 'MAINTENANCE_RESERVE_REQUIRED')
+             and required_bytes >= minimum_reserve, 'MAINTENANCE_RESERVE_REQUIRED')
         self.required = required_bytes
         self.budget_check=budget_check
         self.key = ('operations/bootstrap/' + binding['archive_sha256'] + '/monitor-'

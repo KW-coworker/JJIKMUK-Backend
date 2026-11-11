@@ -10,7 +10,7 @@ if __name__=='__main__':
         st=part.lstat();assert not part.is_symlink() and st.st_uid==0 and not st.st_mode&0o022
     sys.path[:0]=[str(path.parent),'/opt/jjikmuk-cd/bin']
 from catalog_host import Work,phase_id
-from catalog_reapply_contract import validate_binding,dataset,lease_binding,previous_coordinator,PHASE_SECONDS,HOST_START_BYTES,SCHEMA_SHA
+from catalog_reapply_contract import validate_binding,dataset,lease_binding,previous_coordinator,PHASE_SECONDS,HOST_START_BYTES,SCHEMA_SHA,RDS_RESERVE_BYTES
 from catalog_reapply_previous import verify_service,original_state,previous_journal
 from catalog_host_support import systemctl,start_and_enroll,UNITS
 from catalog_checks import verify_recovered
@@ -43,7 +43,8 @@ class Reapply(Work):
     def resources(self):
         require(digest(self.stage/'source-products.sqlite')==self.binding['source_sha256'],'CATALOG_SOURCE_CHANGED')
         self.source=Source(self.stage/'source-products.sqlite')
-        self.lease=Guard(host_s3(self.stage),lease_binding(self.binding,self.phase),read_attempts=2,budget_check=self.budget)
+        self.lease=Guard(host_s3(self.stage),lease_binding(self.binding,self.phase),read_attempts=2,budget_check=self.budget,
+                         minimum_reserve=RDS_RESERVE_BYTES)
 
     def guard(self):
         self.budget()

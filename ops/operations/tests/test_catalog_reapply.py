@@ -8,6 +8,7 @@ from catalog_document import document
 def binding():
     return {'request_id':contract.REQUEST,'run_id':'987654321','commit':'a'*40,'previous_commit':contract.PREVIOUS,
         'source_sha256':contract.SOURCE_SHA,'source_bytes':contract.SOURCE_BYTES,'required_bytes':contract.RDS_RESERVE_BYTES,
+        'reserve_approval':contract.RESERVE_APPROVAL,'source_plan_required_bytes':5*1024**3,
         'archive_sha256':'b'*64,'reapply':{'previous_run':contract.OLD_RUN,'service_run':contract.SERVICE_RUN,
         'previous_archive':contract.OLD_ARCHIVE,'previous_state_sha256':contract.OLD_STATE,'previous_journal_sha256':contract.OLD_JOURNAL}}
 
@@ -17,10 +18,45 @@ class ContractTests(unittest.TestCase):
         b=binding();contract.validate_binding(b)
         self.assertNotEqual(contract.dataset(b['request_id'],b['run_id']),'catalog-handoff-'+b['request_id'])
         self.assertNotEqual(contract.dataset(b['request_id'],b['run_id']),contract.dataset(b['request_id'],'987654322'))
-        self.assertEqual(contract.lease_binding(b,'apply')['required_bytes'],10*1024**3)
-        self.assertEqual(contract.lease_binding(b,'recover')['required_bytes'],5*1024**3)
-        self.assertGreaterEqual(contract.RDS_START_BYTES,contract.LEASE_BYTES['apply']+5*1024**3)
-        self.assertEqual(b['required_bytes'],5*1024**3)
+        self.assertEqual(contract.lease_binding(b,'apply')['required_bytes'],5*1024**3)
+        self.assertEqual(contract.lease_binding(b,'recover')['required_bytes'],2*1024**3)
+        self.assertEqual(contract.RDS_START_BYTES,8*1024**3)
+        self.assertEqual(contract.ROLLBACK_BUDGET_BYTES,3*1024**3)
+        self.assertEqual(b['required_bytes'],2*1024**3)
+
+    def test_reduced_floor_requires_explicit_new_policy_and_preserves_source_plan_floor(self):
+        for key in ('reserve_approval','source_plan_required_bytes'):
+            b=binding();b.pop(key)
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'USER_RESERVE_APPROVAL_REQUIRED'):
+                contract.validate_binding(b)
+        for key,value in [('reserve_approval','other'),('source_plan_required_bytes',2*1024**3)]:
+            with self.subTest(key=key),self.assertRaisesRegex(ValueError,'USER_RESERVE_APPROVAL_REQUIRED'):
+                contract.validate_binding(dict(binding(),**{key:value}))
+
+    def test_monitor_and_guard_enforce_recovery_floor_without_lowering_legacy_default(self):
+        import initial_monitor,initial_guard
+        b=contract.lease_binding(binding(),'recover');floor=2*1024**3
+        counts={'window_minimum_bytes':floor,'sample_epoch':int(time.time())}
+        with self.assertRaisesRegex(ValueError,'RESERVE_REQUIRED'):
+            initial_monitor.Monitor(Mock(),Mock(),b,floor)
+        monitor=initial_monitor.Monitor(Mock(),Mock(),b,floor,minimum_reserve=floor)
+        with patch.object(initial_monitor,'observe',return_value={'counts':counts}):
+            monitor.publish()
+            value=json.loads(monitor.s3.put_object.call_args.kwargs['Body'])
+            initial_guard.validate_heartbeat(value,b,int(time.time()),minimum_reserve=floor)
+            with self.assertRaisesRegex(ValueError,'STORAGE_RESERVE'):
+                initial_guard.validate_heartbeat(value,b,int(time.time()))
+            counts['window_minimum_bytes']=floor-1
+            with self.assertRaisesRegex(ValueError,'STORAGE_RESERVE'):monitor.publish()
+            value['minimum_bytes']=floor-1
+            with self.assertRaisesRegex(ValueError,'STORAGE_RESERVE'):
+                initial_guard.validate_heartbeat(value,b,int(time.time()),minimum_reserve=floor)
+        self.assertEqual(monitor.s3.put_object.call_count,1)
+        for invalid in (0,floor-1,True):
+            with self.subTest(invalid=invalid),self.assertRaisesRegex(ValueError,'RESERVE_POLICY'):
+                initial_monitor.Monitor(Mock(),Mock(),b,floor,minimum_reserve=invalid)
+            with self.subTest(invalid=invalid),self.assertRaisesRegex(ValueError,'RESERVE_POLICY'):
+                initial_guard.Guard(Mock(),b,minimum_reserve=invalid)
 
     def test_consumed_runs_source_baseline_and_recovery_records_fail_closed(self):
         for key,value in [('run_id',contract.OLD_RUN),('run_id',contract.SERVICE_RUN),('previous_commit','0'*40),
@@ -87,15 +123,15 @@ class ContractTests(unittest.TestCase):
 
     def test_capacity_blocks_before_any_server_work_when_space_or_pending_change_differs(self):
         import catalog_reapply_runner as runner
-        runtime=Mock();good={'AllocatedStorage':30,'StorageType':'gp3','DBInstanceStatus':'available','PendingModifiedValues':{}}
-        metric={'counts':{'window_minimum_bytes':15*1024**3}}
+        runtime=Mock();good={'AllocatedStorage':20,'StorageType':'gp3','DBInstanceStatus':'available','PendingModifiedValues':{}}
+        metric={'counts':{'window_minimum_bytes':8*1024**3}}
         with patch.object(runner,'check_database'),patch.object(runner,'save_local'),patch.object(runner,'observe',return_value=metric):
-            for changes in ({'AllocatedStorage':20},{'PendingModifiedValues':{'EngineVersion':'other'}},{'DBInstanceStatus':'storage-optimization'}):
+            for changes in ({'AllocatedStorage':19},{'AllocatedStorage':41},{'PendingModifiedValues':{'EngineVersion':'other'}},{'DBInstanceStatus':'storage-optimization'}):
                 runtime.rds.describe_db_instances.return_value={'DBInstances':[dict(good,**changes)]}
-                with self.assertRaisesRegex(ValueError,'STORAGE_EXPANSION'):runner.capacity(runtime)
+                with self.assertRaisesRegex(ValueError,'STORAGE_CONFIGURATION'):runner.capacity(runtime)
             runtime.rds.describe_db_instances.return_value={'DBInstances':[good]}
             runner.capacity(runtime)
-            metric['counts']['window_minimum_bytes']=15*1024**3-1
+            metric['counts']['window_minimum_bytes']=8*1024**3-1
             with self.assertRaisesRegex(ValueError,'STARTING_SPACE'):runner.capacity(runtime)
 
     def test_old_gate_or_service_proof_cannot_rebind(self):

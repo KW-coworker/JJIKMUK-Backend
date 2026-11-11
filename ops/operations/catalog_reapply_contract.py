@@ -16,11 +16,15 @@ SOURCE_SHA='f277f176e199336e7d4dcc8058c64a1d3b87c3b5768171691c3eb11f29ba1e4f'
 SOURCE_BYTES=1052856320
 SCHEMA_SHA='b768920c4335a7d19a5e5f228a8e4f11810f40aabdc184f08d71cbdde2d4c2e6'
 HOST_START_BYTES=5*1024**3
-RDS_START_BYTES=15*1024**3
-RDS_RESERVE_BYTES=5*1024**3
+RDS_RESERVE_BYTES=2*1024**3
+ROLLBACK_BUDGET_BYTES=3*1024**3
+APPLY_BUDGET_BYTES=3*1024**3
+RDS_START_BYTES=RDS_RESERVE_BYTES+ROLLBACK_BUDGET_BYTES+APPLY_BUDGET_BYTES
+RESERVE_APPROVAL='USER_RDS_RESERVE_2GIB_20261111'
 PHASE_SECONDS={'freeze':1200,'apply':7200,'recover':7200}
 RUNNER_SECONDS={'freeze':3000,'apply':8500,'recover':8700}
-LEASE_BYTES={'freeze':10*1024**3,'apply':10*1024**3,'recover':RDS_RESERVE_BYTES}
+LEASE_BYTES={'freeze':RDS_RESERVE_BYTES+ROLLBACK_BUDGET_BYTES,
+             'apply':RDS_RESERVE_BYTES+ROLLBACK_BUDGET_BYTES,'recover':RDS_RESERVE_BYTES}
 
 
 def need(value,code):
@@ -44,6 +48,8 @@ def validate_binding(binding):
          'previous_state_sha256':OLD_STATE,'previous_journal_sha256':OLD_JOURNAL},'REAPPLY_BINDING')
     need(binding['previous_commit']==PREVIOUS and binding['source_sha256']==SOURCE_SHA and
          binding['source_bytes']==SOURCE_BYTES and binding['required_bytes']==RDS_RESERVE_BYTES,'REAPPLY_SOURCE_OR_PREVIOUS')
+    need(binding.get('reserve_approval')==RESERVE_APPROVAL and binding.get('source_plan_required_bytes')==5*1024**3,
+         'REAPPLY_USER_RESERVE_APPROVAL_REQUIRED')
     dataset(binding['request_id'],binding['run_id'])
 
 
