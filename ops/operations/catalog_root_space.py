@@ -45,11 +45,14 @@ def select_root(mount, tree, resolved, partition, start):
          part['ro'] is False and not part.get('children') and
          type(partition) is int and 1 <= partition <= 128 and
          resolved == disk['name'] + 'p' + str(partition), 'ROOT_SPACE_PARTITION')
-    need(type(start) is int and 0 < start < GIB and type(part['size']) is int and
-         type(disk['size']) is int and disk['size'] in (20*GIB, 30*GIB) and
-         18*GIB < part['size'] <= disk['size'] - start and
-         all(isinstance(part.get(k), str) and part[k] for k in ('uuid', 'partuuid')),
-         'ROOT_SPACE_SIZE_OR_IDENTITY')
+    # Separate boot/EFI partitions may occupy more than 1GiB before root.
+    # The start is preserved exactly; growpart may only extend its end.
+    need(type(start) is int and 0 < start < 2*GIB, 'ROOT_SPACE_PARTITION_OFFSET')
+    need(type(disk['size']) is int and disk['size'] in (20*GIB, 30*GIB), 'ROOT_SPACE_DISK_BYTES')
+    need(type(part['size']) is int and 18*GIB < part['size'] <= disk['size']-start,
+         'ROOT_SPACE_PARTITION_BYTES')
+    need(all(isinstance(part.get(k), str) and part[k] for k in ('uuid', 'partuuid')),
+         'ROOT_SPACE_FILESYSTEM_UUID')
     return {'disk': disk['name'], 'partition': resolved, 'number': partition,
             'disk_bytes': disk['size'], 'partition_bytes': part['size'], 'start': start,
             'fstype': part['fstype'], 'uuid': part['uuid'], 'partuuid': part['partuuid']}
@@ -174,6 +177,7 @@ def main(mode):
                 'services_unchanged': True, 'catalog_coordinator_unchanged': True, 'growth_tools_present': True,
                 'capacity_ready': after['disk_bytes'] == 30*GIB and after['filesystem_bytes'] >= 28*GIB and after['free_bytes'] >= 6*GIB},
                 'counts': {k: after[k] for k in ('disk_bytes', 'partition_bytes', 'filesystem_bytes', 'free_bytes')}
+                          | {'partition_start_bytes': after['start']}
                           | {'observed_epoch': int(time.time())},
                 'codes': ['ROOT_FS_'+after['fstype'].upper(), 'ROOT_VOLUME_'+VOLUME.upper()]}
 
@@ -193,7 +197,7 @@ def execute_under_hold(api, ctx, mode):
     if mode == 'grow':
         need(metadata['counts']['host_root_allocated_gib'] == 30, 'ROOT_SPACE_EBS_NOT_30GIB')
     selected = plan(mode)
-    path = Path(__file__).parent/'plans'/f'catalog-root-space-{mode}.json'
+    path = Path(__file__).parent/'plans'/f'catalog-root-space-{mode}-v2.json'
     need(json.loads(path.read_bytes()) == selected, 'ROOT_SPACE_PLAN_CHANGED')
     outcome = execute(api, ctx, selected, sha(path.read_bytes()), HOSTS['backend'])
     need(outcome['success'] is True, 'ROOT_SPACE_OPERATION_FAILED_KEEP_RECORDS')

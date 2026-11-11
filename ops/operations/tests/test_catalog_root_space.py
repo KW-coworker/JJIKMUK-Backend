@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,15 @@ def selected(size=30):
 class RootSpaceTests(unittest.TestCase):
     def test_exact_volume_and_root_are_selected(self):
         self.assertEqual(selected()['disk_bytes'],30*root.GIB)
+
+    def test_separate_boot_partitions_can_precede_root_beyond_one_gib(self):
+        mount,tree=fixture()
+        start=1152*1024**2
+        tree['blockdevices'][0]['children'][0]['size']=20*root.GIB-start
+        result=root.select_root(mount,tree,'/dev/nvme0n1p1',1,start)
+        self.assertEqual(result['start'],start)
+        changed=dict(result,start=start+512)
+        with self.assertRaisesRegex(ValueError,'IDENTITY_CHANGED'):root.same_identity(result,changed)
 
     def test_kernel_root_alias_needs_no_dev_root_symlink(self):
         mount,tree=fixture()
@@ -139,11 +149,17 @@ class RootSpaceTests(unittest.TestCase):
         from run import safe_report
         safe_report(json.dumps({'status':'VERIFIED','codes':['ROOT_FS_EXT4','ROOT_VOLUME_'+root.VOLUME.upper()]}))
         for mode in ('inspect','grow'):
-            actual=json.loads((folder/f'catalog-root-space-{mode}.json').read_bytes())
+            actual=json.loads((folder/f'catalog-root-space-{mode}-v2.json').read_bytes())
             self.assertEqual(actual,root.plan(mode))
             self.assertLess(len(json.dumps(actual).encode()),60000)
             script=actual['document']['mainSteps'][0]['inputs']['runCommand'][0]
             compile(script.split("<<'ROOT_SPACE_FIXED'\n",1)[1].rsplit('\nROOT_SPACE_FIXED',1)[0],'<plan>','exec')
+
+    def test_original_plans_are_preserved(self):
+        folder=Path(root.__file__).parent/'plans'
+        for mode,digest in {'inspect':'97edf8e2e93b4b787ab1d9f003a7a9dac30db89e9f099fb8ec49e953dd40f8f2',
+                            'grow':'5267f405f55a6f5441438557c188f75eaf510e6f6dc65f4b436d19c0accf79cc'}.items():
+            self.assertEqual(hashlib.sha256((folder/f'catalog-root-space-{mode}.json').read_bytes()).hexdigest(),digest)
 
 
 if __name__=='__main__':unittest.main()
