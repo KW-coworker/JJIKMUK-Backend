@@ -11,6 +11,20 @@ from unittest.mock import patch,Mock,MagicMock
 
 @unittest.skipUnless(os.name=='posix','Linux host service boundary')
 class HostTests(unittest.TestCase):
+    def test_release_directory_is_traversable_under_private_maintenance_umask(self):
+        import hashlib
+        from catalog_host_support import prepare_release
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);stage=root/'stage';stage.mkdir()
+            jar=stage/'backend.jar';jar.write_bytes(b'synthetic jar')
+            host=SimpleNamespace(baseline={'protected':{},'environment_sha256':'fixture'},release_path=lambda release:root/'release')
+            old=os.umask(0o077)
+            try:prepare_release(host,stage,{'jar_sha256':hashlib.sha256(jar.read_bytes()).hexdigest()})
+            finally:os.umask(old)
+            self.assertEqual((root/'release').stat().st_mode & 0o777,0o755)
+            self.assertEqual((root/'release/backend.jar').stat().st_mode & 0o777,0o644)
+            self.assertEqual((root/'release/manifest.json').stat().st_mode & 0o777,0o600)
+
     def setUp(self):
         import catalog_host
         self.module=catalog_host

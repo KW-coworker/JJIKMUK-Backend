@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state]
+        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service]
         required: true
       expected_sha:
         type: string
