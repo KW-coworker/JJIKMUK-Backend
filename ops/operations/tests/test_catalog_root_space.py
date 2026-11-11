@@ -96,6 +96,14 @@ class RootSpaceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'CAPACITY_NOT_READY'):
             root.expand(before,read=lambda:partitioned,run=lambda *a:None,tools=lambda n:n,record=lambda x:None)
 
+    def test_large_boot_area_uses_partition_capacity_after_growth(self):
+        start=1920*1024**2
+        before=dict(selected(),start=start,partition_bytes=20*root.GIB-start,filesystem_bytes=17*root.GIB)
+        partitioned=dict(before,partition_bytes=30*root.GIB-start)
+        after=dict(partitioned,filesystem_bytes=27*root.GIB,free_bytes=13*root.GIB)
+        self.assertEqual(root.expand(before,read=Mock(side_effect=[partitioned,after]),run=lambda *a:None,
+                                    tools=lambda n:n,record=lambda x:None),after)
+
     def test_already_large_partition_skips_growpart_xfs_uses_mount(self):
         before=dict(selected(),fstype='xfs',partition_bytes=30*root.GIB-1024**2)
         after=dict(before,filesystem_bytes=29*root.GIB,free_bytes=14*root.GIB)

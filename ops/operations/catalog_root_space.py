@@ -134,7 +134,7 @@ def expand(before, read=observe, run=command, tools=tool, record=append_record):
     run([resize, before['partition']] if before['fstype'] == 'ext4' else [resize, '-d', '/'], 180)
     after = read(); same_identity(before, after)
     need(after['partition_bytes'] == partitioned['partition_bytes'] and
-         after['filesystem_bytes'] >= 28*GIB and after['free_bytes'] >= 6*GIB and
+         after['filesystem_bytes']*100 >= after['partition_bytes']*95 and after['free_bytes'] >= 6*GIB and
          after['free_bytes'] >= before['free_bytes'], 'ROOT_SPACE_CAPACITY_NOT_READY')
     return after
 
@@ -175,7 +175,9 @@ def main(mode):
         if mode == 'grow': append_record({'step': 'VERIFIED', 'after': after})
         return {'status': 'VERIFIED', 'checks': {'exact_root_volume': True,
                 'services_unchanged': True, 'catalog_coordinator_unchanged': True, 'growth_tools_present': True,
-                'capacity_ready': after['disk_bytes'] == 30*GIB and after['filesystem_bytes'] >= 28*GIB and after['free_bytes'] >= 6*GIB},
+                'capacity_ready': after['disk_bytes'] == 30*GIB and
+                                  after['partition_bytes']+after['start'] >= after['disk_bytes']-8*1024**2 and
+                                  after['filesystem_bytes']*100 >= after['partition_bytes']*95 and after['free_bytes'] >= 6*GIB},
                 'counts': {k: after[k] for k in ('disk_bytes', 'partition_bytes', 'filesystem_bytes', 'free_bytes')}
                           | {'partition_start_bytes': after['start']}
                           | {'observed_epoch': int(time.time())},
