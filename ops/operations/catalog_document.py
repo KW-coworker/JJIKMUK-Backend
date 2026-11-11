@@ -11,6 +11,11 @@ def document(binding,envelope,phase,snapshot=None):
         validate(binding)
     stage='/opt/jjikmuk-catalog-'+binding['archive_sha256'][:16]
     limit={'freeze':1200,'apply':2700,'recover':1500}[phase]
+    reapply='reapply' in binding
+    if reapply:
+        from catalog_reapply_contract import validate_binding,PHASE_SECONDS
+        validate_binding(binding);limit=PHASE_SECONDS[phase]
+    entrypoint='catalog_reapply_host.py' if reapply else 'catalog_host.py'
     entry={'binding':dict(binding,phase=phase),'phase':phase,'snapshot':snapshot}
     script=f'''import hashlib,json,os,stat,subprocess,sys,time,zipfile
 from pathlib import Path,PurePosixPath
@@ -32,7 +37,7 @@ try:
   for name,key,version,size,checksum in [
     ('payload.zip',binding['archive_key'],binding['archive_version'],binding['archive_bytes'],binding['archive_sha256']),
     ('source.zip',binding['source_key'],binding['source_version'],binding['source_archive_bytes'],binding['source_archive_sha256'])]:
-   if name=='source.zip' and 'followup' in binding:continue
+   if name=='source.zip' and ('followup' in binding or 'reapply' in binding):continue
    target=download/name
    aws([config['aws'],'s3api','get-object','--region','ap-northeast-2','--bucket',{BUCKET!r},'--key',key,'--version-id',version,
         '--expected-bucket-owner','076767081522',str(target)],180)
@@ -50,7 +55,11 @@ try:
      if stage in parent.parents and not parent.exists():parent.mkdir(mode=0o755);os.chmod(parent,0o755)
     with target.open('xb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
     os.chmod(target,0o644)
-  if 'followup' in binding:
+  if 'reapply' in binding:
+   sys.path.insert(0,str(stage/'bin'))
+   from catalog_reapply_previous import link_source
+   link_source(stage/'source-products.sqlite',binding)
+  elif 'followup' in binding:
    sys.path.insert(0,str(stage/'bin'))
    from catalog_followup_host import link_source
    link_source(stage/'source-products.sqlite',binding)
@@ -81,7 +90,7 @@ try:
  r=subprocess.run(['/usr/bin/systemd-run','--quiet','--wait','--pipe','--collect','--service-type=exec',
   '--unit=jjikmuk-catalog-{phase}-{binding['archive_sha256'][:16]}','--property=RuntimeMaxSec={limit}',
   '--property=TimeoutStartSec=30','--property=TimeoutStopSec=10','--property=KillMode=control-group',
-  '--property=UMask=0077','--property=Restart=no','/usr/bin/python3.12','-I','-S','-B',str(stage/'bin/catalog_host.py')],
+  '--property=UMask=0077','--property=Restart=no','/usr/bin/python3.12','-I','-S','-B',str(stage/'bin/{entrypoint}')],
   input={canonical(entry)!r},capture_output=True,timeout={limit+60},cwd='/',env={{'PATH':'/usr/bin:/bin','LANG':'C.UTF-8'}})
  assert not r.stderr and len(r.stdout)<12000
  value=json.loads(r.stdout);assert isinstance(value,dict)
@@ -91,5 +100,5 @@ except Exception:
 '''
     need(len(script.encode())<60000,'CATALOG_DOCUMENT_SIZE')
     return {'schemaVersion':'2.2','parameters':{},'description':'Approved catalog phase '+phase,
-            'mainSteps':[{'action':'aws:runShellScript','name':'report','inputs':{'timeoutSeconds':str({'freeze':1770,'apply':2850,'recover':1740}[phase]),
+            'mainSteps':[{'action':'aws:runShellScript','name':'report','inputs':{'timeoutSeconds':str((1770 if phase=='freeze' else limit+150) if reapply else {'freeze':1770,'apply':2850,'recover':1740}[phase]),
                 'runCommand':["/usr/bin/python3.12 -I -S -B - <<'JJIKMUK_CATALOG_FIXED'\n"+script+'\nJJIKMUK_CATALOG_FIXED']}}]}
