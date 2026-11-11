@@ -2,8 +2,50 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+
+
+def safe_report(raw):
+    """Validate this fixed package's public result without runner-only modules."""
+    if len(raw.encode()) > 16384:
+        raise ValueError('CHATBOT_SOURCE_REPORT_LIMIT')
+    value = json.loads(raw)
+    if type(value) is not dict or not set(value) <= {'status', 'checks', 'hashes', 'counts', 'codes'}:
+        raise ValueError('CHATBOT_SOURCE_REPORT_FIELDS')
+    if value.get('status') not in {'SUCCEEDED', 'ROLLED_BACK', 'PREFLIGHT_FAILED', 'MANUAL_RECOVERY_REQUIRED'}:
+        raise ValueError('CHATBOT_SOURCE_REPORT_STATUS')
+    for field, entries in value.items():
+        if field == 'status':
+            continue
+        if field == 'codes':
+            if type(entries) is not list or len(entries) > 50 or not all(
+                    type(code) is str and re.fullmatch('[A-Z][A-Z0-9_]{0,79}', code) for code in entries):
+                raise ValueError('CHATBOT_SOURCE_REPORT_CODES')
+            continue
+        if type(entries) is not dict or len(entries) > 100:
+            raise ValueError('CHATBOT_SOURCE_REPORT_MAP')
+        for key, item in entries.items():
+            if not re.fullmatch('[a-zA-Z][a-zA-Z0-9_.-]{0,79}', key):
+                raise ValueError('CHATBOT_SOURCE_REPORT_KEY')
+            valid = (type(item) is bool if field == 'checks' else
+                     type(item) is int and 0 <= item < 2**63 if field == 'counts' else
+                     type(item) is str and re.fullmatch('[a-f0-9]{64}', item))
+            if not valid:
+                raise ValueError('CHATBOT_SOURCE_REPORT_VALUE')
+    return value
+
+
+def installed_modules():
+    # Only these modules are included by ops/cd/package_install.py. In particular,
+    # ops/operations/run.py exists on the GitHub runner, not on the EC2 host.
+    from private_plan import validate
+    from private_runner import unpack, digest
+    from coordination import ROOT, locked, secure
+    from connection import canonical, sha, BUCKET, ACCOUNT
+    from bootstrap import need
+    return validate, unpack, digest, ROOT, locked, secure, canonical, sha, BUCKET, ACCOUNT, need
 
 
 def execute(envelope):
@@ -14,17 +56,16 @@ def execute(envelope):
         st = path.lstat()
         assert not path.is_symlink() and st.st_uid == 0 and not st.st_mode & 0o022
     sys.path.insert(0, str(root))
-    from private_plan import validate
-    from private_runner import unpack, digest
-    from coordination import ROOT, locked, secure
-    from connection import canonical, sha, BUCKET, ACCOUNT
-    from bootstrap import need
-    from run import safe_report
+    validate, unpack, digest, ROOT, locked, secure, canonical, sha, BUCKET, ACCOUNT, need = installed_modules()
     validate(envelope)
     need(envelope['component'] == 'chatbot' and envelope['operation'] == 'deploy'
          and envelope['approval_id'] == 'USER_RESUME_BACKEND_AND_CHATBOT_20261112'
          and envelope['recovery_sha256'] is None, 'CHATBOT_SOURCE_SCOPE')
     operation = sha(canonical(envelope))
+    # The previous loader failed before importing its report helper. Continue only
+    # when no host attempt or staging directory was created; never replay a child.
+    need(not (ROOT / 'history' / operation).exists()
+         and not (ROOT / ('chatbot-source-' + operation)).exists(), 'CHATBOT_SOURCE_PREVIOUS_EXECUTION_EXISTS')
     with locked('chatbot', operation) as guard:
         folder = ROOT / ('chatbot-source-' + operation)
         folder.mkdir(mode=0o700)
