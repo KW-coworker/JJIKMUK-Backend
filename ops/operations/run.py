@@ -198,7 +198,8 @@ def execute(api,context_data,plan,plan_hash,target,*,output_prefix='',max_polls=
         from maintenance_gate import Gate
         Gate(api['s3']).manual_admission(context_data['request_id'], os.environ.get('GITHUB_WORKFLOW_REF', ''))
     need(output_prefix in ('','freeze-','apply-','recover-','install-','activate-',
-                          'maintenance-before-','maintenance-work-','maintenance-verify-','maintenance-after-'),
+                          'maintenance-before-','maintenance-work-','maintenance-verify-','maintenance-after-') or
+         re.fullmatch(r'images-[0-9]{3}-',output_prefix),
          'OPERATION_OUTPUT_PREFIX')
     polls=max_polls if max_polls is not None else 450 if output_prefix=='apply-' else 360
     need(polls in (360,450,600,1500),'COMMAND_WAIT_BOUND')

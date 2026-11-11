@@ -5,7 +5,7 @@ on:
     inputs:
       mode:
         type: choice
-        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live, catalog-root-inspect, catalog-root-grow, catalog-preservation-read, product-image]
+        options: [apply, rehearse, finish, collect, catalog, catalog-inspect, catalog-continue, catalog-state, catalog-service, catalog-capacity, catalog-reapply, catalog-status, catalog-live-meta, catalog-live, catalog-root-inspect, catalog-root-grow, catalog-preservation-read, product-image, product-images]
         required: true
       expected_sha:
         type: string
@@ -40,7 +40,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && inputs.confirm
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ inputs.mode == 'catalog-reapply' && 360 || (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && 140 || 55 }}
+    timeout-minutes: ${{ inputs.mode == 'catalog-reapply' && 360 || inputs.mode == 'product-images' && 180 || (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue') && 140 || 55 }}
     permissions:
       contents: read
       id-token: write
@@ -85,7 +85,7 @@ jobs:
         if: (inputs.mode == 'catalog' || inputs.mode == 'catalog-continue' || inputs.mode == 'catalog-reapply')
         run: python3 -c 'import os,time; open(os.environ["GITHUB_ENV"],"a").write("CATALOG_ROLE_REQUEST_EPOCH="+str(int(time.time()))+"\n")'
       - uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
-        if: inputs.mode != 'catalog-reapply'
+        if: inputs.mode != 'catalog-reapply' && inputs.mode != 'product-images'
         with:
           role-to-assume: arn:aws:iam::076767081522:role/JjikmukOperationsExecute
           aws-region: ap-northeast-2
